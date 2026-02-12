@@ -73,12 +73,8 @@ impl ConflictResolver {
         // Verify the conflict exists and is not already resolved.
         let conflict = db
             .get_conflict(conflict_id)
-            .map_err(|e| match e {
-                crate::errors::DatabaseError::NotFound { .. } => {
-                    ConflictError::NotFound(conflict_id.to_string())
-                }
-                other => ConflictError::DatabaseError(other),
-            })?;
+            .map_err(ConflictError::DatabaseError)?
+            .ok_or_else(|| ConflictError::NotFound(conflict_id.to_string()))?;
 
         if conflict.status == "resolved" {
             return Err(ConflictError::AlreadyResolved(conflict_id.to_string()));
@@ -152,7 +148,7 @@ mod tests {
         let (db, id) = setup_db_with_conflict();
         ConflictResolver::accept_svn(&id, "admin", &db).unwrap();
 
-        let conflict = db.get_conflict(&id).unwrap();
+        let conflict = db.get_conflict(&id).unwrap().unwrap();
         assert_eq!(conflict.status, "resolved");
         assert_eq!(conflict.resolution.as_deref(), Some("accept_svn"));
     }
@@ -162,7 +158,7 @@ mod tests {
         let (db, id) = setup_db_with_conflict();
         ConflictResolver::accept_git(&id, "admin", &db).unwrap();
 
-        let conflict = db.get_conflict(&id).unwrap();
+        let conflict = db.get_conflict(&id).unwrap().unwrap();
         assert_eq!(conflict.status, "resolved");
         assert_eq!(conflict.resolution.as_deref(), Some("accept_git"));
     }
@@ -172,7 +168,7 @@ mod tests {
         let (db, id) = setup_db_with_conflict();
         ConflictResolver::accept_merged(&id, "custom content", "admin", &db).unwrap();
 
-        let conflict = db.get_conflict(&id).unwrap();
+        let conflict = db.get_conflict(&id).unwrap().unwrap();
         assert_eq!(conflict.status, "resolved");
         assert_eq!(conflict.resolution.as_deref(), Some("accept_merged"));
     }
@@ -182,7 +178,7 @@ mod tests {
         let (db, id) = setup_db_with_conflict();
         ConflictResolver::defer(&id, "admin", &db).unwrap();
 
-        let conflict = db.get_conflict(&id).unwrap();
+        let conflict = db.get_conflict(&id).unwrap().unwrap();
         assert_eq!(conflict.status, "deferred");
     }
 

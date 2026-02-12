@@ -399,7 +399,8 @@ fn cmd_conflicts(db: &Database, action: ConflictsAction) -> Result<()> {
         ConflictsAction::Show { id } => {
             let conflict = db
                 .get_conflict(&id)
-                .context("conflict not found")?;
+                .context("database error")?
+                .ok_or_else(|| anyhow::anyhow!("conflict '{}' not found", id))?;
 
             println!("Conflict: {}", conflict.id);
             println!("==========={}", "=".repeat(conflict.id.len()));

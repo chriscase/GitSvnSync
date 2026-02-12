@@ -102,7 +102,8 @@ async fn get_conflict(
     let db = state.db.lock().map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
     let conflict = db
         .get_conflict(&id)
-        .map_err(|e| AppError::NotFound(format!("conflict '{}' not found: {}", id, e)))?;
+        .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
+        .ok_or_else(|| AppError::NotFound(format!("conflict '{}' not found", id)))?;
 
     Ok(Json(ConflictDetail {
         id: conflict.id,
