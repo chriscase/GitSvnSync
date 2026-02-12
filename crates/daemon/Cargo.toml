@@ -1,0 +1,21 @@
+[package]
+name = "gitsvnsync-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GitSvnSync synchronization daemon"
+
+[[bin]]
+name = "gitsvnsync-daemon"
+path = "src/main.rs"
+
+[dependencies]
+gitsvnsync-core = { path = "../core" }
+gitsvnsync-web = { path = "../web" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+serde_json = { workspace = true }
