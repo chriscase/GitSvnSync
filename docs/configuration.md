@@ -1,0 +1,112 @@
+# Configuration Reference
+
+GitSvnSync is configured via a TOML file, typically at `/etc/gitsvnsync/config.toml`.
+
+## [daemon]
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `poll_interval_secs` | integer | `15` | Seconds between polling for new changes |
+| `log_level` | string | `"info"` | Log level: trace, debug, info, warn, error |
+| `data_dir` | string | `"/var/lib/gitsvnsync"` | Directory for SQLite database and state |
+
+## [svn]
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `url` | string | yes | SVN repository URL (root, not trunk) |
+| `username` | string | yes | SVN username for the sync service account |
+| `password_env` | string | yes | Environment variable name containing SVN password |
+| `layout` | string | no | `"standard"` (default) or `"custom"` |
+| `trunk` | string | no | Custom trunk path (only with `layout = "custom"`) |
+| `branches` | string | no | Custom branches path |
+| `tags` | string | no | Custom tags path |
+
+## [github]
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `api_url` | string | yes | GitHub API base URL. Use `https://api.github.com` for GitHub.com or `https://github.company.com/api/v3` for GHE |
+| `repo` | string | yes | Repository in `owner/name` format |
+| `token_env` | string | yes | Environment variable containing GitHub token |
+| `webhook_secret_env` | string | no | Environment variable containing webhook secret |
+| `default_branch` | string | no | Default branch name (default: `"main"`) |
+
+## [identity]
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `mapping_file` | string | yes | Path to authors.toml mapping file |
+| `email_domain` | string | no | Fallback domain for unmapped users |
+| `ldap_url` | string | no | LDAP server URL for automatic lookup |
+| `ldap_base_dn` | string | no | LDAP base DN for searches |
+| `ldap_bind_dn` | string | no | LDAP bind DN for authentication |
+| `ldap_bind_password_env` | string | no | Environment variable with LDAP bind password |
+
+## [web]
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `listen` | string | yes | Address to listen on (e.g., `"0.0.0.0:8080"`) |
+| `session_secret_env` | string | yes | Environment variable for session cookie secret |
+| `auth_mode` | string | yes | `"simple"`, `"github_oauth"`, or `"both"` |
+| `admin_password_env` | string | depends | Required when auth_mode includes "simple" |
+| `github_oauth_client_id_env` | string | depends | Required for GitHub OAuth |
+| `github_oauth_client_secret_env` | string | depends | Required for GitHub OAuth |
+| `github_oauth_allowed_org` | string | no | Restrict access to members of this org |
+
+## [notifications]
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `slack_webhook_url_env` | string | no | Slack incoming webhook URL env var |
+| `email_smtp` | string | no | SMTP server address (host:port) |
+| `email_from` | string | no | Sender email address |
+| `email_recipients` | array | no | List of recipient email addresses |
+
+## [sync]
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `mode` | string | `"direct"` | `"direct"` for auto-sync, `"pr"` for PR-gated |
+| `auto_merge` | boolean | `true` | Attempt 3-way merge for non-overlapping changes |
+| `sync_branches` | boolean | `true` | Sync branch creation/deletion |
+| `sync_tags` | boolean | `true` | Sync tag creation |
+
+### [sync.pr] (only when mode = "pr")
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `require_approval` | boolean | `true` | Require PR approval before SVN sync |
+| `auto_merge_approved` | boolean | `true` | Auto-merge approved PRs |
+| `reviewers` | array | `[]` | Default PR reviewers |
+
+## Authors Mapping File
+
+The `authors.toml` file maps SVN usernames to Git identities:
+
+```toml
+[authors]
+svn_username = { name = "Full Name", email = "email@company.com", github = "github_username" }
+
+[defaults]
+email_domain = "company.com"
+```
+
+The `github` field is optional and used for GitHub OAuth identity matching.
+
+## Environment Variables
+
+All sensitive values are stored in environment variables (never in config files):
+
+| Variable | Description |
+|----------|-------------|
+| `GITSVNSYNC_SVN_PASSWORD` | SVN service account password |
+| `GITSVNSYNC_GITHUB_TOKEN` | GitHub PAT or App token |
+| `GITSVNSYNC_WEBHOOK_SECRET` | GitHub webhook secret |
+| `GITSVNSYNC_ADMIN_PASSWORD` | Web dashboard password |
+| `GITSVNSYNC_SESSION_SECRET` | Session cookie signing secret |
+| `GITSVNSYNC_SLACK_WEBHOOK` | Slack incoming webhook URL |
+| `GITSVNSYNC_LDAP_PASSWORD` | LDAP bind password |
+| `GITSVNSYNC_OAUTH_CLIENT_ID` | GitHub OAuth App client ID |
+| `GITSVNSYNC_OAUTH_SECRET` | GitHub OAuth App secret |

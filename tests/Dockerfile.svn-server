@@ -1,0 +1,40 @@
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y \
+    subversion \
+    apache2 \
+    libapache2-mod-svn \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create SVN repository directory
+RUN mkdir -p /var/svn
+
+# Create SVN repository
+RUN svnadmin create /var/svn/testrepo
+
+# Enable pre-revprop-change hook (required for author mapping)
+RUN printf '#!/bin/sh\nexit 0\n' > /var/svn/testrepo/hooks/pre-revprop-change && \
+    chmod +x /var/svn/testrepo/hooks/pre-revprop-change
+
+# Post-commit hook that notifies GitSvnSync daemon
+RUN printf '#!/bin/sh\nREPOS="$1"\nREV="$2"\ncurl -s -X POST http://gitsvnsync:8080/webhook/svn \\\n  -H "Content-Type: application/json" \\\n  -d "{\\\"repository\\\": \\\"$REPOS\\\", \\\"revision\\\": $REV}" || true\n' > /var/svn/testrepo/hooks/post-commit && \
+    chmod +x /var/svn/testrepo/hooks/post-commit
+
+# Set permissions
+RUN chown -R www-data:www-data /var/svn
+
+# Configure Apache for SVN
+RUN a2enmod dav dav_svn auth_basic
+
+COPY svn-apache.conf /etc/apache2/sites-available/svn.conf
+RUN a2dissite 000-default && a2ensite svn
+
+# Create password file
+RUN htpasswd -cb /etc/apache2/svn-auth-file sync-service testpass123 && \
+    htpasswd -b /etc/apache2/svn-auth-file alice testpass123 && \
+    htpasswd -b /etc/apache2/svn-auth-file bob testpass123 && \
+    htpasswd -b /etc/apache2/svn-auth-file charlie testpass123
+
+EXPOSE 80 3690
+
+CMD ["apachectl", "-D", "FOREGROUND"]

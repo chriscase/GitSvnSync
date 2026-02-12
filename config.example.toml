@@ -1,0 +1,97 @@
+# GitSvnSync Configuration
+# Copy this file to /etc/gitsvnsync/config.toml and edit for your environment.
+
+[daemon]
+# How often to poll for new changes (in seconds)
+poll_interval_secs = 15
+# Log level: "trace", "debug", "info", "warn", "error"
+log_level = "info"
+# Directory for SQLite database and sync state
+data_dir = "/var/lib/gitsvnsync"
+
+[svn]
+# SVN repository URL (root of the repository, not trunk)
+url = "https://svn.company.com/repos/project"
+# SVN service account username
+username = "sync-service"
+# Environment variable containing the SVN password
+password_env = "GITSVNSYNC_SVN_PASSWORD"
+
+# SVN repository layout
+# "standard" = trunk/, branches/, tags/ (most common)
+# "custom"   = configure paths explicitly below
+layout = "standard"
+# Custom paths (only used when layout = "custom")
+# trunk = "main"
+# branches = "feature-branches"
+# tags = "releases"
+
+[github]
+# GitHub API URL
+# For GitHub Enterprise Server: "https://github.company.com/api/v3"
+# For GitHub.com: "https://api.github.com"
+api_url = "https://api.github.com"
+# Repository in "owner/name" format
+repo = "org/project"
+# Environment variable containing a GitHub token (PAT or GitHub App token)
+# Required permissions: repo (full control)
+token_env = "GITSVNSYNC_GITHUB_TOKEN"
+# Environment variable containing the webhook secret
+webhook_secret_env = "GITSVNSYNC_WEBHOOK_SECRET"
+# Default branch to sync with SVN trunk
+default_branch = "main"
+
+[identity]
+# Path to the author mapping file (TOML format)
+mapping_file = "/etc/gitsvnsync/authors.toml"
+# Default email domain for unmapped SVN users (username@domain)
+email_domain = "company.com"
+
+# Optional: LDAP/Active Directory for automatic identity lookup
+# ldap_url = "ldaps://ldap.company.com:636"
+# ldap_base_dn = "dc=company,dc=com"
+# ldap_bind_dn = "cn=gitsvnsync,ou=services,dc=company,dc=com"
+# ldap_bind_password_env = "GITSVNSYNC_LDAP_PASSWORD"
+
+[web]
+# Address and port for the web dashboard
+listen = "0.0.0.0:8080"
+# Session secret for cookie signing
+session_secret_env = "GITSVNSYNC_SESSION_SECRET"
+
+# Authentication mode: "simple", "github_oauth", or "both"
+auth_mode = "simple"
+
+# Simple auth: single admin password
+admin_password_env = "GITSVNSYNC_ADMIN_PASSWORD"
+
+# GitHub OAuth (uncomment to enable)
+# auth_mode = "github_oauth"
+# github_oauth_client_id_env = "GITSVNSYNC_OAUTH_CLIENT_ID"
+# github_oauth_client_secret_env = "GITSVNSYNC_OAUTH_SECRET"
+# github_oauth_allowed_org = "my-org"
+
+[notifications]
+# Slack incoming webhook URL (leave empty to disable)
+# slack_webhook_url_env = "GITSVNSYNC_SLACK_WEBHOOK"
+
+# Email notifications (leave smtp empty to disable)
+# email_smtp = "smtp.company.com:587"
+# email_from = "gitsvnsync@company.com"
+# email_recipients = ["team-lead@company.com", "dev-team@company.com"]
+
+[sync]
+# Sync mode: "direct" = auto-sync immediately, "pr" = create GitHub PR for review
+mode = "direct"
+# Attempt automatic 3-way merge for non-overlapping changes
+auto_merge = true
+# Sync branch creation/deletion between SVN and Git
+sync_branches = true
+# Sync tag creation between SVN and Git
+sync_tags = true
+
+# PR mode settings (only used when mode = "pr")
+# [sync.pr]
+# require_approval = true
+# auto_merge_approved = true
+# reviewers = ["team-lead"]
