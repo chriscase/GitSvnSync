@@ -1,0 +1,20 @@
+[package]
+name = "gitsvnsync-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GitSvnSync command-line management tool"
+
+[[bin]]
+name = "gitsvnsync"
+path = "src/main.rs"
+
+[dependencies]
+gitsvnsync-core = { path = "../core" }
+tokio = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
