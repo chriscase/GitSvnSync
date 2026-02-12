@@ -47,12 +47,7 @@ async fn login(
     State(state): State<Arc<AppState>>,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
-    let configured_password = state
-        .config
-        .web
-        .admin_password
-        .as_deref()
-        .unwrap_or("");
+    let configured_password = state.config.web.admin_password.as_deref().unwrap_or("");
 
     // If no admin password is configured, authentication is disabled
     if configured_password.is_empty() {

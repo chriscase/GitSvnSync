@@ -100,15 +100,11 @@ impl Scheduler {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
         {
-            warn!(
-                trigger,
-                "skipping sync cycle: previous cycle still running"
-            );
+            warn!(trigger, "skipping sync cycle: previous cycle still running");
             return;
         }
 
-        let cycle_num =
-            self.stats.total_cycles.fetch_add(1, Ordering::SeqCst) + 1;
+        let cycle_num = self.stats.total_cycles.fetch_add(1, Ordering::SeqCst) + 1;
         info!(cycle = cycle_num, trigger, "starting sync cycle");
 
         // Broadcast sync started
@@ -151,13 +147,8 @@ impl Scheduler {
                 let _ = self.ws_broadcast.send(end_msg.to_string());
             }
             Err(e) => {
-                let errors =
-                    self.stats.total_errors.fetch_add(1, Ordering::SeqCst) + 1;
-                let consecutive = self
-                    .stats
-                    .consecutive_errors
-                    .fetch_add(1, Ordering::SeqCst)
-                    + 1;
+                let errors = self.stats.total_errors.fetch_add(1, Ordering::SeqCst) + 1;
+                let consecutive = self.stats.consecutive_errors.fetch_add(1, Ordering::SeqCst) + 1;
                 error!(
                     cycle = cycle_num,
                     error = %e,

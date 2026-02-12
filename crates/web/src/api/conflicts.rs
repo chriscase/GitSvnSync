@@ -73,7 +73,10 @@ async fn list_conflicts(
     let limit = query.per_page.unwrap_or(20);
     let status_filter = query.status.as_deref();
 
-    let db = state.db.lock().map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
     let entries = db
         .list_conflicts(status_filter, limit)
         .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
@@ -99,7 +102,10 @@ async fn get_conflict(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<ConflictDetail>, AppError> {
-    let db = state.db.lock().map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
     let conflict = db
         .get_conflict(&id)
         .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
@@ -137,7 +143,10 @@ async fn resolve_conflict(
         }
     };
 
-    let db = state.db.lock().map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
     db.resolve_conflict(&id, "resolved", resolution, "api")
         .map_err(|e| AppError::NotFound(format!("failed to resolve conflict: {}", e)))?;
 
@@ -159,7 +168,10 @@ async fn defer_conflict(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db = state.db.lock().map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
     db.resolve_conflict(&id, "deferred", "deferred", "api")
         .map_err(|e| AppError::NotFound(format!("failed to defer conflict: {}", e)))?;
 

@@ -29,7 +29,12 @@ use gitsvnsync_core::identity::IdentityMapper;
 )]
 struct Cli {
     /// Path to the TOML configuration file.
-    #[arg(short, long, global = true, default_value = "/etc/gitsvnsync/config.toml")]
+    #[arg(
+        short,
+        long,
+        global = true,
+        default_value = "/etc/gitsvnsync/config.toml"
+    )]
     config: PathBuf,
 
     #[command(subcommand)]
@@ -170,9 +175,10 @@ async fn run(cli: Cli) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn load_config(path: &PathBuf) -> Result<AppConfig> {
-    let mut config = AppConfig::load_from_file(path)
-        .context("failed to load configuration file")?;
-    config.resolve_env_vars()
+    let mut config =
+        AppConfig::load_from_file(path).context("failed to load configuration file")?;
+    config
+        .resolve_env_vars()
         .context("failed to resolve environment variables")?;
     Ok(config)
 }
@@ -240,16 +246,21 @@ sync_tags = true
         );
     }
 
-    std::fs::write(output, default_config)
-        .context("failed to write config file")?;
+    std::fs::write(output, default_config).context("failed to write config file")?;
 
     println!("Default configuration written to {}", output.display());
     println!();
     println!("Next steps:");
     println!("  1. Edit the config file with your SVN and GitHub details");
     println!("  2. Set the referenced environment variables (SVN_PASSWORD, GITHUB_TOKEN, etc.)");
-    println!("  3. Validate with: gitsvnsync validate --config {}", output.display());
-    println!("  4. Start the daemon: gitsvnsync-daemon --config {}", output.display());
+    println!(
+        "  3. Validate with: gitsvnsync validate --config {}",
+        output.display()
+    );
+    println!(
+        "  4. Start the daemon: gitsvnsync-daemon --config {}",
+        output.display()
+    );
 
     Ok(())
 }
@@ -258,8 +269,7 @@ fn cmd_validate(config_path: &PathBuf) -> Result<()> {
     println!("Validating configuration: {}", config_path.display());
     println!();
 
-    let config = AppConfig::load_from_file(config_path)
-        .context("failed to parse configuration")?;
+    let config = AppConfig::load_from_file(config_path).context("failed to parse configuration")?;
 
     // Check structure
     println!("  [OK] TOML structure is valid");
@@ -285,10 +295,31 @@ fn cmd_validate(config_path: &PathBuf) -> Result<()> {
     println!("Configuration summary:");
     println!("  SVN URL       : {}", config.svn.url);
     println!("  SVN user      : {}", config.svn.username);
-    println!("  SVN password  : {}", if config.svn.password.is_some() { "set" } else { "NOT SET" });
+    println!(
+        "  SVN password  : {}",
+        if config.svn.password.is_some() {
+            "set"
+        } else {
+            "NOT SET"
+        }
+    );
     println!("  GitHub repo   : {}", config.github.repo);
-    println!("  GitHub token  : {}", if config.github.token.is_some() { "set" } else { "NOT SET" });
-    println!("  Webhook secret: {}", if config.github.webhook_secret.is_some() { "set" } else { "not set" });
+    println!(
+        "  GitHub token  : {}",
+        if config.github.token.is_some() {
+            "set"
+        } else {
+            "NOT SET"
+        }
+    );
+    println!(
+        "  Webhook secret: {}",
+        if config.github.webhook_secret.is_some() {
+            "set"
+        } else {
+            "not set"
+        }
+    );
     println!("  Web listen    : {}", config.web.listen);
     println!("  Poll interval : {}s", config.daemon.poll_interval_secs);
     println!("  Data directory: {}", config.daemon.data_dir.display());
@@ -328,9 +359,7 @@ fn cmd_status(db: &Database) -> Result<()> {
         .count_all_conflicts()
         .context("failed to count total conflicts")?;
 
-    let total_errors = db
-        .count_errors()
-        .context("failed to count errors")?;
+    let total_errors = db.count_errors().context("failed to count errors")?;
 
     println!("GitSvnSync Status");
     println!("=================");
@@ -439,7 +468,11 @@ fn cmd_conflicts(db: &Database, action: ConflictsAction) -> Result<()> {
                     println!("SVN Content ({} bytes):", content.len());
                     println!("{}", "-".repeat(40));
                     let preview = if content.len() > 1000 {
-                        format!("{}...\n[truncated, {} bytes total]", &content[..1000], content.len())
+                        format!(
+                            "{}...\n[truncated, {} bytes total]",
+                            &content[..1000],
+                            content.len()
+                        )
                     } else {
                         content.clone()
                     };
@@ -450,7 +483,11 @@ fn cmd_conflicts(db: &Database, action: ConflictsAction) -> Result<()> {
                     println!("Git Content ({} bytes):", content.len());
                     println!("{}", "-".repeat(40));
                     let preview = if content.len() > 1000 {
-                        format!("{}...\n[truncated, {} bytes total]", &content[..1000], content.len())
+                        format!(
+                            "{}...\n[truncated, {} bytes total]",
+                            &content[..1000],
+                            content.len()
+                        )
                     } else {
                         content.clone()
                     };
@@ -466,10 +503,7 @@ fn cmd_conflicts(db: &Database, action: ConflictsAction) -> Result<()> {
                 "svn" => "accept_svn",
                 "git" => "accept_git",
                 other => {
-                    anyhow::bail!(
-                        "invalid resolution '{}': use 'svn' or 'git'",
-                        other
-                    );
+                    anyhow::bail!("invalid resolution '{}': use 'svn' or 'git'", other);
                 }
             };
 
@@ -515,9 +549,10 @@ async fn cmd_sync(_db: &Database, config: &AppConfig, action: SyncAction) -> Res
                 Arc::new(identity),
             );
 
-            let result = engine.run_sync_cycle().await.map_err(|e| {
-                anyhow::anyhow!("sync cycle failed: {}", e)
-            })?;
+            let result = engine
+                .run_sync_cycle()
+                .await
+                .map_err(|e| anyhow::anyhow!("sync cycle failed: {}", e))?;
 
             println!("Sync cycle completed:");
             println!("  SVN -> Git : {} operations", result.svn_to_git_count);
@@ -535,8 +570,8 @@ async fn cmd_sync(_db: &Database, config: &AppConfig, action: SyncAction) -> Res
 }
 
 fn cmd_identity(config: &AppConfig, action: IdentityAction) -> Result<()> {
-    let mapper = IdentityMapper::new(&config.identity)
-        .context("failed to initialize identity mapper")?;
+    let mapper =
+        IdentityMapper::new(&config.identity).context("failed to initialize identity mapper")?;
 
     match action {
         IdentityAction::Lookup { svn_user } => {
@@ -565,10 +600,7 @@ fn cmd_audit(db: &Database, limit: u32) -> Result<()> {
         return Ok(());
     }
 
-    println!(
-        "{:<22} {:<20} {}",
-        "TIMESTAMP", "ACTION", "DETAILS"
-    );
+    println!("{:<22} {:<20} DETAILS", "TIMESTAMP", "ACTION");
     println!("{}", "-".repeat(80));
 
     for entry in &entries {

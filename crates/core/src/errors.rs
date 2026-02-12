@@ -54,10 +54,7 @@ pub enum SvnError {
 
     /// An `svn` command exited with a non-zero status.
     #[error("svn command failed (exit {exit_code}): {stderr}")]
-    CommandFailed {
-        exit_code: i32,
-        stderr: String,
-    },
+    CommandFailed { exit_code: i32, stderr: String },
 
     /// Could not parse the XML output produced by `svn`.
     #[error("failed to parse svn XML output: {0}")]
@@ -65,10 +62,7 @@ pub enum SvnError {
 
     /// An authentication problem with the SVN server.
     #[error("svn authentication failed for user '{username}': {detail}")]
-    AuthenticationFailed {
-        username: String,
-        detail: String,
-    },
+    AuthenticationFailed { username: String, detail: String },
 
     /// The requested revision does not exist.
     #[error("svn revision {0} not found")]
@@ -76,10 +70,7 @@ pub enum SvnError {
 
     /// A checkout / working-copy operation failed.
     #[error("svn working copy error at '{path}': {detail}")]
-    WorkingCopyError {
-        path: String,
-        detail: String,
-    },
+    WorkingCopyError { path: String, detail: String },
 
     /// Network / connectivity issue.
     #[error("svn network error: {0}")]
@@ -111,10 +102,7 @@ pub enum GitError {
 
     /// Push was rejected (e.g. non-fast-forward).
     #[error("git push rejected for branch '{branch}': {detail}")]
-    PushRejected {
-        branch: String,
-        detail: String,
-    },
+    PushRejected { branch: String, detail: String },
 
     /// Merge conflict detected during a local merge.
     #[error("git merge conflict: {0}")]
@@ -142,10 +130,7 @@ pub enum GitHubError {
 
     /// The API returned a non-success status code.
     #[error("GitHub API error (HTTP {status}): {body}")]
-    ApiError {
-        status: u16,
-        body: String,
-    },
+    ApiError { status: u16, body: String },
 
     /// Authentication token is missing or invalid.
     #[error("GitHub authentication failed: {0}")]
@@ -153,9 +138,7 @@ pub enum GitHubError {
 
     /// Rate limit exceeded.
     #[error("GitHub rate limit exceeded, resets at {reset_at}")]
-    RateLimited {
-        reset_at: String,
-    },
+    RateLimited { reset_at: String },
 
     /// Webhook signature verification failed.
     #[error("webhook signature verification failed")]
@@ -175,30 +158,19 @@ pub enum GitHubError {
 pub enum SyncError {
     /// Another sync cycle is already running.
     #[error("sync already in progress (started at {started_at})")]
-    AlreadyRunning {
-        started_at: String,
-    },
+    AlreadyRunning { started_at: String },
 
     /// The sync detected an unresolvable conflict.
     #[error("unresolvable conflict on '{file_path}': {detail}")]
-    UnresolvableConflict {
-        file_path: String,
-        detail: String,
-    },
+    UnresolvableConflict { file_path: String, detail: String },
 
     /// Echo detection failure — unable to determine if a commit is ours.
     #[error("echo detection failed for commit {sha}: {detail}")]
-    EchoDetectionFailed {
-        sha: String,
-        detail: String,
-    },
+    EchoDetectionFailed { sha: String, detail: String },
 
     /// A state-machine transition was invalid.
     #[error("invalid sync state transition from {from} to {to}")]
-    InvalidStateTransition {
-        from: String,
-        to: String,
-    },
+    InvalidStateTransition { from: String, to: String },
 
     /// Underlying SVN error during sync.
     #[error("sync SVN error: {0}")]
@@ -238,10 +210,7 @@ pub enum ConflictError {
 
     /// The provided resolution content is invalid.
     #[error("invalid resolution for conflict {id}: {detail}")]
-    InvalidResolution {
-        id: String,
-        detail: String,
-    },
+    InvalidResolution { id: String, detail: String },
 
     /// Three-way merge failed.
     #[error("three-way merge failed: {0}")]
@@ -268,18 +237,14 @@ pub enum ConfigError {
     ParseError(String),
 
     /// A required environment variable is not set.
-    #[error("required environment variable '{var}' is not set (referenced by config field '{field}')")]
-    EnvVarMissing {
-        var: String,
-        field: String,
-    },
+    #[error(
+        "required environment variable '{var}' is not set (referenced by config field '{field}')"
+    )]
+    EnvVarMissing { var: String, field: String },
 
     /// A config value is invalid.
     #[error("invalid configuration value for '{field}': {detail}")]
-    InvalidValue {
-        field: String,
-        detail: String,
-    },
+    InvalidValue { field: String, detail: String },
 
     /// Generic I/O error reading the config file.
     #[error("configuration I/O error: {0}")]
@@ -299,17 +264,11 @@ pub enum DatabaseError {
 
     /// A migration failed.
     #[error("database migration failed (version {version}): {detail}")]
-    MigrationFailed {
-        version: u32,
-        detail: String,
-    },
+    MigrationFailed { version: u32, detail: String },
 
     /// A record was not found.
     #[error("{entity} not found: {id}")]
-    NotFound {
-        entity: String,
-        id: String,
-    },
+    NotFound { entity: String, id: String },
 
     /// Generic I/O error (e.g. file permissions).
     #[error("database I/O error: {0}")]
@@ -325,10 +284,7 @@ pub enum DatabaseError {
 pub enum IdentityError {
     /// The mapping file could not be loaded.
     #[error("identity mapping file error at '{path}': {detail}")]
-    MappingFileError {
-        path: String,
-        detail: String,
-    },
+    MappingFileError { path: String, detail: String },
 
     /// No mapping exists for the given SVN user.
     #[error("no git identity mapping for svn user '{0}'")]
@@ -336,10 +292,7 @@ pub enum IdentityError {
 
     /// No mapping exists for the given Git identity.
     #[error("no svn user mapping for git identity '{name} <{email}>'")]
-    GitIdentityNotFound {
-        name: String,
-        email: String,
-    },
+    GitIdentityNotFound { name: String, email: String },
 
     /// LDAP connection or query error.
     #[error("LDAP error: {0}")]
@@ -396,10 +349,7 @@ mod tests {
         assert_eq!(err.to_string(), "svn revision 42 not found");
 
         let err = GitError::RepositoryNotFound("/tmp/repo".into());
-        assert_eq!(
-            err.to_string(),
-            "git repository not found at '/tmp/repo'"
-        );
+        assert_eq!(err.to_string(), "git repository not found at '/tmp/repo'");
 
         let err = GitHubError::RateLimited {
             reset_at: "2025-01-01T00:00:00Z".into(),

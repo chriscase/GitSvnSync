@@ -66,7 +66,12 @@ pub struct PullRequestRef {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum CommitStatusState { Pending, Success, Failure, Error }
+pub enum CommitStatusState {
+    Pending,
+    Success,
+    Failure,
+    Error,
+}
 
 impl std::fmt::Display for CommitStatusState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -91,19 +96,38 @@ impl GitHubClient {
         let api_url = api_url.into().trim_end_matches('/').to_string();
         let token = token.into();
         let mut headers = HeaderMap::new();
-        headers.insert(ACCEPT, HeaderValue::from_static("application/vnd.github+json"));
+        headers.insert(
+            ACCEPT,
+            HeaderValue::from_static("application/vnd.github+json"),
+        );
         headers.insert(USER_AGENT, HeaderValue::from_static("gitsvnsync/0.1"));
-        headers.insert("X-GitHub-Api-Version", HeaderValue::from_static("2022-11-28"));
-        let http = reqwest::Client::builder().default_headers(headers).build().expect("failed to build reqwest client");
+        headers.insert(
+            "X-GitHub-Api-Version",
+            HeaderValue::from_static("2022-11-28"),
+        );
+        let http = reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .expect("failed to build reqwest client");
         info!(api_url = %api_url, "created GitHubClient");
-        Self { http, api_url, token }
+        Self {
+            http,
+            api_url,
+            token,
+        }
     }
 
     #[instrument(skip(self))]
-    pub async fn get_commits(&self, repo: &str, since_sha: Option<&str>) -> Result<Vec<GitHubCommit>, GitHubError> {
+    pub async fn get_commits(
+        &self,
+        repo: &str,
+        since_sha: Option<&str>,
+    ) -> Result<Vec<GitHubCommit>, GitHubError> {
         let url = format!("{}/repos/{}/commits", self.api_url, repo);
         let mut req = self.http.get(&url).bearer_auth(&self.token);
-        if let Some(sha) = since_sha { req = req.query(&[("sha", sha)]); }
+        if let Some(sha) = since_sha {
+            req = req.query(&[("sha", sha)]);
+        }
         req = req.query(&[("per_page", "100")]);
         let resp = req.send().await?;
         self.check_response(&resp)?;
@@ -113,13 +137,24 @@ impl GitHubClient {
     }
 
     #[instrument(skip(self, secret))]
-    pub async fn create_webhook(&self, repo: &str, callback_url: &str, secret: &str) -> Result<serde_json::Value, GitHubError> {
+    pub async fn create_webhook(
+        &self,
+        repo: &str,
+        callback_url: &str,
+        secret: &str,
+    ) -> Result<serde_json::Value, GitHubError> {
         let url = format!("{}/repos/{}/hooks", self.api_url, repo);
         let body = serde_json::json!({
             "name": "web", "active": true, "events": ["push", "pull_request"],
             "config": { "url": callback_url, "content_type": "json", "secret": secret, "insecure_ssl": "0" }
         });
-        let resp = self.http.post(&url).bearer_auth(&self.token).json(&body).send().await?;
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.token)
+            .json(&body)
+            .send()
+            .await?;
         self.check_response(&resp)?;
         let hook: serde_json::Value = resp.json().await?;
         info!(hook_id = %hook["id"], "created webhook");
@@ -130,25 +165,48 @@ impl GitHubClient {
     pub fn verify_webhook_signature(payload: &[u8], signature: &str, secret: &str) -> bool {
         let hex_sig = match signature.strip_prefix("sha256=") {
             Some(s) => s,
-            None => { warn!("webhook signature missing sha256= prefix"); return false; }
+            None => {
+                warn!("webhook signature missing sha256= prefix");
+                return false;
+            }
         };
         let expected_bytes = match hex::decode(hex_sig) {
             Ok(b) => b,
-            Err(_) => { warn!("webhook signature is not valid hex"); return false; }
+            Err(_) => {
+                warn!("webhook signature is not valid hex");
+                return false;
+            }
         };
         let mut mac = match HmacSha256::new_from_slice(secret.as_bytes()) {
             Ok(m) => m,
-            Err(_) => { warn!("failed to create HMAC"); return false; }
+            Err(_) => {
+                warn!("failed to create HMAC");
+                return false;
+            }
         };
         mac.update(payload);
         mac.verify_slice(&expected_bytes).is_ok()
     }
 
     #[instrument(skip(self, body))]
-    pub async fn create_pull_request(&self, repo: &str, title: &str, body: &str, head: &str, base: &str) -> Result<PullRequest, GitHubError> {
+    pub async fn create_pull_request(
+        &self,
+        repo: &str,
+        title: &str,
+        body: &str,
+        head: &str,
+        base: &str,
+    ) -> Result<PullRequest, GitHubError> {
         let url = format!("{}/repos/{}/pulls", self.api_url, repo);
-        let payload = serde_json::json!({ "title": title, "body": body, "head": head, "base": base });
-        let resp = self.http.post(&url).bearer_auth(&self.token).json(&payload).send().await?;
+        let payload =
+            serde_json::json!({ "title": title, "body": body, "head": head, "base": base });
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.token)
+            .json(&payload)
+            .send()
+            .await?;
         self.check_response(&resp)?;
         let pr: PullRequest = resp.json().await?;
         info!(number = pr.number, "created pull request");
@@ -159,7 +217,13 @@ impl GitHubClient {
     pub async fn merge_pull_request(&self, repo: &str, pr_number: u64) -> Result<(), GitHubError> {
         let url = format!("{}/repos/{}/pulls/{}/merge", self.api_url, repo, pr_number);
         let payload = serde_json::json!({ "merge_method": "merge" });
-        let resp = self.http.put(&url).bearer_auth(&self.token).json(&payload).send().await?;
+        let resp = self
+            .http
+            .put(&url)
+            .bearer_auth(&self.token)
+            .json(&payload)
+            .send()
+            .await?;
         self.check_response(&resp)?;
         info!(pr_number, "merged pull request");
         Ok(())
@@ -176,10 +240,22 @@ impl GitHubClient {
     }
 
     #[instrument(skip(self))]
-    pub async fn post_commit_status(&self, repo: &str, sha: &str, state: CommitStatusState, description: &str) -> Result<(), GitHubError> {
+    pub async fn post_commit_status(
+        &self,
+        repo: &str,
+        sha: &str,
+        state: CommitStatusState,
+        description: &str,
+    ) -> Result<(), GitHubError> {
         let url = format!("{}/repos/{}/statuses/{}", self.api_url, repo, sha);
         let payload = serde_json::json!({ "state": state.to_string(), "description": description, "context": "gitsvnsync" });
-        let resp = self.http.post(&url).bearer_auth(&self.token).json(&payload).send().await?;
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.token)
+            .json(&payload)
+            .send()
+            .await?;
         self.check_response(&resp)?;
         debug!(sha, state = %state, "posted commit status");
         Ok(())
@@ -187,15 +263,28 @@ impl GitHubClient {
 
     fn check_response(&self, resp: &reqwest::Response) -> Result<(), GitHubError> {
         let status = resp.status();
-        if status.is_success() { return Ok(()); }
+        if status.is_success() {
+            return Ok(());
+        }
         if status.as_u16() == 401 || status.as_u16() == 403 {
-            return Err(GitHubError::AuthenticationFailed(format!("HTTP {}", status)));
+            return Err(GitHubError::AuthenticationFailed(format!(
+                "HTTP {}",
+                status
+            )));
         }
         if status.as_u16() == 429 {
-            let reset = resp.headers().get("x-ratelimit-reset").and_then(|v| v.to_str().ok()).unwrap_or("unknown").to_string();
+            let reset = resp
+                .headers()
+                .get("x-ratelimit-reset")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("unknown")
+                .to_string();
             return Err(GitHubError::RateLimited { reset_at: reset });
         }
-        Err(GitHubError::ApiError { status: status.as_u16(), body: format!("HTTP {}", status) })
+        Err(GitHubError::ApiError {
+            status: status.as_u16(),
+            body: format!("HTTP {}", status),
+        })
     }
 }
 
@@ -211,13 +300,17 @@ mod tests {
         mac.update(payload);
         let hex_sig = hex::encode(mac.finalize().into_bytes());
         let signature = format!("sha256={}", hex_sig);
-        assert!(GitHubClient::verify_webhook_signature(payload, &signature, secret));
+        assert!(GitHubClient::verify_webhook_signature(
+            payload, &signature, secret
+        ));
     }
 
     #[test]
     fn test_verify_webhook_signature_invalid() {
         assert!(!GitHubClient::verify_webhook_signature(
-            b"payload", "sha256=0000000000000000000000000000000000000000000000000000000000000000", "secret"
+            b"payload",
+            "sha256=0000000000000000000000000000000000000000000000000000000000000000",
+            "secret"
         ));
     }
 }

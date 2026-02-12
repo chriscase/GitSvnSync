@@ -51,7 +51,10 @@ async fn list_audit(
 ) -> Result<Json<AuditListResponse>, AppError> {
     let limit = query.limit.unwrap_or(50).min(500);
 
-    let db = state.db.lock().map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
     let entries = db
         .list_audit_log(limit)
         .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;

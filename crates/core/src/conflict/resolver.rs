@@ -29,13 +29,21 @@ pub struct ConflictResolver;
 
 impl ConflictResolver {
     /// Resolve a conflict by accepting the SVN version.
-    pub fn accept_svn(conflict_id: &str, resolved_by: &str, db: &Database) -> Result<(), ConflictError> {
+    pub fn accept_svn(
+        conflict_id: &str,
+        resolved_by: &str,
+        db: &Database,
+    ) -> Result<(), ConflictError> {
         info!(conflict_id, resolved_by, "resolving conflict: accept SVN");
         Self::apply_resolution(conflict_id, "accept_svn", resolved_by, db)
     }
 
     /// Resolve a conflict by accepting the Git version.
-    pub fn accept_git(conflict_id: &str, resolved_by: &str, db: &Database) -> Result<(), ConflictError> {
+    pub fn accept_git(
+        conflict_id: &str,
+        resolved_by: &str,
+        db: &Database,
+    ) -> Result<(), ConflictError> {
         info!(conflict_id, resolved_by, "resolving conflict: accept Git");
         Self::apply_resolution(conflict_id, "accept_git", resolved_by, db)
     }
@@ -47,7 +55,10 @@ impl ConflictResolver {
         resolved_by: &str,
         db: &Database,
     ) -> Result<(), ConflictError> {
-        info!(conflict_id, resolved_by, "resolving conflict: accept merged content");
+        info!(
+            conflict_id,
+            resolved_by, "resolving conflict: accept merged content"
+        );
         Self::apply_resolution(conflict_id, "accept_merged", resolved_by, db)
     }
 
@@ -203,19 +214,11 @@ mod tests {
     #[test]
     fn test_resolved_content() {
         assert_eq!(
-            ConflictResolver::resolved_content(
-                &Resolution::AcceptSvn,
-                Some("svn"),
-                Some("git"),
-            ),
+            ConflictResolver::resolved_content(&Resolution::AcceptSvn, Some("svn"), Some("git"),),
             Some("svn".to_string())
         );
         assert_eq!(
-            ConflictResolver::resolved_content(
-                &Resolution::AcceptGit,
-                Some("svn"),
-                Some("git"),
-            ),
+            ConflictResolver::resolved_content(&Resolution::AcceptGit, Some("svn"), Some("git"),),
             Some("git".to_string())
         );
         assert_eq!(
@@ -227,11 +230,7 @@ mod tests {
             Some("custom".to_string())
         );
         assert_eq!(
-            ConflictResolver::resolved_content(
-                &Resolution::Deferred,
-                Some("svn"),
-                Some("git"),
-            ),
+            ConflictResolver::resolved_content(&Resolution::Deferred, Some("svn"), Some("git"),),
             None
         );
     }

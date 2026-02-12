@@ -19,10 +19,7 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new().route("/ws", get(ws_handler))
 }
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let rx = state.ws_broadcast.subscribe();
     ws.on_upgrade(move |socket| handle_socket(socket, rx))
 }
@@ -35,7 +32,7 @@ async fn handle_socket(mut socket: WebSocket, mut rx: broadcast::Receiver<String
         "type": "connected",
         "message": "GitSvnSync live updates",
     });
-    if let Err(e) = socket.send(Message::Text(welcome.to_string().into())).await {
+    if let Err(e) = socket.send(Message::Text(welcome.to_string())).await {
         warn!("failed to send welcome message: {}", e);
         return;
     }
@@ -48,7 +45,7 @@ async fn handle_socket(mut socket: WebSocket, mut rx: broadcast::Receiver<String
             result = rx.recv() => {
                 match result {
                     Ok(msg) => {
-                        if let Err(e) = socket.send(Message::Text(msg.into())).await {
+                        if let Err(e) = socket.send(Message::Text(msg)).await {
                             debug!("WebSocket send error (client disconnected?): {}", e);
                             break;
                         }
@@ -60,7 +57,7 @@ async fn handle_socket(mut socket: WebSocket, mut rx: broadcast::Receiver<String
                             "type": "warning",
                             "message": format!("lagged by {} messages", n),
                         });
-                        let _ = socket.send(Message::Text(lag_msg.to_string().into())).await;
+                        let _ = socket.send(Message::Text(lag_msg.to_string())).await;
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         debug!("broadcast channel closed, disconnecting WebSocket");

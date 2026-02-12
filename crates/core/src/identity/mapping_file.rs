@@ -38,9 +38,7 @@ pub struct MappingFile;
 
 impl MappingFile {
     /// Load the mapping file from disk and return the author map.
-    pub fn load<P: AsRef<Path>>(
-        path: P,
-    ) -> Result<HashMap<String, AuthorEntry>, IdentityError> {
+    pub fn load<P: AsRef<Path>>(path: P) -> Result<HashMap<String, AuthorEntry>, IdentityError> {
         let path = path.as_ref();
         info!(path = %path.display(), "loading identity mapping file");
 
@@ -131,7 +129,10 @@ email = "alice@example.com"
     #[test]
     fn test_load_nonexistent() {
         let result = MappingFile::load("/nonexistent/authors.toml");
-        assert!(matches!(result, Err(IdentityError::MappingFileError { .. })));
+        assert!(matches!(
+            result,
+            Err(IdentityError::MappingFileError { .. })
+        ));
     }
 
     #[test]

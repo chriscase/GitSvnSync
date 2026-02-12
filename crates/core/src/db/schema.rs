@@ -11,11 +11,10 @@ use crate::errors::DatabaseError;
 /// All migrations, in order. Each entry is `(version, description, sql)`.
 /// Versions start at 1. The current schema version is stored in the SQLite
 /// `user_version` pragma.
-static MIGRATIONS: &[(u32, &str, &str)] = &[
-    (
-        1,
-        "initial schema",
-        r#"
+static MIGRATIONS: &[(u32, &str, &str)] = &[(
+    1,
+    "initial schema",
+    r#"
         CREATE TABLE IF NOT EXISTS commit_map (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             svn_rev     INTEGER NOT NULL,
@@ -96,8 +95,7 @@ static MIGRATIONS: &[(u32, &str, &str)] = &[
             updated_at  TEXT NOT NULL
         );
         "#,
-    ),
-];
+)];
 
 /// Run all pending migrations against `conn`.
 pub fn run_migrations(conn: &Connection) -> Result<(), DatabaseError> {
@@ -111,10 +109,11 @@ pub fn run_migrations(conn: &Connection) -> Result<(), DatabaseError> {
     for &(version, description, sql) in MIGRATIONS {
         if version > current_version {
             info!(version, description, "applying migration");
-            conn.execute_batch(sql).map_err(|e| DatabaseError::MigrationFailed {
-                version,
-                detail: e.to_string(),
-            })?;
+            conn.execute_batch(sql)
+                .map_err(|e| DatabaseError::MigrationFailed {
+                    version,
+                    detail: e.to_string(),
+                })?;
             set_schema_version(conn, version)?;
             debug!(version, "migration applied successfully");
         }

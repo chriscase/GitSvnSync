@@ -150,7 +150,10 @@ fn generate_conflict_output(base: &str, ours: &str, theirs: &str) -> (String, Ve
     let mut output = Vec::new();
     let mut markers = Vec::new();
 
-    let max_len = ours_lines.len().max(theirs_lines.len()).max(base_lines.len());
+    let max_len = ours_lines
+        .len()
+        .max(theirs_lines.len())
+        .max(base_lines.len());
 
     let mut i = 0;
     while i < max_len {
@@ -190,7 +193,7 @@ fn generate_conflict_output(base: &str, ours: &str, theirs: &str) -> (String, Ve
                 output.push("<<<<<<< ours (SVN)".to_string());
                 output.extend(ours_block);
                 if let Some(bl) = base_line {
-                    output.push(format!("||||||| base"));
+                    output.push("||||||| base".to_string());
                     // Include base lines for the same range.
                     for k in i..j {
                         if let Some(b) = base_lines.get(k) {
@@ -294,7 +297,11 @@ mod tests {
         // Both sides unchanged = trivially auto-mergeable
         assert!(Merger::can_auto_merge(base, base, "aaa\nbbb\nCCC\n"));
         // Same change on both sides
-        assert!(Merger::can_auto_merge(base, "XXX\nbbb\nccc\n", "XXX\nbbb\nccc\n"));
+        assert!(Merger::can_auto_merge(
+            base,
+            "XXX\nbbb\nccc\n",
+            "XXX\nbbb\nccc\n"
+        ));
 
         // Non-overlapping changes on a larger file with enough context for diffy.
         let base_large = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n";

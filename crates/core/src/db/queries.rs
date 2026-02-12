@@ -105,8 +105,7 @@ impl Database {
     /// Look up a Git SHA by SVN revision.
     pub fn get_git_sha_for_svn_rev(&self, svn_rev: i64) -> Result<Option<String>, DatabaseError> {
         let conn = self.conn();
-        let mut stmt = conn
-            .prepare("SELECT git_sha FROM commit_map WHERE svn_rev = ?1 LIMIT 1")?;
+        let mut stmt = conn.prepare("SELECT git_sha FROM commit_map WHERE svn_rev = ?1 LIMIT 1")?;
         let mut rows = stmt.query_map(params![svn_rev], |row| row.get(0))?;
         match rows.next() {
             Some(Ok(sha)) => Ok(Some(sha)),
@@ -118,8 +117,7 @@ impl Database {
     /// Look up an SVN revision by Git SHA.
     pub fn get_svn_rev_for_git_sha(&self, git_sha: &str) -> Result<Option<i64>, DatabaseError> {
         let conn = self.conn();
-        let mut stmt = conn
-            .prepare("SELECT svn_rev FROM commit_map WHERE git_sha = ?1 LIMIT 1")?;
+        let mut stmt = conn.prepare("SELECT svn_rev FROM commit_map WHERE git_sha = ?1 LIMIT 1")?;
         let mut rows = stmt.query_map(params![git_sha], |row| row.get(0))?;
         match rows.next() {
             Some(Ok(rev)) => Ok(Some(rev)),
@@ -176,7 +174,11 @@ impl Database {
     // -- sync_state ---------------------------------------------------------
 
     /// Record the start of a new sync cycle.
-    pub fn start_sync_state(&self, state: &str, details: Option<&str>) -> Result<i64, DatabaseError> {
+    pub fn start_sync_state(
+        &self,
+        state: &str,
+        details: Option<&str>,
+    ) -> Result<i64, DatabaseError> {
         let now = Utc::now().to_rfc3339();
         let conn = self.conn();
         conn.execute(
@@ -237,6 +239,7 @@ impl Database {
     // -- conflicts ----------------------------------------------------------
 
     /// Insert a new conflict record.
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_conflict_entry(
         &self,
         file_path: &str,
@@ -254,7 +257,17 @@ impl Database {
             "INSERT INTO conflicts (id, file_path, conflict_type, svn_content, git_content,
              base_content, svn_rev, git_sha, status, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'detected', ?9)",
-            params![id, file_path, conflict_type, svn_content, git_content, base_content, svn_rev, git_sha, now],
+            params![
+                id,
+                file_path,
+                conflict_type,
+                svn_content,
+                git_content,
+                base_content,
+                svn_rev,
+                git_sha,
+                now
+            ],
         )?;
         debug!(id = %id, file_path, conflict_type, "inserted conflict");
         Ok(id)
@@ -393,11 +406,7 @@ impl Database {
                 params![s],
                 |row| row.get(0),
             )?,
-            None => conn.query_row(
-                "SELECT COUNT(*) FROM conflicts",
-                [],
-                |row| row.get(0),
-            )?,
+            None => conn.query_row("SELECT COUNT(*) FROM conflicts", [], |row| row.get(0))?,
         };
 
         let per_page = pagination.per_page.max(1);
@@ -410,7 +419,11 @@ impl Database {
                  svn_rev, git_sha, status, resolution, resolved_by, created_at, resolved_at
                  FROM conflicts WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2 OFFSET ?3"
                     .to_string(),
-                vec![Box::new(s.to_string()), Box::new(per_page as i64), Box::new(offset)],
+                vec![
+                    Box::new(s.to_string()),
+                    Box::new(per_page as i64),
+                    Box::new(offset),
+                ],
             ),
             None => (
                 "SELECT id, file_path, conflict_type, svn_content, git_content, base_content,
@@ -561,11 +574,7 @@ impl Database {
     /// Count total conflicts.
     pub fn count_all_conflicts(&self) -> Result<i64, DatabaseError> {
         let conn = self.conn();
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM conflicts",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM conflicts", [], |row| row.get(0))?;
         Ok(count)
     }
 
@@ -585,8 +594,7 @@ impl Database {
     /// Get the watermark value for a given source.
     pub fn get_watermark(&self, source: &str) -> Result<Option<String>, DatabaseError> {
         let conn = self.conn();
-        let mut stmt = conn
-            .prepare("SELECT value FROM watermarks WHERE source = ?1")?;
+        let mut stmt = conn.prepare("SELECT value FROM watermarks WHERE source = ?1")?;
         let mut rows = stmt.query_map(params![source], |row| row.get(0))?;
         match rows.next() {
             Some(Ok(val)) => Ok(Some(val)),
@@ -611,8 +619,8 @@ impl Database {
     /// List all watermarks.
     pub fn list_watermarks(&self) -> Result<Vec<WatermarkEntry>, DatabaseError> {
         let conn = self.conn();
-        let mut stmt = conn
-            .prepare("SELECT source, value, updated_at FROM watermarks ORDER BY source")?;
+        let mut stmt =
+            conn.prepare("SELECT source, value, updated_at FROM watermarks ORDER BY source")?;
         let entries = stmt
             .query_map([], |row| {
                 Ok(WatermarkEntry {
@@ -651,14 +659,7 @@ impl Database {
 
     /// Insert an audit entry from a model struct.
     pub fn insert_audit_entry(&self, entry: &models::AuditEntry) -> Result<i64, DatabaseError> {
-        self.insert_audit_log(
-            &entry.action,
-            None,
-            None,
-            None,
-            None,
-            Some(&entry.details),
-        )
+        self.insert_audit_log(&entry.action, None, None, None, None, Some(&entry.details))
     }
 
     /// List recent audit-log entries.
@@ -694,42 +695,43 @@ impl Database {
     ) -> Result<Vec<models::WebAuditEntry>, DatabaseError> {
         let conn = self.conn();
 
-        let (sql, bound_params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match (since, action) {
-            (Some(since_dt), Some(act)) => (
-                "SELECT id, action, author, details, created_at
+        let (sql, bound_params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+            match (since, action) {
+                (Some(since_dt), Some(act)) => (
+                    "SELECT id, action, author, details, created_at
                  FROM audit_log WHERE created_at >= ?1 AND action = ?2 ORDER BY id DESC LIMIT ?3"
-                    .to_string(),
-                vec![
-                    Box::new(since_dt.to_rfc3339()) as Box<dyn rusqlite::types::ToSql>,
-                    Box::new(act.to_string()),
-                    Box::new(limit as i64),
-                ],
-            ),
-            (Some(since_dt), None) => (
-                "SELECT id, action, author, details, created_at
+                        .to_string(),
+                    vec![
+                        Box::new(since_dt.to_rfc3339()) as Box<dyn rusqlite::types::ToSql>,
+                        Box::new(act.to_string()),
+                        Box::new(limit as i64),
+                    ],
+                ),
+                (Some(since_dt), None) => (
+                    "SELECT id, action, author, details, created_at
                  FROM audit_log WHERE created_at >= ?1 ORDER BY id DESC LIMIT ?2"
-                    .to_string(),
-                vec![
-                    Box::new(since_dt.to_rfc3339()) as Box<dyn rusqlite::types::ToSql>,
-                    Box::new(limit as i64),
-                ],
-            ),
-            (None, Some(act)) => (
-                "SELECT id, action, author, details, created_at
+                        .to_string(),
+                    vec![
+                        Box::new(since_dt.to_rfc3339()) as Box<dyn rusqlite::types::ToSql>,
+                        Box::new(limit as i64),
+                    ],
+                ),
+                (None, Some(act)) => (
+                    "SELECT id, action, author, details, created_at
                  FROM audit_log WHERE action = ?1 ORDER BY id DESC LIMIT ?2"
-                    .to_string(),
-                vec![
-                    Box::new(act.to_string()) as Box<dyn rusqlite::types::ToSql>,
-                    Box::new(limit as i64),
-                ],
-            ),
-            (None, None) => (
-                "SELECT id, action, author, details, created_at
+                        .to_string(),
+                    vec![
+                        Box::new(act.to_string()) as Box<dyn rusqlite::types::ToSql>,
+                        Box::new(limit as i64),
+                    ],
+                ),
+                (None, None) => (
+                    "SELECT id, action, author, details, created_at
                  FROM audit_log ORDER BY id DESC LIMIT ?1"
-                    .to_string(),
-                vec![Box::new(limit as i64) as Box<dyn rusqlite::types::ToSql>],
-            ),
-        };
+                        .to_string(),
+                    vec![Box::new(limit as i64) as Box<dyn rusqlite::types::ToSql>],
+                ),
+            };
 
         let mut stmt = conn.prepare(&sql)?;
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
@@ -758,11 +760,7 @@ impl Database {
     /// Count total audit-log entries.
     pub fn count_audit_log(&self) -> Result<i64, DatabaseError> {
         let conn = self.conn();
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM audit_log",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM audit_log", [], |row| row.get(0))?;
         Ok(count)
     }
 
@@ -810,8 +808,7 @@ impl Database {
     /// Get a key-value state entry.
     pub fn get_state(&self, key: &str) -> Result<Option<String>, DatabaseError> {
         let conn = self.conn();
-        let mut stmt = conn
-            .prepare("SELECT value FROM kv_state WHERE key = ?1")?;
+        let mut stmt = conn.prepare("SELECT value FROM kv_state WHERE key = ?1")?;
         let mut rows = stmt.query_map(params![key], |row| row.get::<_, String>(0))?;
         match rows.next() {
             Some(Ok(val)) => Ok(Some(val)),
@@ -860,22 +857,16 @@ impl Database {
     /// Count total sync records.
     pub fn count_sync_records(&self) -> Result<i64, DatabaseError> {
         let conn = self.conn();
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM sync_records",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM sync_records", [], |row| row.get(0))?;
         Ok(count)
     }
 
     /// Get the last SVN revision from the commit map or sync records.
     pub fn get_last_svn_revision(&self) -> Result<Option<i64>, DatabaseError> {
         let conn = self.conn();
-        let result: Result<Option<i64>, _> = conn.query_row(
-            "SELECT MAX(svn_rev) FROM commit_map",
-            [],
-            |row| row.get(0),
-        );
+        let result: Result<Option<i64>, _> =
+            conn.query_row("SELECT MAX(svn_rev) FROM commit_map", [], |row| row.get(0));
         match result {
             Ok(Some(rev)) => Ok(Some(rev)),
             Ok(None) => {
@@ -894,9 +885,7 @@ impl Database {
     /// Get the last Git hash from the commit map or sync records.
     pub fn get_last_git_hash(&self) -> Result<Option<String>, DatabaseError> {
         let conn = self.conn();
-        let mut stmt = conn.prepare(
-            "SELECT git_sha FROM commit_map ORDER BY id DESC LIMIT 1",
-        )?;
+        let mut stmt = conn.prepare("SELECT git_sha FROM commit_map ORDER BY id DESC LIMIT 1")?;
         let mut rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         match rows.next() {
             Some(Ok(sha)) => Ok(Some(sha)),
@@ -945,7 +934,10 @@ impl Database {
     }
 
     /// Upsert an author mapping.
-    pub fn upsert_author_mapping(&self, mapping: &models::AuthorMapping) -> Result<(), DatabaseError> {
+    pub fn upsert_author_mapping(
+        &self,
+        mapping: &models::AuthorMapping,
+    ) -> Result<(), DatabaseError> {
         let key = format!("author_mapping:{}", mapping.svn_username);
         let value = serde_json::to_string(mapping).unwrap_or_default();
         self.set_state(&key, &value)
@@ -976,7 +968,10 @@ mod tests {
             .insert_commit_map(100, "abc123", "svn_to_git", "alice", "Alice <alice@ex.com>")
             .unwrap();
         assert!(id > 0);
-        assert_eq!(db.get_git_sha_for_svn_rev(100).unwrap().as_deref(), Some("abc123"));
+        assert_eq!(
+            db.get_git_sha_for_svn_rev(100).unwrap().as_deref(),
+            Some("abc123")
+        );
         assert_eq!(db.get_svn_rev_for_git_sha("abc123").unwrap(), Some(100));
         assert!(db.is_svn_rev_synced(100).unwrap());
         assert!(!db.is_svn_rev_synced(999).unwrap());
@@ -995,13 +990,22 @@ mod tests {
     fn test_conflict_crud() {
         let db = setup_db();
         let id = db
-            .insert_conflict_entry("src/main.rs", "content", Some("svn"), Some("git"), Some("base"), Some(42), Some("abc"))
+            .insert_conflict_entry(
+                "src/main.rs",
+                "content",
+                Some("svn"),
+                Some("git"),
+                Some("base"),
+                Some(42),
+                Some("abc"),
+            )
             .unwrap();
         let conflict = db.get_conflict_entry(&id).unwrap();
         assert_eq!(conflict.file_path, "src/main.rs");
         assert_eq!(conflict.status, "detected");
 
-        db.resolve_conflict(&id, "resolved", "accept_svn", "admin").unwrap();
+        db.resolve_conflict(&id, "resolved", "accept_svn", "admin")
+            .unwrap();
         let resolved = db.get_conflict_entry(&id).unwrap();
         assert_eq!(resolved.status, "resolved");
     }
@@ -1019,8 +1023,15 @@ mod tests {
     #[test]
     fn test_audit_log() {
         let db = setup_db();
-        db.insert_audit_log("sync", Some("svn_to_git"), Some(42), Some("abc"), Some("alice"), Some("test"))
-            .unwrap();
+        db.insert_audit_log(
+            "sync",
+            Some("svn_to_git"),
+            Some(42),
+            Some("abc"),
+            Some("alice"),
+            Some("test"),
+        )
+        .unwrap();
         let entries = db.list_audit_log(10).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(db.count_audit_log().unwrap(), 1);

@@ -83,12 +83,14 @@ async fn github_webhook(
         let signature = headers
             .get("x-hub-signature-256")
             .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| {
-                AppError::Unauthorized("missing X-Hub-Signature-256 header".into())
-            })?;
+            .ok_or_else(|| AppError::Unauthorized("missing X-Hub-Signature-256 header".into()))?;
 
-        verify_github_signature(&body, signature, state.config.github.webhook_secret.as_deref())
-            .map_err(|e| AppError::Unauthorized(format!("webhook verification failed: {}", e)))?;
+        verify_github_signature(
+            &body,
+            signature,
+            state.config.github.webhook_secret.as_deref(),
+        )
+        .map_err(|e| AppError::Unauthorized(format!("webhook verification failed: {}", e)))?;
     }
 
     // Parse the event type
@@ -140,7 +142,10 @@ async fn github_webhook(
 
     Ok(Json(WebhookResponse {
         ok: true,
-        message: format!("push event received, {} commits, sync triggered", commit_count),
+        message: format!(
+            "push event received, {} commits, sync triggered",
+            commit_count
+        ),
     }))
 }
 
@@ -170,10 +175,7 @@ async fn svn_webhook(
 
     Ok(Json(WebhookResponse {
         ok: true,
-        message: format!(
-            "SVN revision {} received, sync triggered",
-            payload.revision
-        ),
+        message: format!("SVN revision {} received, sync triggered", payload.revision),
     }))
 }
 
@@ -199,8 +201,7 @@ fn verify_github_signature(
         .map_err(|e| format!("HMAC init failed: {}", e))?;
     mac.update(payload);
 
-    let expected =
-        hex::decode(sig_hex).map_err(|e| format!("invalid hex in signature: {}", e))?;
+    let expected = hex::decode(sig_hex).map_err(|e| format!("invalid hex in signature: {}", e))?;
 
     mac.verify_slice(&expected)
         .map_err(|_| "signature mismatch".to_string())

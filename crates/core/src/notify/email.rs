@@ -44,14 +44,9 @@ impl EmailNotifier {
             .map_err(|e| NotificationError::EmailError(format!("invalid from address: {}", e)))?;
 
         for recipient in &self.recipients {
-            let to_mailbox: Mailbox = recipient
-                .parse()
-                .map_err(|e| {
-                    NotificationError::EmailError(format!(
-                        "invalid recipient '{}': {}",
-                        recipient, e
-                    ))
-                })?;
+            let to_mailbox: Mailbox = recipient.parse().map_err(|e| {
+                NotificationError::EmailError(format!("invalid recipient '{}': {}", recipient, e))
+            })?;
 
             let email = Message::builder()
                 .from(from_mailbox.clone())
@@ -84,9 +79,7 @@ impl EmailNotifier {
     }
 
     /// Build an async SMTP transport from the configured address.
-    fn build_transport(
-        &self,
-    ) -> Result<AsyncSmtpTransport<Tokio1Executor>, NotificationError> {
+    fn build_transport(&self) -> Result<AsyncSmtpTransport<Tokio1Executor>, NotificationError> {
         // Parse host:port.
         let parts: Vec<&str> = self.smtp_addr.rsplitn(2, ':').collect();
         let (host, _port) = match parts.len() {
@@ -95,9 +88,7 @@ impl EmailNotifier {
         };
 
         let transport = AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)
-            .map_err(|e| {
-                NotificationError::EmailError(format!("SMTP connection error: {}", e))
-            })?
+            .map_err(|e| NotificationError::EmailError(format!("SMTP connection error: {}", e)))?
             .build();
 
         Ok(transport)
@@ -111,14 +102,16 @@ impl EmailNotifier {
         password: &str,
     ) -> Result<AsyncSmtpTransport<Tokio1Executor>, NotificationError> {
         let parts: Vec<&str> = self.smtp_addr.rsplitn(2, ':').collect();
-        let host = if parts.len() == 2 { parts[1] } else { &self.smtp_addr };
+        let host = if parts.len() == 2 {
+            parts[1]
+        } else {
+            &self.smtp_addr
+        };
 
         let creds = Credentials::new(username.to_string(), password.to_string());
 
         let transport = AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)
-            .map_err(|e| {
-                NotificationError::EmailError(format!("SMTP connection error: {}", e))
-            })?
+            .map_err(|e| NotificationError::EmailError(format!("SMTP connection error: {}", e)))?
             .credentials(creds)
             .build();
 

@@ -64,13 +64,10 @@ struct SyncConfigView {
 // ---------------------------------------------------------------------------
 
 pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/api/config", get(get_config))
+    Router::new().route("/api/config", get(get_config))
 }
 
-async fn get_config(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<ConfigResponse>, AppError> {
+async fn get_config(State(state): State<Arc<AppState>>) -> Result<Json<ConfigResponse>, AppError> {
     let cfg = &state.config;
 
     Ok(Json(ConfigResponse {

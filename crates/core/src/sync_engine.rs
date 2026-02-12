@@ -18,16 +18,16 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::git::client::GitClient;
-use crate::svn::client::SvnClient;
 use crate::config::AppConfig;
 use crate::conflict::detector::{ChangeKind, ConflictDetector, FileChange};
 use crate::conflict::merger::Merger;
 use crate::conflict::Conflict;
 use crate::db::Database;
 use crate::errors::SyncError;
+use crate::git::client::GitClient;
 use crate::identity::IdentityMapper;
 use crate::models::AuditEntry;
+use crate::svn::client::SvnClient;
 
 // ---------------------------------------------------------------------------
 // Sync state machine
@@ -232,10 +232,7 @@ impl SyncEngine {
             .db
             .count_active_conflicts()
             .map_err(SyncError::DatabaseError)?;
-        let total_errors = self
-            .db
-            .count_errors()
-            .map_err(SyncError::DatabaseError)?;
+        let total_errors = self.db.count_errors().map_err(SyncError::DatabaseError)?;
 
         let uptime = (Utc::now() - self.started_at).num_seconds().max(0) as u64;
 
@@ -330,7 +327,9 @@ impl SyncEngine {
                 synced_at: Utc::now(),
                 status: crate::models::SyncRecordStatus::Applied,
             };
-            self.db.insert_sync_record(&record).map_err(SyncError::DatabaseError)?;
+            self.db
+                .insert_sync_record(&record)
+                .map_err(SyncError::DatabaseError)?;
 
             count += 1;
             info!(rev = change.revision, git_name = %git_identity.name, "synced SVN -> Git");
@@ -368,7 +367,9 @@ impl SyncEngine {
                 synced_at: Utc::now(),
                 status: crate::models::SyncRecordStatus::Applied,
             };
-            self.db.insert_sync_record(&record).map_err(SyncError::DatabaseError)?;
+            self.db
+                .insert_sync_record(&record)
+                .map_err(SyncError::DatabaseError)?;
 
             count += 1;
             info!(sha = %change.sha, "synced Git -> SVN");
@@ -595,7 +596,13 @@ mod tests {
         assert_eq!(SyncState::Applying.to_string(), "applying");
         assert_eq!(SyncState::Committed.to_string(), "committed");
         assert_eq!(SyncState::ConflictFound.to_string(), "conflict_found");
-        assert_eq!(SyncState::QueuedForResolution.to_string(), "queued_for_resolution");
-        assert_eq!(SyncState::ResolutionApplied.to_string(), "resolution_applied");
+        assert_eq!(
+            SyncState::QueuedForResolution.to_string(),
+            "queued_for_resolution"
+        );
+        assert_eq!(
+            SyncState::ResolutionApplied.to_string(),
+            "resolution_applied"
+        );
     }
 }

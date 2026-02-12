@@ -50,7 +50,12 @@ pub fn parse_svn_info(xml: &str) -> Result<SvnInfo, SvnError> {
         .or_else(|| extract_attribute(xml, "commit", "revision"))
         .and_then(|s| s.parse::<i64>().ok())
         .ok_or_else(|| SvnError::XmlParseError("missing revision in svn info".into()))?;
-    Ok(SvnInfo { root_url, uuid, latest_rev, url })
+    Ok(SvnInfo {
+        root_url,
+        uuid,
+        latest_rev,
+        url,
+    })
 }
 
 pub fn parse_svn_log(xml: &str) -> Result<Vec<SvnLogEntry>, SvnError> {
@@ -63,12 +68,19 @@ pub fn parse_svn_log(xml: &str) -> Result<Vec<SvnLogEntry>, SvnError> {
             None => part,
         };
         let revision = extract_attribute_from_fragment(entry_xml, "revision")
-            .and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0);
         let author = extract_tag_content(entry_xml, "author").unwrap_or_default();
         let date = extract_tag_content(entry_xml, "date").unwrap_or_default();
         let message = extract_tag_content(entry_xml, "msg").unwrap_or_default();
         let changed_paths = parse_changed_paths(entry_xml);
-        entries.push(SvnLogEntry { revision, author, date, message, changed_paths });
+        entries.push(SvnLogEntry {
+            revision,
+            author,
+            date,
+            message,
+            changed_paths,
+        });
     }
     debug!(count = entries.len(), "parsed svn log entries");
     Ok(entries)
@@ -90,7 +102,12 @@ pub fn parse_svn_diff_summarize(xml: &str) -> Result<Vec<SvnDiffEntry>, SvnError
             Some(pos) => fragment[pos + 1..].trim().to_string(),
             None => String::new(),
         };
-        entries.push(SvnDiffEntry { kind: item, props_changed: props != "none", path, item: kind_attr });
+        entries.push(SvnDiffEntry {
+            kind: item,
+            props_changed: props != "none",
+            path,
+            item: kind_attr,
+        });
     }
     debug!(count = entries.len(), "parsed svn diff entries");
     Ok(entries)
@@ -140,18 +157,33 @@ fn parse_changed_paths(entry_xml: &str) -> Vec<SvnChangedPath> {
     let paths_block = match entry_xml.find("<paths>") {
         Some(start) => {
             let rest = &entry_xml[start..];
-            match rest.find("</paths>") { Some(end) => &rest[..end], None => return paths }
+            match rest.find("</paths>") {
+                Some(end) => &rest[..end],
+                None => return paths,
+            }
         }
         None => return paths,
     };
     let parts: Vec<&str> = paths_block.split("<path").collect();
     for part in parts.iter().skip(1) {
-        let fragment = match part.find("</path>") { Some(pos) => &part[..pos], None => continue };
+        let fragment = match part.find("</path>") {
+            Some(pos) => &part[..pos],
+            None => continue,
+        };
         let action = extract_attribute_from_fragment(fragment, "action").unwrap_or_default();
         let copy_from_path = extract_attribute_from_fragment(fragment, "copyfrom-path");
-        let copy_from_rev = extract_attribute_from_fragment(fragment, "copyfrom-rev").and_then(|s| s.parse::<i64>().ok());
-        let path = match fragment.find('>') { Some(pos) => fragment[pos + 1..].trim().to_string(), None => String::new() };
-        paths.push(SvnChangedPath { action, path, copy_from_path, copy_from_rev });
+        let copy_from_rev = extract_attribute_from_fragment(fragment, "copyfrom-rev")
+            .and_then(|s| s.parse::<i64>().ok());
+        let path = match fragment.find('>') {
+            Some(pos) => fragment[pos + 1..].trim().to_string(),
+            None => String::new(),
+        };
+        paths.push(SvnChangedPath {
+            action,
+            path,
+            copy_from_path,
+            copy_from_rev,
+        });
     }
     paths
 }

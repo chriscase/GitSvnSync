@@ -94,19 +94,14 @@ impl Default for DaemonConfig {
 // ---------------------------------------------------------------------------
 
 /// SVN repository layout type.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SvnLayout {
     /// Standard trunk/branches/tags layout.
+    #[default]
     Standard,
     /// Custom paths specified explicitly.
     Custom,
-}
-
-impl Default for SvnLayout {
-    fn default() -> Self {
-        Self::Standard
-    }
 }
 
 /// SVN repository connection and layout settings.
@@ -236,22 +231,17 @@ pub struct IdentityConfig {
 // ---------------------------------------------------------------------------
 
 /// Authentication mode for the web dashboard.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthMode {
     /// Simple password authentication.
+    #[default]
     Simple,
     /// GitHub OAuth.
     #[serde(rename = "github_oauth")]
     GitHubOAuth,
     /// Both simple and GitHub OAuth accepted.
     Both,
-}
-
-impl Default for AuthMode {
-    fn default() -> Self {
-        Self::Simple
-    }
 }
 
 /// Web dashboard configuration.
@@ -342,19 +332,14 @@ pub struct NotificationConfig {
 // ---------------------------------------------------------------------------
 
 /// How commits are pushed to Git.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SyncMode {
     /// Push directly to the target branch.
+    #[default]
     Direct,
     /// Create a pull request for each sync batch.
     Pr,
-}
-
-impl Default for SyncMode {
-    fn default() -> Self {
-        Self::Direct
-    }
 }
 
 /// Sub-configuration for PR-based sync mode.

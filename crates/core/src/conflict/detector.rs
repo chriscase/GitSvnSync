@@ -151,10 +151,7 @@ impl ConflictDetector {
     ///
     /// Two changes conflict when they affect the same file path and at least
     /// one of them is a content modification.
-    pub fn detect(
-        svn_changes: &[FileChange],
-        git_changes: &[FileChange],
-    ) -> Vec<Conflict> {
+    pub fn detect(svn_changes: &[FileChange], git_changes: &[FileChange]) -> Vec<Conflict> {
         info!(
             svn_count = svn_changes.len(),
             git_count = git_changes.len(),
@@ -164,10 +161,8 @@ impl ConflictDetector {
         let mut conflicts = Vec::new();
 
         // Build a lookup map of Git changes by path.
-        let git_by_path: std::collections::HashMap<&str, &FileChange> = git_changes
-            .iter()
-            .map(|c| (c.path.as_str(), c))
-            .collect();
+        let git_by_path: std::collections::HashMap<&str, &FileChange> =
+            git_changes.iter().map(|c| (c.path.as_str(), c)).collect();
 
         for svn_change in svn_changes {
             if let Some(git_change) = git_by_path.get(svn_change.path.as_str()) {
@@ -212,16 +207,8 @@ impl ConflictDetector {
         for (svn_from, svn_to) in &svn_renames {
             if let Some(git_to) = git_renames.get(svn_from) {
                 if svn_to != git_to {
-                    let conflict = Conflict::new(
-                        *svn_from,
-                        ConflictType::Rename,
-                    );
-                    debug!(
-                        from = svn_from,
-                        svn_to,
-                        git_to,
-                        "rename conflict detected"
-                    );
+                    let conflict = Conflict::new(*svn_from, ConflictType::Rename);
+                    debug!(from = svn_from, svn_to, git_to, "rename conflict detected");
                     conflicts.push(conflict);
                 }
             }

@@ -35,7 +35,8 @@ pub struct AppState {
     /// Broadcast channel for live WebSocket updates.
     pub ws_broadcast: broadcast::Sender<String>,
     /// Active sessions (token -> expiry timestamp).
-    pub sessions: tokio::sync::RwLock<std::collections::HashMap<String, chrono::DateTime<chrono::Utc>>>,
+    pub sessions:
+        tokio::sync::RwLock<std::collections::HashMap<String, chrono::DateTime<chrono::Utc>>>,
 }
 
 /// The web server.

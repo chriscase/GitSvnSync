@@ -91,17 +91,11 @@ impl LdapResolver {
     ///
     /// In a real implementation this would search `(mail=email)` under
     /// `base_dn` and extract the `uid` attribute.
-    pub fn lookup_by_email(
-        &mut self,
-        email: &str,
-    ) -> Result<Option<String>, IdentityError> {
+    pub fn lookup_by_email(&mut self, email: &str) -> Result<Option<String>, IdentityError> {
         self.ensure_connected()?;
         debug!(email, "LDAP reverse lookup by email (stub)");
 
-        warn!(
-            email,
-            "LDAP reverse lookup is stubbed -- returning None."
-        );
+        warn!(email, "LDAP reverse lookup is stubbed -- returning None.");
         Ok(None)
     }
 
@@ -133,12 +127,7 @@ mod tests {
 
     #[test]
     fn test_connection_state() {
-        let mut resolver = LdapResolver::new(
-            "ldap://localhost",
-            "dc=test",
-            "cn=admin",
-            "pass",
-        );
+        let mut resolver = LdapResolver::new("ldap://localhost", "dc=test", "cn=admin", "pass");
 
         assert!(!resolver.is_connected());
         resolver.lookup_by_username("test").unwrap();

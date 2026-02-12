@@ -22,13 +22,10 @@ pub struct Notifier {
 impl Notifier {
     /// Create a new notifier from the notification configuration.
     pub fn new(config: &NotificationConfig) -> Self {
-        let slack = config
-            .slack_webhook_url
-            .as_ref()
-            .map(|url| {
-                info!("Slack notifications enabled");
-                slack::SlackNotifier::new(url.clone())
-            });
+        let slack = config.slack_webhook_url.as_ref().map(|url| {
+            info!("Slack notifications enabled");
+            slack::SlackNotifier::new(url.clone())
+        });
 
         let email = match (&config.email_smtp, &config.email_from) {
             (Some(smtp), Some(from)) if !config.email_recipients.is_empty() => {
@@ -64,10 +61,7 @@ impl Notifier {
         }
 
         if let Some(ref email) = self.email {
-            let subject = format!(
-                "[GitSvnSync] Conflict detected: {}",
-                conflict.file_path
-            );
+            let subject = format!("[GitSvnSync] Conflict detected: {}", conflict.file_path);
             let body = format_conflict_email_html(conflict);
             if let Err(e) = email.send(&subject, &body).await {
                 warn!(error = %e, "email notification failed");
@@ -93,10 +87,7 @@ impl Notifier {
         info!("sending sync error notification");
 
         if let Some(ref slack) = self.slack {
-            let message = format!(
-                ":x: *GitSvnSync Error*\n```{}```",
-                error
-            );
+            let message = format!(":x: *GitSvnSync Error*\n```{}```", error);
             let _ = slack.send_message(&message).await;
         }
 

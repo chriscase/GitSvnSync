@@ -52,8 +52,8 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Load and resolve configuration
-    let mut config = AppConfig::load_from_file(&args.config)
-        .context("failed to load configuration file")?;
+    let mut config =
+        AppConfig::load_from_file(&args.config).context("failed to load configuration file")?;
     config
         .resolve_env_vars()
         .context("failed to resolve environment variables in config")?;
@@ -67,8 +67,7 @@ async fn main() -> Result<()> {
         .as_deref()
         .unwrap_or(&config.daemon.log_level);
 
-    let filter =
-        EnvFilter::try_new(log_level).unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_new(log_level).unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -91,13 +90,13 @@ async fn main() -> Result<()> {
     info!("========================================");
 
     // Ensure data directory exists
-    std::fs::create_dir_all(&config.daemon.data_dir)
-        .context("failed to create data directory")?;
+    std::fs::create_dir_all(&config.daemon.data_dir).context("failed to create data directory")?;
 
     // Initialize database
     let db_path = config.daemon.data_dir.join("gitsvnsync.db");
     let db = Database::new(&db_path).context("failed to open database")?;
-    db.initialize().context("failed to initialize database schema")?;
+    db.initialize()
+        .context("failed to initialize database schema")?;
     // Open a second connection for the web server (SQLite supports multiple readers with WAL)
     let web_db = Database::new(&db_path).context("failed to open web database connection")?;
     info!("Database initialized at {}", db_path.display());
@@ -121,8 +120,7 @@ async fn main() -> Result<()> {
 
     // Initialize identity mapper
     let identity_mapper = Arc::new(
-        IdentityMapper::new(&config.identity)
-            .context("failed to initialize identity mapper")?,
+        IdentityMapper::new(&config.identity).context("failed to initialize identity mapper")?,
     );
     info!("Identity mapper initialized");
 
@@ -140,12 +138,7 @@ async fn main() -> Result<()> {
     let (sync_tx, sync_rx) = tokio::sync::mpsc::channel::<()>(16);
 
     // Initialize web server
-    let web_server = WebServer::new(
-        config.clone(),
-        web_db,
-        sync_engine.clone(),
-        sync_tx.clone(),
-    );
+    let web_server = WebServer::new(config.clone(), web_db, sync_engine.clone(), sync_tx.clone());
     let ws_broadcast = web_server.broadcast_sender();
     let listen_addr = config.web.listen.clone();
 
@@ -157,14 +150,9 @@ async fn main() -> Result<()> {
     });
 
     // Create and start the scheduler
-    let poll_interval =
-        std::time::Duration::from_secs(config.daemon.poll_interval_secs);
-    let mut sched = scheduler::Scheduler::new(
-        sync_engine.clone(),
-        poll_interval,
-        sync_rx,
-        ws_broadcast,
-    );
+    let poll_interval = std::time::Duration::from_secs(config.daemon.poll_interval_secs);
+    let mut sched =
+        scheduler::Scheduler::new(sync_engine.clone(), poll_interval, sync_rx, ws_broadcast);
 
     // Start the scheduler in a background task
     let scheduler_handle = tokio::spawn(async move {

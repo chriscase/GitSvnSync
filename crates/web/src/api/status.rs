@@ -43,12 +43,11 @@ async fn health_check() -> Json<HealthResponse> {
     })
 }
 
-async fn get_status(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<StatusResponse>, AppError> {
-    let status = state.sync_engine.get_status().map_err(|e| {
-        AppError::Internal(format!("failed to get sync status: {}", e))
-    })?;
+async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<StatusResponse>, AppError> {
+    let status = state
+        .sync_engine
+        .get_status()
+        .map_err(|e| AppError::Internal(format!("failed to get sync status: {}", e)))?;
 
     Ok(Json(StatusResponse {
         state: status.state.to_string(),

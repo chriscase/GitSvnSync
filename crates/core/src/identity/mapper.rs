@@ -71,10 +71,7 @@ impl IdentityMapper {
         // Initialize LDAP if configured.
         let ldap = match (&config.ldap_url, &config.ldap_base_dn, &config.ldap_bind_dn) {
             (Some(url), Some(base_dn), Some(bind_dn)) => {
-                let password = config
-                    .ldap_bind_password
-                    .as_deref()
-                    .unwrap_or("");
+                let password = config.ldap_bind_password.as_deref().unwrap_or("");
                 Some(Arc::new(RwLock::new(LdapResolver::new(
                     url.clone(),
                     base_dn.clone(),
@@ -106,9 +103,10 @@ impl IdentityMapper {
     pub fn svn_to_git(&self, svn_username: &str) -> Result<GitIdentity, IdentityError> {
         // 1. Check mapping file cache.
         {
-            let cache = self.cache.read().map_err(|_| IdentityError::LdapError(
-                "cache lock poisoned".into(),
-            ))?;
+            let cache = self
+                .cache
+                .read()
+                .map_err(|_| IdentityError::LdapError("cache lock poisoned".into()))?;
             if let Some(entry) = cache.get(svn_username) {
                 debug!(svn_username, "found in mapping file cache");
                 return Ok(GitIdentity {
@@ -120,9 +118,9 @@ impl IdentityMapper {
 
         // 2. Try LDAP.
         if let Some(ref ldap) = self.ldap {
-            let mut resolver = ldap.write().map_err(|_| {
-                IdentityError::LdapError("LDAP lock poisoned".into())
-            })?;
+            let mut resolver = ldap
+                .write()
+                .map_err(|_| IdentityError::LdapError("LDAP lock poisoned".into()))?;
             if let Some(identity) = resolver.lookup_by_username(svn_username)? {
                 debug!(svn_username, "found via LDAP");
                 // Cache the LDAP result for future lookups.
@@ -154,9 +152,10 @@ impl IdentityMapper {
     pub fn git_to_svn(&self, git_name: &str, git_email: &str) -> Result<String, IdentityError> {
         // 1. Check reverse cache.
         {
-            let reverse = self.reverse_cache.read().map_err(|_| {
-                IdentityError::LdapError("reverse cache lock poisoned".into())
-            })?;
+            let reverse = self
+                .reverse_cache
+                .read()
+                .map_err(|_| IdentityError::LdapError("reverse cache lock poisoned".into()))?;
             if let Some(username) = reverse.get(git_email) {
                 debug!(git_email, svn_username = %username, "found in reverse cache");
                 return Ok(username.clone());
@@ -165,9 +164,9 @@ impl IdentityMapper {
 
         // 2. Try LDAP reverse lookup.
         if let Some(ref ldap) = self.ldap {
-            let mut resolver = ldap.write().map_err(|_| {
-                IdentityError::LdapError("LDAP lock poisoned".into())
-            })?;
+            let mut resolver = ldap
+                .write()
+                .map_err(|_| IdentityError::LdapError("LDAP lock poisoned".into()))?;
             if let Some(username) = resolver.lookup_by_email(git_email)? {
                 debug!(git_email, svn_username = %username, "found via LDAP reverse");
                 return Ok(username);
@@ -209,15 +208,17 @@ impl IdentityMapper {
         let reverse = build_reverse_cache(&entries);
 
         {
-            let mut cache = self.cache.write().map_err(|_| {
-                IdentityError::LdapError("cache lock poisoned".into())
-            })?;
+            let mut cache = self
+                .cache
+                .write()
+                .map_err(|_| IdentityError::LdapError("cache lock poisoned".into()))?;
             *cache = entries;
         }
         {
-            let mut rev = self.reverse_cache.write().map_err(|_| {
-                IdentityError::LdapError("reverse cache lock poisoned".into())
-            })?;
+            let mut rev = self
+                .reverse_cache
+                .write()
+                .map_err(|_| IdentityError::LdapError("reverse cache lock poisoned".into()))?;
             *rev = reverse;
         }
 
@@ -316,7 +317,9 @@ email = "alice@example.com"
         write_test_mapping(&path);
 
         let mapper = IdentityMapper::new(&config_with_file(&path)).unwrap();
-        let username = mapper.git_to_svn("John Doe", "john.doe@example.com").unwrap();
+        let username = mapper
+            .git_to_svn("John Doe", "john.doe@example.com")
+            .unwrap();
         assert_eq!(username, "jdoe");
     }
 
@@ -324,7 +327,9 @@ email = "alice@example.com"
     fn test_git_to_svn_fallback() {
         let config = IdentityConfig::default();
         let mapper = IdentityMapper::new(&config).unwrap();
-        let username = mapper.git_to_svn("Random User", "ruser@company.com").unwrap();
+        let username = mapper
+            .git_to_svn("Random User", "ruser@company.com")
+            .unwrap();
         assert_eq!(username, "ruser");
     }
 

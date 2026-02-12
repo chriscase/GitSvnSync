@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use git2::{
-    BranchType, Cred, FetchOptions, IndexAddOption, Oid, PushOptions, RemoteCallbacks,
-    Repository, Signature,
+    BranchType, Cred, FetchOptions, IndexAddOption, Oid, PushOptions, RemoteCallbacks, Repository,
+    Signature,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument, warn};
@@ -36,7 +36,10 @@ impl GitClient {
         info!(path = %path.display(), "opening git repository");
         let repo = Repository::open(path)
             .map_err(|_| GitError::RepositoryNotFound(path.display().to_string()))?;
-        Ok(Self { repo, repo_path: path.to_path_buf() })
+        Ok(Self {
+            repo,
+            repo_path: path.to_path_buf(),
+        })
     }
 
     /// Clone a remote repository to `path`.
@@ -56,11 +59,18 @@ impl GitClient {
         builder.fetch_options(fetch_opts);
         let repo = builder.clone(url, path)?;
         info!("clone completed");
-        Ok(Self { repo, repo_path: path.to_path_buf() })
+        Ok(Self {
+            repo,
+            repo_path: path.to_path_buf(),
+        })
     }
 
-    pub fn repo_path(&self) -> &Path { &self.repo_path }
-    pub fn repo(&self) -> &Repository { &self.repo }
+    pub fn repo_path(&self) -> &Path {
+        &self.repo_path
+    }
+    pub fn repo(&self) -> &Repository {
+        &self.repo
+    }
 
     /// Fetch from a named remote.
     #[instrument(skip(self, token))]
@@ -83,16 +93,27 @@ impl GitClient {
 
     /// Fetch and fast-forward merge.
     #[instrument(skip(self, token))]
-    pub fn pull(&self, remote_name: &str, branch: &str, token: Option<&str>) -> Result<(), GitError> {
+    pub fn pull(
+        &self,
+        remote_name: &str,
+        branch: &str,
+        token: Option<&str>,
+    ) -> Result<(), GitError> {
         self.fetch(remote_name, token)?;
         let fetch_head_ref = format!("refs/remotes/{}/{}", remote_name, branch);
-        let fetch_commit = self.repo.find_reference(&fetch_head_ref)?.peel_to_commit()?;
+        let fetch_commit = self
+            .repo
+            .find_reference(&fetch_head_ref)?
+            .peel_to_commit()?;
         let head_ref = self.repo.head()?;
         if head_ref.is_branch() {
-            let mut head_ref_mut = self.repo.find_reference(head_ref.name().unwrap_or("HEAD"))?;
+            let mut head_ref_mut = self
+                .repo
+                .find_reference(head_ref.name().unwrap_or("HEAD"))?;
             head_ref_mut.set_target(fetch_commit.id(), "gitsvnsync: fast-forward pull")?;
             self.repo.set_head(head_ref.name().unwrap_or("HEAD"))?;
-            self.repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
+            self.repo
+                .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
         }
         info!("pull completed");
         Ok(())
@@ -101,8 +122,12 @@ impl GitClient {
     /// Stage all changes and create a commit.
     #[instrument(skip(self, message))]
     pub fn commit(
-        &self, message: &str, author_name: &str, author_email: &str,
-        committer_name: &str, committer_email: &str,
+        &self,
+        message: &str,
+        author_name: &str,
+        author_email: &str,
+        committer_name: &str,
+        committer_email: &str,
     ) -> Result<Oid, GitError> {
         let mut index = self.repo.index()?;
         index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None)?;
@@ -116,14 +141,21 @@ impl GitClient {
             Err(_) => None,
         };
         let parents: Vec<&git2::Commit> = parent_commit.iter().collect();
-        let oid = self.repo.commit(Some("HEAD"), &author, &committer, message, &tree, &parents)?;
+        let oid = self
+            .repo
+            .commit(Some("HEAD"), &author, &committer, message, &tree, &parents)?;
         info!(sha = %oid, "created commit");
         Ok(oid)
     }
 
     /// Push a local branch to a remote.
     #[instrument(skip(self, token))]
-    pub fn push(&self, remote_name: &str, branch: &str, token: Option<&str>) -> Result<(), GitError> {
+    pub fn push(
+        &self,
+        remote_name: &str,
+        branch: &str,
+        token: Option<&str>,
+    ) -> Result<(), GitError> {
         info!(remote = remote_name, branch, "pushing");
         let mut remote = self.repo.find_remote(remote_name)?;
         let mut callbacks = RemoteCallbacks::new();
@@ -147,7 +179,10 @@ impl GitClient {
         let refspec = format!("refs/heads/{}:refs/heads/{}", branch, branch);
         remote.push(&[&refspec], Some(&mut push_opts))?;
         if let Some(err_msg) = push_error.lock().unwrap().take() {
-            return Err(GitError::PushRejected { branch: branch.to_string(), detail: err_msg });
+            return Err(GitError::PushRejected {
+                branch: branch.to_string(),
+                detail: err_msg,
+            });
         }
         info!("push completed");
         Ok(())
@@ -161,15 +196,20 @@ impl GitClient {
     }
 
     /// Walk commits from HEAD backwards until we reach `since_sha`.
-    pub fn get_commits_since(&self, since_sha: Option<&str>) -> Result<Vec<GitCommitInfo>, GitError> {
+    pub fn get_commits_since(
+        &self,
+        since_sha: Option<&str>,
+    ) -> Result<Vec<GitCommitInfo>, GitError> {
         let mut revwalk = self.repo.revwalk()?;
         revwalk.push_head()?;
         revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
-        let since_oid = since_sha.map(|s| Oid::from_str(s)).transpose()?;
+        let since_oid = since_sha.map(Oid::from_str).transpose()?;
         let mut commits = Vec::new();
         for oid_result in revwalk {
             let oid = oid_result?;
-            if Some(oid) == since_oid { break; }
+            if Some(oid) == since_oid {
+                break;
+            }
             let commit = self.repo.find_commit(oid)?;
             commits.push(GitCommitInfo {
                 sha: oid.to_string(),
@@ -214,7 +254,9 @@ impl GitClient {
         let mut names = Vec::new();
         for branch_result in branches {
             let (branch, _) = branch_result?;
-            if let Some(name) = branch.name()? { names.push(name.to_string()); }
+            if let Some(name) = branch.name()? {
+                names.push(name.to_string());
+            }
         }
         Ok(names)
     }
@@ -222,16 +264,21 @@ impl GitClient {
     /// Apply a unified diff to the working tree.
     #[instrument(skip(self, diff_content))]
     pub async fn apply_diff(&self, diff_content: &str) -> Result<(), GitError> {
-        use tokio::process::Command;
         use std::process::Stdio;
+        use tokio::process::Command;
         let mut cmd = Command::new("git");
         cmd.current_dir(&self.repo_path)
             .args(["apply", "--3way", "-"])
-            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         let mut child = cmd.spawn().map_err(GitError::IoError)?;
         if let Some(ref mut stdin) = child.stdin {
             use tokio::io::AsyncWriteExt;
-            stdin.write_all(diff_content.as_bytes()).await.map_err(GitError::IoError)?;
+            stdin
+                .write_all(diff_content.as_bytes())
+                .await
+                .map_err(GitError::IoError)?;
         }
         let output = child.wait_with_output().await.map_err(GitError::IoError)?;
         if !output.status.success() {
@@ -254,7 +301,15 @@ mod tests {
         Repository::init(dir.path()).unwrap();
         let client = GitClient::new(dir.path()).unwrap();
         std::fs::write(dir.path().join("hello.txt"), "hello world").unwrap();
-        let oid = client.commit("initial commit", "Test", "test@test.com", "Test", "test@test.com").unwrap();
+        let oid = client
+            .commit(
+                "initial commit",
+                "Test",
+                "test@test.com",
+                "Test",
+                "test@test.com",
+            )
+            .unwrap();
         assert!(!oid.is_zero());
         assert_eq!(client.get_head_sha().unwrap(), oid.to_string());
     }
@@ -265,15 +320,26 @@ mod tests {
         Repository::init(dir.path()).unwrap();
         let client = GitClient::new(dir.path()).unwrap();
         std::fs::write(dir.path().join("f.txt"), "c").unwrap();
-        let oid = client.commit("init", "T", "t@t.com", "T", "t@t.com").unwrap();
+        let oid = client
+            .commit("init", "T", "t@t.com", "T", "t@t.com")
+            .unwrap();
         client.create_branch("feature", &oid.to_string()).unwrap();
-        assert!(client.list_branches().unwrap().contains(&"feature".to_string()));
+        assert!(client
+            .list_branches()
+            .unwrap()
+            .contains(&"feature".to_string()));
         client.delete_branch("feature").unwrap();
-        assert!(!client.list_branches().unwrap().contains(&"feature".to_string()));
+        assert!(!client
+            .list_branches()
+            .unwrap()
+            .contains(&"feature".to_string()));
     }
 
     #[test]
     fn test_repo_not_found() {
-        assert!(matches!(GitClient::new("/nonexistent"), Err(GitError::RepositoryNotFound(_))));
+        assert!(matches!(
+            GitClient::new("/nonexistent"),
+            Err(GitError::RepositoryNotFound(_))
+        ));
     }
 }
