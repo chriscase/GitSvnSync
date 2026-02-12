@@ -1,0 +1,75 @@
+version: "3.8"
+
+services:
+  svn-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.svn-server
+    ports:
+      - "8081:80"
+      - "3690:3690"
+    volumes:
+      - svn-data:/var/svn
+    environment:
+      SVN_REPO: testrepo
+      SVN_USER: sync-service
+      SVN_PASSWORD: testpass123
+    healthcheck:
+      test: ["CMD", "svn", "info", "--non-interactive", "file:///var/svn/testrepo"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  gitea:
+    image: gitea/gitea:1.22-rootless
+    ports:
+      - "3000:3000"
+      - "2222:2222"
+    volumes:
+      - gitea-data:/var/lib/gitea
+      - gitea-config:/etc/gitea
+    environment:
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__server__ROOT_URL: http://gitea:3000
+      GITEA__server__HTTP_PORT: "3000"
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__service__DISABLE_REGISTRATION: "false"
+      GITEA__webhook__ALLOWED_HOST_LIST: "*"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/version"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  gitsvnsync:
+    build:
+      context: ../
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    depends_on:
+      svn-server:
+        condition: service_healthy
+      gitea:
+        condition: service_healthy
+    environment:
+      GITSVNSYNC_SVN_PASSWORD: testpass123
+      GITSVNSYNC_GITHUB_TOKEN: test-token
+      GITSVNSYNC_ADMIN_PASSWORD: admin123
+      GITSVNSYNC_SESSION_SECRET: e2e-test-secret-do-not-use-in-production
+      GITSVNSYNC_WEBHOOK_SECRET: webhook-test-secret
+    volumes:
+      - sync-data:/var/lib/gitsvnsync
+      - ./fixtures:/etc/gitsvnsync:ro
+    command: >
+      gitsvnsync-daemon --config /etc/gitsvnsync/test-config.toml
+
+volumes:
+  svn-data:
+  gitea-data:
+  gitea-config:
+  sync-data:
+
+networks:
+  default:
+    name: gitsvnsync-test

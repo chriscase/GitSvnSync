@@ -1,0 +1,42 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Node / React
+web-ui/node_modules/
+web-ui/dist/
+web-ui/.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+*.env.local
+*.pem
+*.key
+
+# Database
+*.db
+*.db-wal
+*.db-shm
+
+# Docker
+docker-compose.override.yml
+
+# Test artifacts
+tests/tmp/
+tests/.test-env/
+
+# Build artifacts
+*.tar.gz
+*.zip

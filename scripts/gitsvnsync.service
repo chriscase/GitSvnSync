@@ -1,0 +1,32 @@
+[Unit]
+Description=GitSvnSync - Bidirectional SVN/Git Synchronization Daemon
+Documentation=https://github.com/chriscase/GitSvnSync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gitsvnsync
+Group=gitsvnsync
+ExecStart=/usr/local/bin/gitsvnsync-daemon --config /etc/gitsvnsync/config.toml
+Restart=always
+RestartSec=10
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/gitsvnsync
+ReadOnlyPaths=/etc/gitsvnsync
+PrivateTmp=true
+
+# Environment
+EnvironmentFile=-/etc/gitsvnsync/env
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gitsvnsync
+
+[Install]
+WantedBy=multi-user.target

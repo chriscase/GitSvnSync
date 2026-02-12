@@ -1,0 +1,294 @@
+//! Domain model types used throughout GitSvnSync.
+//!
+//! These types bridge the sync engine, database layer, and web API.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+// ---------------------------------------------------------------------------
+// Sync Status
+// ---------------------------------------------------------------------------
+
+/// High-level sync status summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncStatus {
+    pub state: SyncState,
+    pub last_sync_at: Option<DateTime<Utc>>,
+    pub last_svn_revision: Option<i64>,
+    pub last_git_hash: Option<String>,
+    pub total_syncs: i64,
+    pub total_conflicts: i64,
+    pub active_conflicts: i64,
+    pub total_errors: i64,
+    pub uptime_secs: u64,
+}
+
+/// Current sync state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncState {
+    Idle,
+    Syncing,
+    Error,
+    ConflictFound,
+}
+
+impl SyncState {
+    /// Parse a state string into a `SyncState`.
+    pub fn from_str_val(s: &str) -> Self {
+        match s {
+            "syncing" | "detecting" | "applying" => Self::Syncing,
+            "error" => Self::Error,
+            "conflict_found" => Self::ConflictFound,
+            _ => Self::Idle,
+        }
+    }
+}
+
+impl std::fmt::Display for SyncState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Idle => write!(f, "idle"),
+            Self::Syncing => write!(f, "syncing"),
+            Self::Error => write!(f, "error"),
+            Self::ConflictFound => write!(f, "conflict_found"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Conflict (model-layer)
+// ---------------------------------------------------------------------------
+
+/// A conflict record for the model/database layer.
+///
+/// This is distinct from `conflict::detector::Conflict` which is the
+/// in-memory detection-time representation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Conflict {
+    pub id: String,
+    pub file_path: String,
+    pub conflict_type: String,
+    pub svn_content: Option<String>,
+    pub git_content: Option<String>,
+    pub base_content: Option<String>,
+    pub svn_revision: Option<i64>,
+    pub git_hash: Option<String>,
+    pub status: String,
+    pub resolution: Option<String>,
+    pub resolved_by: Option<String>,
+}
+
+impl Conflict {
+    /// Create a new conflict record with defaults.
+    pub fn new(file_path: String) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            file_path,
+            conflict_type: "content".to_string(),
+            svn_content: None,
+            git_content: None,
+            base_content: None,
+            svn_revision: None,
+            git_hash: None,
+            status: "detected".to_string(),
+            resolution: None,
+            resolved_by: None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sync Record
+// ---------------------------------------------------------------------------
+
+/// A record of a single synchronization action.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncRecord {
+    pub id: String,
+    pub svn_revision: Option<i64>,
+    pub git_hash: Option<String>,
+    pub direction: SyncDirection,
+    pub author: String,
+    pub message: String,
+    pub timestamp: DateTime<Utc>,
+    pub synced_at: DateTime<Utc>,
+    pub status: SyncRecordStatus,
+}
+
+/// Direction of sync.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncDirection {
+    SvnToGit,
+    GitToSvn,
+}
+
+impl std::fmt::Display for SyncDirection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SvnToGit => write!(f, "svn_to_git"),
+            Self::GitToSvn => write!(f, "git_to_svn"),
+        }
+    }
+}
+
+/// Status of a sync record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncRecordStatus {
+    Pending,
+    Applied,
+    Failed,
+}
+
+impl std::fmt::Display for SyncRecordStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pending => write!(f, "pending"),
+            Self::Applied => write!(f, "applied"),
+            Self::Failed => write!(f, "failed"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Audit Entry
+// ---------------------------------------------------------------------------
+
+/// An audit-log entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditEntry {
+    pub action: String,
+    pub details: String,
+    pub success: bool,
+    pub timestamp: DateTime<Utc>,
+}
+
+impl AuditEntry {
+    /// Create a success audit entry.
+    pub fn success(action: &str, details: &str) -> Self {
+        Self {
+            action: action.to_string(),
+            details: details.to_string(),
+            success: true,
+            timestamp: Utc::now(),
+        }
+    }
+
+    /// Create a failure audit entry.
+    pub fn failure(action: &str, details: &str) -> Self {
+        Self {
+            action: action.to_string(),
+            details: details.to_string(),
+            success: false,
+            timestamp: Utc::now(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Author mapping (identity)
+// ---------------------------------------------------------------------------
+
+/// An SVN-to-Git author identity mapping.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthorMapping {
+    pub svn_username: String,
+    pub git_name: String,
+    pub git_email: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+// ---------------------------------------------------------------------------
+// Conflict resolution
+// ---------------------------------------------------------------------------
+
+/// How a conflict was resolved.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictResolution {
+    AcceptSvn,
+    AcceptGit,
+    Custom,
+}
+
+impl std::fmt::Display for ConflictResolution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AcceptSvn => write!(f, "accept_svn"),
+            Self::AcceptGit => write!(f, "accept_git"),
+            Self::Custom => write!(f, "custom"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pagination
+// ---------------------------------------------------------------------------
+
+/// Pagination parameters for list queries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Pagination {
+    pub page: u32,
+    pub per_page: u32,
+}
+
+impl Default for Pagination {
+    fn default() -> Self {
+        Self {
+            page: 1,
+            per_page: 20,
+        }
+    }
+}
+
+/// A paginated result set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaginatedResult<T> {
+    pub items: Vec<T>,
+    pub total: u64,
+    pub page: u32,
+    pub per_page: u32,
+    pub total_pages: u32,
+}
+
+// ---------------------------------------------------------------------------
+// Web-layer conflict view
+// ---------------------------------------------------------------------------
+
+/// A conflict record as seen by the web layer with DateTime fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebConflict {
+    pub id: String,
+    pub file_path: String,
+    pub conflict_type: String,
+    pub svn_content: Option<String>,
+    pub git_content: Option<String>,
+    pub base_content: Option<String>,
+    pub diff: Option<String>,
+    pub svn_revision: Option<i64>,
+    pub git_hash: Option<String>,
+    pub status: String,
+    pub resolution: Option<String>,
+    pub resolved_content: Option<String>,
+    pub resolved_by: Option<String>,
+    pub detected_at: DateTime<Utc>,
+    pub resolved_at: Option<DateTime<Utc>>,
+}
+
+// ---------------------------------------------------------------------------
+// Web-layer audit entry
+// ---------------------------------------------------------------------------
+
+/// An audit-log entry as seen by the web layer with typed fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebAuditEntry {
+    pub id: String,
+    pub timestamp: DateTime<Utc>,
+    pub action: String,
+    pub details: String,
+    pub actor: Option<String>,
+    pub success: bool,
+}
