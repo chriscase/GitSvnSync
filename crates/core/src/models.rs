@@ -292,3 +292,81 @@ pub struct WebAuditEntry {
     pub actor: Option<String>,
     pub success: bool,
 }
+
+// ---------------------------------------------------------------------------
+// Personal Branch Mode types
+// ---------------------------------------------------------------------------
+
+/// A record of a processed PR merge (personal branch mode).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrSyncEntry {
+    pub id: i64,
+    pub pr_number: i64,
+    pub pr_title: String,
+    pub pr_branch: String,
+    pub merge_sha: String,
+    pub merge_strategy: String,
+    pub svn_rev_start: Option<i64>,
+    pub svn_rev_end: Option<i64>,
+    pub commit_count: i64,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub detected_at: String,
+    pub completed_at: Option<String>,
+}
+
+/// Statistics for a personal sync session.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PersonalSyncStats {
+    /// Number of SVN→Git commits synced.
+    pub svn_to_git_count: u64,
+    /// Number of Git→SVN commits synced.
+    pub git_to_svn_count: u64,
+    /// Number of merged PRs processed.
+    pub prs_processed: u64,
+    /// Timestamp when the sync session started.
+    pub started_at: Option<DateTime<Utc>>,
+    /// Timestamp when the sync session completed.
+    pub completed_at: Option<DateTime<Utc>>,
+    /// Number of conflicts detected.
+    pub conflicts_detected: u64,
+    /// Number of conflicts auto-resolved.
+    pub conflicts_auto_resolved: u64,
+}
+
+/// Merge strategy detected from a PR merge.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeStrategy {
+    /// Standard merge commit (2 parents).
+    Merge,
+    /// Squash merge (1 parent, single commit).
+    Squash,
+    /// Rebase merge (1 parent, multiple commits).
+    Rebase,
+    /// Could not determine strategy.
+    Unknown,
+}
+
+impl std::fmt::Display for MergeStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Merge => write!(f, "merge"),
+            Self::Squash => write!(f, "squash"),
+            Self::Rebase => write!(f, "rebase"),
+            Self::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
+impl MergeStrategy {
+    /// Parse a strategy string.
+    pub fn from_str_val(s: &str) -> Self {
+        match s {
+            "merge" => Self::Merge,
+            "squash" => Self::Squash,
+            "rebase" => Self::Rebase,
+            _ => Self::Unknown,
+        }
+    }
+}

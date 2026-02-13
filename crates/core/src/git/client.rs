@@ -42,6 +42,17 @@ impl GitClient {
         })
     }
 
+    /// Initialize a new empty Git repository at `repo_path`.
+    pub fn init<P: AsRef<Path>>(repo_path: P) -> Result<Self, GitError> {
+        let path = repo_path.as_ref();
+        info!(path = %path.display(), "initializing new git repository");
+        let repo = Repository::init(path)?;
+        Ok(Self {
+            repo,
+            repo_path: path.to_path_buf(),
+        })
+    }
+
     /// Clone a remote repository to `path`.
     #[instrument(skip(token), fields(url = %url, path = %path.display()))]
     pub fn clone_repo(url: &str, path: &Path, token: Option<&str>) -> Result<Self, GitError> {
@@ -261,6 +272,51 @@ impl GitClient {
         Ok(names)
     }
 
+    // -- Personal Branch Mode methods -----------------------------------------
+
+    /// Check if `ancestor_sha` is an ancestor of `descendant_sha`.
+    ///
+    /// Returns `true` if the history from `descendant` contains `ancestor`,
+    /// indicating no force push / history rewrite occurred.
+    pub fn is_ancestor(&self, ancestor_sha: &str, descendant_sha: &str) -> Result<bool, GitError> {
+        let ancestor_oid = Oid::from_str(ancestor_sha)?;
+        let descendant_oid = Oid::from_str(descendant_sha)?;
+        match self.repo.graph_descendant_of(descendant_oid, ancestor_oid) {
+            Ok(is_descendant) => Ok(is_descendant),
+            Err(_) => Ok(false),
+        }
+    }
+
+    /// Checkout an existing local branch.
+    #[instrument(skip(self))]
+    pub fn checkout_branch(&self, name: &str) -> Result<(), GitError> {
+        let refname = format!("refs/heads/{}", name);
+        self.repo.set_head(&refname)?;
+        self.repo
+            .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
+        info!(name, "checked out branch");
+        Ok(())
+    }
+
+    /// Reset HEAD to a specific commit SHA.
+    #[instrument(skip(self))]
+    pub fn reset_to(&self, sha: &str) -> Result<(), GitError> {
+        let oid = Oid::from_str(sha)?;
+        let commit = self.repo.find_commit(oid)?;
+        let obj = commit.as_object();
+        self.repo
+            .reset(obj, git2::ResetType::Hard, None)?;
+        info!(sha, "reset HEAD");
+        Ok(())
+    }
+
+    /// Get the number of parents a commit has (useful for merge detection).
+    pub fn get_parent_count(&self, sha: &str) -> Result<usize, GitError> {
+        let oid = Oid::from_str(sha)?;
+        let commit = self.repo.find_commit(oid)?;
+        Ok(commit.parent_count())
+    }
+
     /// Apply a unified diff to the working tree.
     #[instrument(skip(self, diff_content))]
     pub async fn apply_diff(&self, diff_content: &str) -> Result<(), GitError> {
@@ -341,5 +397,80 @@ mod tests {
             GitClient::new("/nonexistent"),
             Err(GitError::RepositoryNotFound(_))
         ));
+    }
+
+    #[test]
+    fn test_is_ancestor() {
+        let dir = tempfile::tempdir().unwrap();
+        Repository::init(dir.path()).unwrap();
+        let client = GitClient::new(dir.path()).unwrap();
+
+        std::fs::write(dir.path().join("a.txt"), "a").unwrap();
+        let oid1 = client
+            .commit("first", "T", "t@t.com", "T", "t@t.com")
+            .unwrap();
+
+        std::fs::write(dir.path().join("b.txt"), "b").unwrap();
+        let oid2 = client
+            .commit("second", "T", "t@t.com", "T", "t@t.com")
+            .unwrap();
+
+        // oid1 is ancestor of oid2
+        assert!(client
+            .is_ancestor(&oid1.to_string(), &oid2.to_string())
+            .unwrap());
+        // oid2 is NOT ancestor of oid1
+        assert!(!client
+            .is_ancestor(&oid2.to_string(), &oid1.to_string())
+            .unwrap());
+    }
+
+    #[test]
+    fn test_checkout_branch_and_reset() {
+        let dir = tempfile::tempdir().unwrap();
+        Repository::init(dir.path()).unwrap();
+        let client = GitClient::new(dir.path()).unwrap();
+
+        std::fs::write(dir.path().join("f.txt"), "v1").unwrap();
+        let oid1 = client
+            .commit("init", "T", "t@t.com", "T", "t@t.com")
+            .unwrap();
+
+        client.create_branch("dev", &oid1.to_string()).unwrap();
+        client.checkout_branch("dev").unwrap();
+
+        std::fs::write(dir.path().join("f.txt"), "v2").unwrap();
+        let oid2 = client
+            .commit("update", "T", "t@t.com", "T", "t@t.com")
+            .unwrap();
+
+        assert_eq!(client.get_head_sha().unwrap(), oid2.to_string());
+
+        // Reset back to oid1
+        client.reset_to(&oid1.to_string()).unwrap();
+        assert_eq!(client.get_head_sha().unwrap(), oid1.to_string());
+    }
+
+    #[test]
+    fn test_get_parent_count() {
+        let dir = tempfile::tempdir().unwrap();
+        Repository::init(dir.path()).unwrap();
+        let client = GitClient::new(dir.path()).unwrap();
+
+        std::fs::write(dir.path().join("f.txt"), "c").unwrap();
+        let oid = client
+            .commit("init", "T", "t@t.com", "T", "t@t.com")
+            .unwrap();
+
+        // First commit has 0 parents
+        assert_eq!(client.get_parent_count(&oid.to_string()).unwrap(), 0);
+
+        std::fs::write(dir.path().join("g.txt"), "d").unwrap();
+        let oid2 = client
+            .commit("second", "T", "t@t.com", "T", "t@t.com")
+            .unwrap();
+
+        // Second commit has 1 parent
+        assert_eq!(client.get_parent_count(&oid2.to_string()).unwrap(), 1);
     }
 }

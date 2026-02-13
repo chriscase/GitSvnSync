@@ -1,0 +1,32 @@
+[package]
+name = "gitsvnsync-personal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GitSvnSync Personal Branch Mode — individual SVN↔Git sync daemon"
+
+[[bin]]
+name = "gitsvnsync-personal"
+path = "src/main.rs"
+
+[dependencies]
+gitsvnsync-core = { path = "../core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+clap = { workspace = true }
+tempfile = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

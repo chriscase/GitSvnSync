@@ -169,6 +169,62 @@ impl SvnClient {
         Ok(())
     }
 
+    // -- Working copy methods (personal branch mode) -------------------------
+
+    /// Run `svn update` on a working copy.
+    #[instrument(skip(self), fields(path = %path.display()))]
+    pub async fn update(&self, path: &Path) -> Result<String, SvnError> {
+        let output = self.run_svn_in_dir(path, &["update"]).await?;
+        info!(path = %path.display(), "svn update completed");
+        Ok(output)
+    }
+
+    /// Run `svn add` on files in a working copy.
+    #[instrument(skip(self, files), fields(path = %path.display()))]
+    pub async fn add(&self, path: &Path, files: &[&str]) -> Result<(), SvnError> {
+        if files.is_empty() {
+            return Ok(());
+        }
+        let mut args = vec!["add", "--force"];
+        args.extend(files);
+        self.run_svn_in_dir(path, &args).await?;
+        debug!(count = files.len(), "svn add completed");
+        Ok(())
+    }
+
+    /// Run `svn rm` on files in a working copy.
+    #[instrument(skip(self, files), fields(path = %path.display()))]
+    pub async fn rm(&self, path: &Path, files: &[&str]) -> Result<(), SvnError> {
+        if files.is_empty() {
+            return Ok(());
+        }
+        let mut args = vec!["rm", "--force"];
+        args.extend(files);
+        self.run_svn_in_dir(path, &args).await?;
+        debug!(count = files.len(), "svn rm completed");
+        Ok(())
+    }
+
+    /// Get the working copy status (modified, added, deleted files).
+    #[instrument(skip(self), fields(path = %path.display()))]
+    pub async fn status(&self, path: &Path) -> Result<String, SvnError> {
+        self.run_svn_in_dir(path, &["status"]).await
+    }
+
+    /// Get the content of a file at a specific revision.
+    #[instrument(skip(self), fields(file_path = %file_path, rev))]
+    pub async fn cat(&self, file_path: &str, rev: i64) -> Result<String, SvnError> {
+        let rev_str = rev.to_string();
+        let url = if file_path.starts_with("http://") || file_path.starts_with("https://") {
+            file_path.to_string()
+        } else {
+            format!("{}/{}", self.url, file_path)
+        };
+        self.run_svn(&["cat", "-r", &rev_str, &url]).await
+    }
+
+    // -- Internal helpers ----------------------------------------------------
+
     async fn run_svn(&self, args: &[&str]) -> Result<String, SvnError> {
         let mut cmd = Command::new("svn");
         cmd.args(args)

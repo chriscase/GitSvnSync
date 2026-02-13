@@ -12,6 +12,7 @@ pub mod git;
 pub mod identity;
 pub mod models;
 pub mod notify;
+pub mod personal_config;
 pub mod svn;
 pub mod sync_engine;
 
@@ -19,4 +20,5 @@ pub mod sync_engine;
 pub use config::AppConfig;
 pub use db::Database;
 pub use identity::IdentityMapper;
+pub use personal_config::PersonalConfig;
 pub use sync_engine::SyncEngine;
