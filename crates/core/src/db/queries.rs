@@ -962,7 +962,15 @@ impl Database {
             "INSERT INTO pr_sync_log (pr_number, pr_title, pr_branch, merge_sha, merge_strategy,
              commit_count, status, detected_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7)",
-            params![pr_number, pr_title, pr_branch, merge_sha, merge_strategy, commit_count, now],
+            params![
+                pr_number,
+                pr_title,
+                pr_branch,
+                merge_sha,
+                merge_strategy,
+                commit_count,
+                now
+            ],
         )?;
         let id = conn.last_insert_rowid();
         debug!(id, pr_number, merge_sha, "inserted pr_sync_log entry");
@@ -989,7 +997,10 @@ impl Database {
                 id: id.to_string(),
             });
         }
-        debug!(id, svn_rev_start, svn_rev_end, "completed pr_sync_log entry");
+        debug!(
+            id,
+            svn_rev_start, svn_rev_end, "completed pr_sync_log entry"
+        );
         Ok(())
     }
 

@@ -304,8 +304,7 @@ impl GitClient {
         let oid = Oid::from_str(sha)?;
         let commit = self.repo.find_commit(oid)?;
         let obj = commit.as_object();
-        self.repo
-            .reset(obj, git2::ResetType::Hard, None)?;
+        self.repo.reset(obj, git2::ResetType::Hard, None)?;
         info!(sha, "reset HEAD");
         Ok(())
     }

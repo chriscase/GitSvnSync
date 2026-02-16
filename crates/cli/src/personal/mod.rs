@@ -93,9 +93,7 @@ pub enum ConflictAction {
 /// Run a personal subcommand.
 pub async fn run_personal(cmd: PersonalCommands, config_path: &str) -> Result<()> {
     match cmd {
-        PersonalCommands::Init { output } => {
-            init::run_init(&output).await
-        }
+        PersonalCommands::Init { output } => init::run_init(&output).await,
 
         PersonalCommands::Import { snapshot, full: _ } => {
             let config = load_config(config_path)?;
@@ -148,8 +146,8 @@ pub async fn run_personal(cmd: PersonalCommands, config_path: &str) -> Result<()
 /// Load and validate the personal config.
 fn load_config(config_path: &str) -> Result<PersonalConfig> {
     let resolved = expand_tilde(config_path);
-    let config = PersonalConfig::load_and_resolve(&resolved)
-        .context("failed to load personal config")?;
+    let config =
+        PersonalConfig::load_and_resolve(&resolved).context("failed to load personal config")?;
     config.validate().context("invalid personal config")?;
     Ok(config)
 }

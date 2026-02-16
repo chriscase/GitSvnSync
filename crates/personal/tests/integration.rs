@@ -19,8 +19,8 @@ use tokio::sync::Mutex;
 use gitsvnsync_core::db::Database;
 use gitsvnsync_core::git::GitClient;
 use gitsvnsync_core::personal_config::{
-    CommitFormatConfig, DeveloperConfig, PersonalConfig, PersonalGitHubConfig, PersonalOptionsConfig,
-    PersonalSection, PersonalSvnConfig,
+    CommitFormatConfig, DeveloperConfig, PersonalConfig, PersonalGitHubConfig,
+    PersonalOptionsConfig, PersonalSection, PersonalSvnConfig,
 };
 use gitsvnsync_core::svn::SvnClient;
 use gitsvnsync_personal::commit_format::CommitFormatter;
@@ -122,14 +122,13 @@ fn svn_commit_file(wc_path: &Path, filename: &str, content: &str, message: &str)
         }
     }
 
-    let is_new = !file_path.exists()
-        || {
-            let out = Command::new("svn")
-                .args(["status", file_path.to_str().unwrap()])
-                .output()
-                .unwrap();
-            String::from_utf8_lossy(&out.stdout).contains('?')
-        };
+    let is_new = !file_path.exists() || {
+        let out = Command::new("svn")
+            .args(["status", file_path.to_str().unwrap()])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).contains('?')
+    };
 
     std::fs::write(&file_path, content).unwrap();
 
@@ -279,10 +278,7 @@ fn make_test_config(svn_url: &str, data_dir: &Path) -> PersonalConfig {
 ///
 /// After the initial commit, ensures the default branch is named "main"
 /// regardless of the system's `init.defaultBranch` setting.
-fn setup_git_with_bare_origin(
-    work_dir: &Path,
-    bare_dir: &Path,
-) -> GitClient {
+fn setup_git_with_bare_origin(work_dir: &Path, bare_dir: &Path) -> GitClient {
     // Create a bare repo as "origin".
     git2::Repository::init_bare(bare_dir).expect("failed to init bare repo");
 
@@ -335,7 +331,8 @@ fn setup_git_with_bare_origin(
 /// Create and initialize a Database at the given path.
 fn setup_db(path: &Path) -> Database {
     let db = Database::new(path).expect("failed to create database");
-    db.initialize().expect("failed to initialize database schema");
+    db.initialize()
+        .expect("failed to initialize database schema");
     db
 }
 
@@ -356,7 +353,9 @@ fn get_git_commit_message(repo_path: &Path, index: usize) -> String {
     let repo = git2::Repository::open(repo_path).unwrap();
     let mut revwalk = repo.revwalk().unwrap();
     revwalk.push_head().unwrap();
-    revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME).unwrap();
+    revwalk
+        .set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)
+        .unwrap();
     let oid = revwalk.nth(index).unwrap().unwrap();
     let commit = repo.find_commit(oid).unwrap();
     commit.message().unwrap_or("").to_string()
@@ -417,8 +416,16 @@ async fn test_svn_to_git_basic_sync() {
     // Verify Git commit messages contain SVN-Revision trailers.
     // The most recent commit (index 0) is r3, so check it.
     let msg = get_git_commit_message(&git_work_dir, 0);
-    assert!(msg.contains("SVN-Revision: r3"), "expected SVN-Revision trailer in: {}", msg);
-    assert!(msg.contains("[gitsvnsync]"), "expected sync marker in: {}", msg);
+    assert!(
+        msg.contains("SVN-Revision: r3"),
+        "expected SVN-Revision trailer in: {}",
+        msg
+    );
+    assert!(
+        msg.contains("[gitsvnsync]"),
+        "expected sync marker in: {}",
+        msg
+    );
 
     // Verify files exist in git working directory.
     assert!(git_work_dir.join("file1.txt").exists());
@@ -517,7 +524,12 @@ async fn test_svn_to_git_idempotency() {
     let git_arc = Arc::new(Mutex::new(git_client));
     let db_arc = Arc::new(db);
 
-    let syncer = SvnToGitSync::new(svn_client.clone(), git_arc.clone(), db_arc.clone(), config.clone());
+    let syncer = SvnToGitSync::new(
+        svn_client.clone(),
+        git_arc.clone(),
+        db_arc.clone(),
+        config.clone(),
+    );
 
     // First sync: 2 revisions.
     let synced1 = syncer.sync().await.expect("first sync failed");
@@ -677,7 +689,12 @@ async fn test_svn_to_git_file_modification() {
     let git_arc = Arc::new(Mutex::new(git_client));
     let db_arc = Arc::new(db);
 
-    let syncer = SvnToGitSync::new(svn_client.clone(), git_arc.clone(), db_arc.clone(), config.clone());
+    let syncer = SvnToGitSync::new(
+        svn_client.clone(),
+        git_arc.clone(),
+        db_arc.clone(),
+        config.clone(),
+    );
     let synced1 = syncer.sync().await.expect("first sync failed");
     assert_eq!(synced1, 1);
 
@@ -849,7 +866,10 @@ async fn test_svn_to_git_empty_repo_no_crash() {
     let db_arc = Arc::new(db);
 
     let syncer = SvnToGitSync::new(svn_client, git_arc.clone(), db_arc.clone(), config);
-    let synced = syncer.sync().await.expect("sync on empty repo should not crash");
+    let synced = syncer
+        .sync()
+        .await
+        .expect("sync on empty repo should not crash");
     assert_eq!(synced, 0, "nothing to sync in an empty repo");
 
     // Git should only have the initial commit.
@@ -1019,7 +1039,10 @@ fn test_commit_formatter_roundtrip() {
         CommitFormatter::extract_git_sha(&git_to_svn_msg),
         Some("abc123def456".to_string())
     );
-    assert_eq!(CommitFormatter::extract_pr_number(&git_to_svn_msg), Some(42));
+    assert_eq!(
+        CommitFormatter::extract_pr_number(&git_to_svn_msg),
+        Some(42)
+    );
 
     // Verify non-sync messages are not detected.
     assert!(!CommitFormatter::is_sync_marker("Regular commit message"));
@@ -1057,7 +1080,13 @@ fn test_database_watermark_and_commit_map() {
 
     // Insert commit_map entries.
     let id1 = db
-        .insert_commit_map(100, "aaa111", "svn_to_git", "alice", "Alice <alice@test.com>")
+        .insert_commit_map(
+            100,
+            "aaa111",
+            "svn_to_git",
+            "alice",
+            "Alice <alice@test.com>",
+        )
         .unwrap();
     assert!(id1 > 0);
 
@@ -1067,7 +1096,13 @@ fn test_database_watermark_and_commit_map() {
     assert!(id2 > id1);
 
     let id3 = db
-        .insert_commit_map(50, "ccc333", "git_to_svn", "alice", "Alice <alice@test.com>")
+        .insert_commit_map(
+            50,
+            "ccc333",
+            "git_to_svn",
+            "alice",
+            "Alice <alice@test.com>",
+        )
         .unwrap();
     assert!(id3 > id2);
 
@@ -1106,7 +1141,14 @@ fn test_database_watermark_and_commit_map() {
     // PR sync log.
     assert!(!db.is_pr_synced("merge_sha_1").unwrap());
     let pr_id = db
-        .insert_pr_sync(42, "Add search", "feature/search", "merge_sha_1", "squash", 3)
+        .insert_pr_sync(
+            42,
+            "Add search",
+            "feature/search",
+            "merge_sha_1",
+            "squash",
+            3,
+        )
         .unwrap();
     assert!(db.is_pr_synced("merge_sha_1").unwrap());
     assert!(!db.is_pr_synced("other_sha").unwrap());
@@ -1558,10 +1600,7 @@ async fn test_database_concurrent_access() {
 
     // Verify all watermarks were written.
     for i in 0..10 {
-        let wm = db
-            .get_watermark(&format!("source_{}", i))
-            .unwrap()
-            .unwrap();
+        let wm = db.get_watermark(&format!("source_{}", i)).unwrap().unwrap();
         assert_eq!(wm, format!("{}", i * 10));
     }
 

@@ -26,17 +26,23 @@ pub fn run_status(config: &PersonalConfig) -> Result<()> {
 
     // Try to open DB for watermarks
     let db_path = data_dir.join("personal.db");
-    if let Ok(db) = Database::new(db_path.to_str().unwrap_or("")) {
-        let svn_rev = db.get_watermark("svn_rev")
+    if let Ok(db) = Database::new(&db_path) {
+        let svn_rev = db
+            .get_watermark("svn_rev")
             .ok()
             .flatten()
             .unwrap_or_else(|| "—".to_string());
-        let git_sha = db.get_watermark("git_sha")
+        let git_sha = db
+            .get_watermark("git_sha")
             .ok()
             .flatten()
             .unwrap_or_else(|| "—".to_string());
 
-        let git_display = if git_sha.len() > 7 { &git_sha[..7] } else { &git_sha };
+        let git_display = if git_sha.len() > 7 {
+            &git_sha[..7]
+        } else {
+            &git_sha
+        };
 
         println!("  SVN        r{}", svn_rev);
         println!("  Git        {}", git_display);
@@ -53,14 +59,18 @@ pub fn run_status(config: &PersonalConfig) -> Result<()> {
                     a if a.contains("git_to_svn") => style::git_to_svn(),
                     _ => entry.action.clone(),
                 };
-                println!("  {} {}",
+                println!(
+                    "  {} {}",
                     style::dim(&entry.created_at[..19.min(entry.created_at.len())]),
                     action_styled
                 );
             }
         }
     } else {
-        println!("  {}", style::dim("Database not initialized. Run 'gitsvnsync personal import' first."));
+        println!(
+            "  {}",
+            style::dim("Database not initialized. Run 'gitsvnsync personal import' first.")
+        );
     }
 
     println!();

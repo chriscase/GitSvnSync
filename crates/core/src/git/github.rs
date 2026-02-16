@@ -291,11 +291,11 @@ impl GitHubClient {
         since: Option<&str>,
     ) -> Result<Vec<PullRequest>, GitHubError> {
         let url = format!("{}/repos/{}/pulls", self.api_url, repo);
-        let mut req = self
-            .http
-            .get(&url)
-            .bearer_auth(&self.token)
-            .query(&[("state", "closed"), ("base", base), ("per_page", "50")]);
+        let mut req = self.http.get(&url).bearer_auth(&self.token).query(&[
+            ("state", "closed"),
+            ("base", base),
+            ("per_page", "50"),
+        ]);
         if let Some(since_dt) = since {
             req = req.query(&[("sort", "updated"), ("direction", "desc")]);
             // Filter will be done client-side since GitHub doesn't support `since` on /pulls
@@ -355,12 +355,7 @@ impl GitHubClient {
         pr_number: u64,
     ) -> Result<PullRequest, GitHubError> {
         let url = format!("{}/repos/{}/pulls/{}", self.api_url, repo, pr_number);
-        let resp = self
-            .http
-            .get(&url)
-            .bearer_auth(&self.token)
-            .send()
-            .await?;
+        let resp = self.http.get(&url).bearer_auth(&self.token).send().await?;
         self.check_response(&resp)?;
         let pr: PullRequest = resp.json().await?;
         debug!(number = pr.number, state = %pr.state, "fetched pull request");
@@ -375,15 +370,14 @@ impl GitHubClient {
         sha: &str,
     ) -> Result<GitHubCommitDetail2, GitHubError> {
         let url = format!("{}/repos/{}/commits/{}", self.api_url, repo, sha);
-        let resp = self
-            .http
-            .get(&url)
-            .bearer_auth(&self.token)
-            .send()
-            .await?;
+        let resp = self.http.get(&url).bearer_auth(&self.token).send().await?;
         self.check_response(&resp)?;
         let commit: GitHubCommitDetail2 = resp.json().await?;
-        debug!(sha, parents = commit.parents.len(), "fetched commit details");
+        debug!(
+            sha,
+            parents = commit.parents.len(),
+            "fetched commit details"
+        );
         Ok(commit)
     }
 
@@ -391,12 +385,7 @@ impl GitHubClient {
     #[instrument(skip(self))]
     pub async fn repo_exists(&self, repo: &str) -> Result<bool, GitHubError> {
         let url = format!("{}/repos/{}", self.api_url, repo);
-        let resp = self
-            .http
-            .head(&url)
-            .bearer_auth(&self.token)
-            .send()
-            .await?;
+        let resp = self.http.head(&url).bearer_auth(&self.token).send().await?;
         Ok(resp.status().is_success())
     }
 
@@ -432,12 +421,7 @@ impl GitHubClient {
     #[instrument(skip(self))]
     pub async fn get_authenticated_user(&self) -> Result<GitHubUser, GitHubError> {
         let url = format!("{}/user", self.api_url);
-        let resp = self
-            .http
-            .get(&url)
-            .bearer_auth(&self.token)
-            .send()
-            .await?;
+        let resp = self.http.get(&url).bearer_auth(&self.token).send().await?;
         self.check_response(&resp)?;
         let user: GitHubUser = resp.json().await?;
         debug!(login = %user.login, "fetched authenticated user");

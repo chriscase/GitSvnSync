@@ -115,7 +115,8 @@ mod tests {
     #[test]
     fn test_svn_to_git_format() {
         let fmt = CommitFormatter::new(&default_config());
-        let result = fmt.format_svn_to_git("Fix bug in parser", 42, "alice", "2025-01-15T10:30:00Z");
+        let result =
+            fmt.format_svn_to_git("Fix bug in parser", 42, "alice", "2025-01-15T10:30:00Z");
         assert!(result.contains("Fix bug in parser"));
         assert!(result.contains("SVN-Revision: r42"));
         assert!(result.contains("SVN-Author: alice"));
@@ -125,7 +126,8 @@ mod tests {
     #[test]
     fn test_git_to_svn_format() {
         let fmt = CommitFormatter::new(&default_config());
-        let result = fmt.format_git_to_svn("Add search endpoint", "abc123def", 42, "feature/search");
+        let result =
+            fmt.format_git_to_svn("Add search endpoint", "abc123def", 42, "feature/search");
         assert!(result.contains("Add search endpoint"));
         assert!(result.contains("Git-SHA: abc123def"));
         assert!(result.contains("PR-Number: #42"));

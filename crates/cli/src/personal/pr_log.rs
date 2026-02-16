@@ -1,7 +1,7 @@
 //! PR sync history for personal branch mode.
 
 use anyhow::{Context, Result};
-use comfy_table::{Table, presets::UTF8_FULL, Cell, ContentArrangement};
+use comfy_table::{presets::UTF8_FULL, Cell, ContentArrangement, Table};
 
 use gitsvnsync_core::db::Database;
 use gitsvnsync_core::personal_config::PersonalConfig;
@@ -12,10 +12,10 @@ use super::style;
 pub fn run_pr_log(config: &PersonalConfig, limit: u32) -> Result<()> {
     let data_dir = &config.personal.data_dir;
     let db_path = data_dir.join("personal.db");
-    let db = Database::new(db_path.to_str().unwrap_or(""))
-        .context("failed to open database")?;
+    let db = Database::new(&db_path).context("failed to open database")?;
 
-    let entries = db.list_pr_syncs(limit)
+    let entries = db
+        .list_pr_syncs(limit)
         .context("failed to list PR sync entries")?;
 
     if entries.is_empty() {
@@ -30,7 +30,9 @@ pub fn run_pr_log(config: &PersonalConfig, limit: u32) -> Result<()> {
     let mut table = Table::new();
     table.load_preset(UTF8_FULL);
     table.set_content_arrangement(ContentArrangement::Dynamic);
-    table.set_header(vec!["PR #", "Branch", "Strategy", "Commits", "SVN Revs", "Status"]);
+    table.set_header(vec![
+        "PR #", "Branch", "Strategy", "Commits", "SVN Revs", "Status",
+    ]);
 
     for entry in &entries {
         let svn_range = match (entry.svn_rev_start, entry.svn_rev_end) {

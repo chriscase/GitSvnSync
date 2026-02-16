@@ -139,12 +139,9 @@ impl SvnToGitSync {
                 .with_context(|| format!("failed to copy exported files for r{}", rev))?;
 
             // 7. Format the commit message with metadata trailers.
-            let commit_message = self.formatter.format_svn_to_git(
-                &entry.message,
-                rev,
-                &entry.author,
-                &entry.date,
-            );
+            let commit_message =
+                self.formatter
+                    .format_svn_to_git(&entry.message, rev, &entry.author, &entry.date);
 
             // 8. Stage all changes and commit using the developer's identity.
             //
@@ -202,7 +199,10 @@ impl SvnToGitSync {
                     &sha_str,
                     "svn_to_git",
                     &entry.author,
-                    &format!("{} <{}>", self.config.developer.name, self.config.developer.email),
+                    &format!(
+                        "{} <{}>",
+                        self.config.developer.name, self.config.developer.email
+                    ),
                 )
                 .with_context(|| format!("failed to insert commit_map for SVN r{}", rev))?;
 
@@ -215,7 +215,11 @@ impl SvnToGitSync {
                 Some(rev),
                 Some(&sha_str),
                 Some(&entry.author),
-                Some(&format!("synced SVN r{} as Git {}", rev, &sha_str[..8.min(sha_str.len())])),
+                Some(&format!(
+                    "synced SVN r{} as Git {}",
+                    rev,
+                    &sha_str[..8.min(sha_str.len())]
+                )),
             );
 
             synced_count += 1;

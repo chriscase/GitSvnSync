@@ -22,8 +22,8 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use gitsvnsync_core::db::Database;
-use gitsvnsync_core::git::GitClient;
 use gitsvnsync_core::git::github::GitHubClient;
+use gitsvnsync_core::git::GitClient;
 use gitsvnsync_core::personal_config::PersonalConfig;
 use gitsvnsync_core::svn::SvnClient;
 
@@ -105,8 +105,8 @@ async fn main() -> Result<()> {
 
 /// Load config and build the sync engine.
 async fn build_engine(config_path: &str) -> Result<(PersonalSyncEngine, PersonalConfig)> {
-    let config = PersonalConfig::load_and_resolve(config_path)
-        .context("failed to load personal config")?;
+    let config =
+        PersonalConfig::load_and_resolve(config_path).context("failed to load personal config")?;
     config.validate().context("invalid personal config")?;
 
     // Ensure data directory exists.
@@ -116,8 +116,7 @@ async fn build_engine(config_path: &str) -> Result<(PersonalSyncEngine, Personal
 
     // Initialize database.
     let db_path = data_dir.join("personal.db");
-    let db = Database::new(db_path.to_str().unwrap())
-        .context("failed to initialize database")?;
+    let db = Database::new(&db_path).context("failed to initialize database")?;
 
     // Create SVN client.
     let svn_client = SvnClient::new(
@@ -129,25 +128,17 @@ async fn build_engine(config_path: &str) -> Result<(PersonalSyncEngine, Personal
     // Set up Git repository.
     let git_repo_path = data_dir.join("git-repo");
     let git_client = if git_repo_path.exists() {
-        GitClient::new(&git_repo_path)
-            .context("failed to open git repository")?
+        GitClient::new(&git_repo_path).context("failed to open git repository")?
     } else {
-        std::fs::create_dir_all(&git_repo_path)
-            .context("failed to create git repo directory")?;
-        let remote_url = format!(
-            "https://github.com/{}.git",
-            config.github.repo
-        );
+        std::fs::create_dir_all(&git_repo_path).context("failed to create git repo directory")?;
+        let remote_url = format!("https://github.com/{}.git", config.github.repo);
         GitClient::clone_repo(&remote_url, &git_repo_path, config.github.token.as_deref())
             .context("failed to clone git repository")?
     };
 
     // Create GitHub client.
     let github_token = config.github.token.as_deref().unwrap_or("");
-    let github_client = GitHubClient::new(
-        &config.github.api_url,
-        github_token,
-    );
+    let github_client = GitHubClient::new(&config.github.api_url, github_token);
 
     let engine = PersonalSyncEngine::new(config.clone(), db, svn_client, git_client, github_client);
     Ok((engine, config))
@@ -190,8 +181,8 @@ async fn cmd_start(config_path: &str, foreground: bool) -> Result<()> {
 
 /// Stop the daemon.
 fn cmd_stop(config_path: &str) -> Result<()> {
-    let config = PersonalConfig::load_and_resolve(config_path)
-        .context("failed to load personal config")?;
+    let config =
+        PersonalConfig::load_and_resolve(config_path).context("failed to load personal config")?;
     let data_dir = &config.personal.data_dir;
 
     match daemon::stop_daemon(data_dir)? {
@@ -208,8 +199,8 @@ fn cmd_stop(config_path: &str) -> Result<()> {
 
 /// Show daemon status.
 fn cmd_status(config_path: &str) -> Result<()> {
-    let config = PersonalConfig::load_and_resolve(config_path)
-        .context("failed to load personal config")?;
+    let config =
+        PersonalConfig::load_and_resolve(config_path).context("failed to load personal config")?;
     let data_dir = &config.personal.data_dir;
 
     match daemon::is_running(data_dir)? {
@@ -235,8 +226,8 @@ async fn cmd_sync(config_path: &str) -> Result<()> {
 
 /// Import SVN history into Git.
 async fn cmd_import(config_path: &str, mode: ImportMode) -> Result<()> {
-    let config = PersonalConfig::load_and_resolve(config_path)
-        .context("failed to load personal config")?;
+    let config =
+        PersonalConfig::load_and_resolve(config_path).context("failed to load personal config")?;
     config.validate().context("invalid personal config")?;
 
     let data_dir = &config.personal.data_dir;
@@ -245,8 +236,7 @@ async fn cmd_import(config_path: &str, mode: ImportMode) -> Result<()> {
 
     // Initialize database.
     let db_path = data_dir.join("personal.db");
-    let db = Database::new(db_path.to_str().unwrap())
-        .context("failed to initialize database")?;
+    let db = Database::new(&db_path).context("failed to initialize database")?;
 
     // Create SVN client.
     let svn_client = SvnClient::new(
@@ -257,30 +247,21 @@ async fn cmd_import(config_path: &str, mode: ImportMode) -> Result<()> {
 
     // GitHub client.
     let github_token = config.github.token.as_deref().unwrap_or("");
-    let github_client = GitHubClient::new(
-        &config.github.api_url,
-        github_token,
-    );
+    let github_client = GitHubClient::new(&config.github.api_url, github_token);
 
     // Initialize Git repo for import.
     let git_repo_path = data_dir.join("git-repo");
     let git_client = if git_repo_path.exists() {
-        GitClient::new(&git_repo_path)
-            .context("failed to open git repository")?
+        GitClient::new(&git_repo_path).context("failed to open git repository")?
     } else {
-        std::fs::create_dir_all(&git_repo_path)
-            .context("failed to create git repo directory")?;
+        std::fs::create_dir_all(&git_repo_path).context("failed to create git repo directory")?;
         // For import, try to clone first; if repo doesn't exist yet, init locally
-        let remote_url = format!(
-            "https://github.com/{}.git",
-            config.github.repo
-        );
+        let remote_url = format!("https://github.com/{}.git", config.github.repo);
         match GitClient::clone_repo(&remote_url, &git_repo_path, config.github.token.as_deref()) {
             Ok(client) => client,
             Err(_) => {
                 // Repo might not exist yet (auto-create will handle it)
-                GitClient::init(&git_repo_path)
-                    .context("failed to init git repository")?
+                GitClient::init(&git_repo_path).context("failed to init git repository")?
             }
         }
     };

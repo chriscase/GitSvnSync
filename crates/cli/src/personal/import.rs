@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 
 use gitsvnsync_core::db::Database;
-use gitsvnsync_core::git::GitClient;
 use gitsvnsync_core::git::github::GitHubClient;
+use gitsvnsync_core::git::GitClient;
 use gitsvnsync_core::personal_config::PersonalConfig;
 use gitsvnsync_core::svn::SvnClient;
 
@@ -20,13 +20,11 @@ pub async fn run_import(config: &PersonalConfig, mode: &str) -> Result<()> {
     println!();
 
     // Ensure data directory
-    std::fs::create_dir_all(data_dir)
-        .context("failed to create data directory")?;
+    std::fs::create_dir_all(data_dir).context("failed to create data directory")?;
 
     // Initialize database
     let db_path = data_dir.join("personal.db");
-    let db = Database::new(db_path.to_str().unwrap_or(""))
-        .context("failed to initialize database")?;
+    let db = Database::new(&db_path).context("failed to initialize database")?;
 
     // SVN client
     let svn_client = SvnClient::new(
@@ -42,18 +40,13 @@ pub async fn run_import(config: &PersonalConfig, mode: &str) -> Result<()> {
     // Git repository
     let git_repo_path = data_dir.join("git-repo");
     let git_client = if git_repo_path.exists() {
-        GitClient::new(&git_repo_path)
-            .context("failed to open git repository")?
+        GitClient::new(&git_repo_path).context("failed to open git repository")?
     } else {
-        std::fs::create_dir_all(&git_repo_path)
-            .context("failed to create git repo directory")?;
+        std::fs::create_dir_all(&git_repo_path).context("failed to create git repo directory")?;
         let remote_url = format!("https://github.com/{}.git", config.github.repo);
         match GitClient::clone_repo(&remote_url, &git_repo_path, config.github.token.as_deref()) {
             Ok(client) => client,
-            Err(_) => {
-                GitClient::init(&git_repo_path)
-                    .context("failed to init git repository")?
-            }
+            Err(_) => GitClient::init(&git_repo_path).context("failed to init git repository")?,
         }
     };
 
@@ -75,9 +68,11 @@ pub async fn run_import(config: &PersonalConfig, mode: &str) -> Result<()> {
     };
 
     let spinner = ProgressBar::new_spinner();
+    // Template is a compile-time constant so with_template cannot fail here,
+    // but we use expect() to be explicit about the invariant.
     spinner.set_style(
         ProgressStyle::with_template("{spinner:.blue} {msg}")
-            .unwrap()
+            .expect("static progress template is always valid")
             .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
     );
     spinner.set_message(format!("Importing ({} mode)...", mode));

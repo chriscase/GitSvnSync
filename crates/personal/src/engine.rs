@@ -114,7 +114,14 @@ impl PersonalSyncEngine {
                 self.set_state(PersonalSyncState::Error);
                 error!(error = %e, "SVN→Git sync failed");
                 self.db
-                    .insert_audit_log("error", Some("svn_to_git"), None, None, None, Some(&e.to_string()))
+                    .insert_audit_log(
+                        "error",
+                        Some("svn_to_git"),
+                        None,
+                        None,
+                        None,
+                        Some(&e.to_string()),
+                    )
                     .ok();
                 // Don't abort — still try Git→SVN
                 warn!("continuing to Git→SVN despite SVN→Git error");
@@ -127,13 +134,24 @@ impl PersonalSyncEngine {
             Ok((pr_count, commit_count)) => {
                 stats.prs_processed = pr_count;
                 stats.git_to_svn_count = commit_count;
-                info!(prs = pr_count, commits = commit_count, "Git→SVN sync completed");
+                info!(
+                    prs = pr_count,
+                    commits = commit_count,
+                    "Git→SVN sync completed"
+                );
             }
             Err(e) => {
                 self.set_state(PersonalSyncState::Error);
                 error!(error = %e, "Git→SVN sync failed");
                 self.db
-                    .insert_audit_log("error", Some("git_to_svn"), None, None, None, Some(&e.to_string()))
+                    .insert_audit_log(
+                        "error",
+                        Some("git_to_svn"),
+                        None,
+                        None,
+                        None,
+                        Some(&e.to_string()),
+                    )
                     .ok();
             }
         }
@@ -196,7 +214,9 @@ impl PersonalSyncEngine {
     /// Get the current engine state.
     #[allow(dead_code)]
     pub fn get_state(&self) -> PersonalSyncState {
-        self.state.lock().unwrap().clone()
+        // unwrap_or_else handles the (rare) case where the mutex was poisoned
+        // by a panic in another thread; we recover the inner value.
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Check if a sync cycle is currently running.
@@ -206,7 +226,7 @@ impl PersonalSyncEngine {
     }
 
     fn set_state(&self, new_state: PersonalSyncState) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         info!(from = %*state, to = %new_state, "state transition");
         *state = new_state;
     }

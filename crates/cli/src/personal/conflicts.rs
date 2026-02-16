@@ -1,7 +1,7 @@
 //! Conflict management for personal branch mode.
 
 use anyhow::{Context, Result};
-use comfy_table::{Table, presets::UTF8_FULL, Cell, ContentArrangement};
+use comfy_table::{presets::UTF8_FULL, Cell, ContentArrangement, Table};
 
 use gitsvnsync_core::db::Database;
 use gitsvnsync_core::personal_config::PersonalConfig;
@@ -12,10 +12,10 @@ use super::style;
 pub fn run_list(config: &PersonalConfig) -> Result<()> {
     let data_dir = &config.personal.data_dir;
     let db_path = data_dir.join("personal.db");
-    let db = Database::new(db_path.to_str().unwrap_or(""))
-        .context("failed to open database")?;
+    let db = Database::new(&db_path).context("failed to open database")?;
 
-    let conflicts = db.list_conflicts(Some("detected"), 50)
+    let conflicts = db
+        .list_conflicts(Some("detected"), 50)
         .context("failed to list conflicts")?;
 
     if conflicts.is_empty() {
@@ -26,7 +26,10 @@ pub fn run_list(config: &PersonalConfig) -> Result<()> {
     }
 
     println!();
-    println!("{}", style::header(&format!("Active Conflicts ({})", conflicts.len())));
+    println!(
+        "{}",
+        style::header(&format!("Active Conflicts ({})", conflicts.len()))
+    );
     println!();
 
     let mut table = Table::new();
@@ -35,7 +38,8 @@ pub fn run_list(config: &PersonalConfig) -> Result<()> {
     table.set_header(vec!["ID", "File", "Type", "SVN Rev", "Created"]);
 
     for c in &conflicts {
-        let rev = c.svn_rev
+        let rev = c
+            .svn_rev
             .map(|r| format!("r{}", r))
             .unwrap_or_else(|| "—".to_string());
 
@@ -60,8 +64,7 @@ pub fn run_list(config: &PersonalConfig) -> Result<()> {
 pub fn run_resolve(config: &PersonalConfig, id: &str, accept: &str) -> Result<()> {
     let data_dir = &config.personal.data_dir;
     let db_path = data_dir.join("personal.db");
-    let db = Database::new(db_path.to_str().unwrap_or(""))
-        .context("failed to open database")?;
+    let db = Database::new(&db_path).context("failed to open database")?;
 
     let resolution = match accept {
         "svn" => "accept_svn",
@@ -72,6 +75,9 @@ pub fn run_resolve(config: &PersonalConfig, id: &str, accept: &str) -> Result<()
     db.resolve_conflict(id, "resolved", resolution, "cli")
         .context("failed to resolve conflict")?;
 
-    println!("{}", style::success(&format!("Conflict {} resolved (accepted {})", id, accept)));
+    println!(
+        "{}",
+        style::success(&format!("Conflict {} resolved (accepted {})", id, accept))
+    );
     Ok(())
 }

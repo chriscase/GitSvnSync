@@ -48,11 +48,7 @@ pub struct PrMonitor<'a> {
 
 impl<'a> PrMonitor<'a> {
     /// Create a new PR monitor from the personal config.
-    pub fn new(
-        github_client: &'a GitHubClient,
-        db: &'a Database,
-        config: &PersonalConfig,
-    ) -> Self {
+    pub fn new(github_client: &'a GitHubClient, db: &'a Database, config: &PersonalConfig) -> Self {
         Self {
             github_client,
             db,
@@ -194,8 +190,7 @@ impl<'a> PrMonitor<'a> {
         } else {
             warn!(
                 merge_sha,
-                parent_count,
-                "unexpected parent count on merge commit"
+                parent_count, "unexpected parent count on merge commit"
             );
             MergeStrategy::Unknown
         };

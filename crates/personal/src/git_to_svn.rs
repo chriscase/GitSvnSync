@@ -46,6 +46,7 @@ pub struct GitToSvnSync {
     github_repo: String,
     default_branch: String,
     svn_author: String,
+    svn_url: String,
 }
 
 impl GitToSvnSync {
@@ -72,15 +73,65 @@ impl GitToSvnSync {
             github_repo: config.github.repo.clone(),
             default_branch: config.github.default_branch.clone(),
             svn_author: config.developer.svn_username.clone(),
+            svn_url: config.svn.url.clone(),
         }
+    }
+
+    /// Ensure the SVN working copy directory exists and is properly checked out.
+    ///
+    /// If `svn_wc_path` does not exist or does not contain a `.svn` directory,
+    /// performs an `svn checkout` of the configured SVN URL at HEAD.
+    #[instrument(skip(self), fields(svn_wc = %self.svn_wc_path.display(), svn_url = %self.svn_url))]
+    async fn ensure_svn_working_copy(&self) -> Result<()> {
+        let svn_dir = self.svn_wc_path.join(".svn");
+        if svn_dir.is_dir() {
+            debug!(
+                "SVN working copy already exists at {}",
+                self.svn_wc_path.display()
+            );
+            return Ok(());
+        }
+
+        info!(
+            "SVN working copy not found at {}, running svn checkout",
+            self.svn_wc_path.display()
+        );
+
+        // Ensure the parent directory exists so `svn checkout` can create the WC dir.
+        if let Some(parent) = self.svn_wc_path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "failed to create parent directory for SVN working copy: {}",
+                    parent.display()
+                )
+            })?;
+        }
+
+        self.svn
+            .checkout_head(&self.svn_wc_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to checkout SVN repository {} into {}",
+                    self.svn_url,
+                    self.svn_wc_path.display()
+                )
+            })?;
+
+        info!(
+            "SVN working copy initialized at {}",
+            self.svn_wc_path.display()
+        );
+        Ok(())
     }
 
     /// Run a full Git-to-SVN sync cycle.
     ///
-    /// 1. Fetch recently merged PRs from GitHub.
-    /// 2. Skip any PRs whose merge SHA is already recorded in `pr_sync_log`.
-    /// 3. For each unsynced PR, replay its commits into the SVN working copy.
-    /// 4. Record results in `pr_sync_log` and `commit_map`.
+    /// 1. Ensure the SVN working copy is checked out.
+    /// 2. Fetch recently merged PRs from GitHub.
+    /// 3. Skip any PRs whose merge SHA is already recorded in `pr_sync_log`.
+    /// 4. For each unsynced PR, replay its commits into the SVN working copy.
+    /// 5. Record results in `pr_sync_log` and `commit_map`.
     ///
     /// Returns a summary of what was synced.
     #[instrument(skip(self), fields(repo = %self.github_repo))]
@@ -88,8 +139,15 @@ impl GitToSvnSync {
         info!("starting git-to-svn sync cycle");
         let mut result = GitToSvnResult::default();
 
+        // Ensure SVN working copy exists before doing anything else.
+        self.ensure_svn_working_copy()
+            .await
+            .context("failed to ensure SVN working copy")?;
+
         // Determine the "since" timestamp from the last completed PR sync.
-        let since = self.db.get_last_pr_sync_time()
+        let since = self
+            .db
+            .get_last_pr_sync_time()
             .context("failed to query last PR sync time")?;
         let since_ref = since.as_deref();
 
@@ -119,13 +177,18 @@ impl GitToSvnSync {
             let merge_sha = match &pr.merge_commit_sha {
                 Some(sha) => sha.clone(),
                 None => {
-                    warn!(pr_number = pr.number, "PR has no merge_commit_sha, skipping");
+                    warn!(
+                        pr_number = pr.number,
+                        "PR has no merge_commit_sha, skipping"
+                    );
                     continue;
                 }
             };
 
             // Check if this PR merge has already been processed.
-            let already_synced = self.db.is_pr_synced(&merge_sha)
+            let already_synced = self
+                .db
+                .is_pr_synced(&merge_sha)
                 .context("failed to check pr_sync_log")?;
             if already_synced {
                 debug!(pr_number = pr.number, merge_sha = %merge_sha, "PR already synced, skipping");
@@ -184,14 +247,17 @@ impl GitToSvnSync {
         let merge_strategy = self.detect_merge_strategy(pr, &commits).await;
 
         // Record PR sync as pending.
-        let sync_id = self.db.insert_pr_sync(
-            pr.number as i64,
-            &pr.title,
-            pr_branch,
-            merge_sha,
-            &merge_strategy,
-            commits.len() as i64,
-        ).context("failed to insert pr_sync_log entry")?;
+        let sync_id = self
+            .db
+            .insert_pr_sync(
+                pr.number as i64,
+                &pr.title,
+                pr_branch,
+                merge_sha,
+                &merge_strategy,
+                commits.len() as i64,
+            )
+            .context("failed to insert pr_sync_log entry")?;
 
         // Filter out echo commits (ones we created during SVN-to-Git sync).
         let commits_to_replay: Vec<&GitHubCommit> = commits
@@ -200,8 +266,12 @@ impl GitToSvnSync {
             .collect();
 
         if commits_to_replay.is_empty() {
-            info!(pr_number = pr.number, "all PR commits are echo commits, marking as synced");
-            self.db.complete_pr_sync(sync_id, 0, 0)
+            info!(
+                pr_number = pr.number,
+                "all PR commits are echo commits, marking as synced"
+            );
+            self.db
+                .complete_pr_sync(sync_id, 0, 0)
                 .context("failed to complete pr_sync_log entry")?;
             return Ok(0);
         }
@@ -220,11 +290,7 @@ impl GitToSvnSync {
                     synced_count += 1;
 
                     // Record the commit mapping.
-                    let git_author = commit
-                        .commit
-                        .author
-                        .name
-                        .as_str();
+                    let git_author = commit.commit.author.name.as_str();
                     if let Err(e) = self.db.insert_commit_map(
                         svn_rev,
                         &commit.sha,
@@ -249,7 +315,9 @@ impl GitToSvnSync {
                         Some(&self.svn_author),
                         Some(&format!(
                             "PR #{}: replayed commit {} as r{}",
-                            pr.number, &commit.sha[..8.min(commit.sha.len())], svn_rev
+                            pr.number,
+                            &commit.sha[..8.min(commit.sha.len())],
+                            svn_rev
                         )),
                     ) {
                         warn!(error = %e, "failed to insert audit log entry (continuing)");
@@ -402,11 +470,7 @@ impl GitToSvnSync {
     }
 
     /// Detect the merge strategy used for a PR by inspecting the merge commit.
-    async fn detect_merge_strategy(
-        &self,
-        pr: &PullRequest,
-        commits: &[GitHubCommit],
-    ) -> String {
+    async fn detect_merge_strategy(&self, pr: &PullRequest, commits: &[GitHubCommit]) -> String {
         let merge_sha = match &pr.merge_commit_sha {
             Some(sha) => sha,
             None => return "unknown".to_string(),
@@ -457,19 +521,19 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
 
         if src_path.is_dir() {
             if !dst_path.exists() {
-                std::fs::create_dir_all(&dst_path)
-                    .with_context(|| format!("failed to create directory: {}", dst_path.display()))?;
+                std::fs::create_dir_all(&dst_path).with_context(|| {
+                    format!("failed to create directory: {}", dst_path.display())
+                })?;
             }
             copy_tree(&src_path, &dst_path)?;
         } else {
-            std::fs::copy(&src_path, &dst_path)
-                .with_context(|| {
-                    format!(
-                        "failed to copy {} -> {}",
-                        src_path.display(),
-                        dst_path.display()
-                    )
-                })?;
+            std::fs::copy(&src_path, &dst_path).with_context(|| {
+                format!(
+                    "failed to copy {} -> {}",
+                    src_path.display(),
+                    dst_path.display()
+                )
+            })?;
         }
     }
 
@@ -483,8 +547,7 @@ fn remove_stale_files(src: &Path, dst: &Path) -> Result<()> {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => {
-            return Err(e)
-                .with_context(|| format!("failed to read directory: {}", dst.display()));
+            return Err(e).with_context(|| format!("failed to read directory: {}", dst.display()));
         }
     };
 

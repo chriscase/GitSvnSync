@@ -28,16 +28,28 @@ pub fn run_doctor(config: &PersonalConfig) -> Result<()> {
     // 2. Data directory
     let data_dir = &config.personal.data_dir;
     if data_dir.exists() {
-        println!("  {}", style::success(&format!("Data Directory    {}", data_dir.display())));
+        println!(
+            "  {}",
+            style::success(&format!("Data Directory    {}", data_dir.display()))
+        );
     } else {
-        println!("  {}", style::error(&format!("Data Directory    {} (missing)", data_dir.display())));
-        issues.push(format!("Create data directory: mkdir -p {}", data_dir.display()));
+        println!(
+            "  {}",
+            style::error(&format!(
+                "Data Directory    {} (missing)",
+                data_dir.display()
+            ))
+        );
+        issues.push(format!(
+            "Create data directory: mkdir -p {}",
+            data_dir.display()
+        ));
     }
 
     // 3. Database
     let db_path = data_dir.join("personal.db");
     if db_path.exists() {
-        match Database::new(db_path.to_str().unwrap_or("")) {
+        match Database::new(&db_path) {
             Ok(db) => {
                 let schema_ok = db.get_watermark("svn_rev").is_ok();
                 if schema_ok {
@@ -60,7 +72,10 @@ pub fn run_doctor(config: &PersonalConfig) -> Result<()> {
     // 4. Git repository
     let git_path = data_dir.join("git-repo");
     if git_path.exists() && git_path.join(".git").exists() {
-        println!("  {}", style::success(&format!("Git Repository    {}", git_path.display())));
+        println!(
+            "  {}",
+            style::success(&format!("Git Repository    {}", git_path.display()))
+        );
     } else if git_path.exists() {
         println!("  {}", style::error("Git Repository    Not a git repo"));
         issues.push("Git repo directory exists but is not initialized".to_string());
@@ -72,36 +87,57 @@ pub fn run_doctor(config: &PersonalConfig) -> Result<()> {
     // 5. SVN working copy
     let svn_wc = data_dir.join("svn-wc");
     if svn_wc.exists() {
-        println!("  {}", style::success(&format!("SVN Working Copy  {}", svn_wc.display())));
+        println!(
+            "  {}",
+            style::success(&format!("SVN Working Copy  {}", svn_wc.display()))
+        );
     } else {
-        println!("  {}", style::dim("  ○ SVN Working Copy  Not created (created on first Git→SVN sync)"));
+        println!(
+            "  {}",
+            style::dim("  ○ SVN Working Copy  Not created (created on first Git→SVN sync)")
+        );
     }
 
     // 6. Daemon status
     match gitsvnsync_personal::daemon::is_running(data_dir) {
-        Ok(Some(pid)) => println!("  {}", style::success(&format!("Daemon            Running (PID {})", pid))),
+        Ok(Some(pid)) => println!(
+            "  {}",
+            style::success(&format!("Daemon            Running (PID {})", pid))
+        ),
         Ok(None) => {
             println!("  {}", style::warn("Daemon            Not running"));
             issues.push("Start daemon with: gitsvnsync personal start".to_string());
         }
         Err(e) => {
-            println!("  {}", style::error(&format!("Daemon            Error: {}", e)));
+            println!(
+                "  {}",
+                style::error(&format!("Daemon            Error: {}", e))
+            );
         }
     }
 
     // 7. Watermark consistency
     let db_path = data_dir.join("personal.db");
-    if let Ok(db) = Database::new(db_path.to_str().unwrap_or("")) {
+    if let Ok(db) = Database::new(&db_path) {
         let svn_wm = db.get_watermark("svn_rev").ok().flatten();
         let git_wm = db.get_watermark("git_sha").ok().flatten();
 
         match (svn_wm, git_wm) {
             (Some(svn), Some(git)) => {
                 let git_short = if git.len() > 7 { &git[..7] } else { &git };
-                println!("  {}", style::success(&format!("Watermarks        SVN: r{}, Git: {}", svn, git_short)));
+                println!(
+                    "  {}",
+                    style::success(&format!(
+                        "Watermarks        SVN: r{}, Git: {}",
+                        svn, git_short
+                    ))
+                );
             }
             (None, None) => {
-                println!("  {}", style::dim("  ○ Watermarks        Not set (run import first)"));
+                println!(
+                    "  {}",
+                    style::dim("  ○ Watermarks        Not set (run import first)")
+                );
             }
             _ => {
                 println!("  {}", style::warn("Watermarks        Inconsistent"));
@@ -113,9 +149,16 @@ pub fn run_doctor(config: &PersonalConfig) -> Result<()> {
     // Summary
     println!();
     if issues.is_empty() {
-        println!("  {} All checks passed!", console::style("✓").green().bold());
+        println!(
+            "  {} All checks passed!",
+            console::style("✓").green().bold()
+        );
     } else {
-        println!("  {} {} issue(s) found:", issues.len(), console::style("!").yellow().bold());
+        println!(
+            "  {} {} issue(s) found:",
+            issues.len(),
+            console::style("!").yellow().bold()
+        );
         for (i, issue) in issues.iter().enumerate() {
             println!("    {}. {}", i + 1, issue);
         }

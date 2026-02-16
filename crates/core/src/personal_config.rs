@@ -288,8 +288,7 @@ impl PersonalConfig {
         info!("resolving environment variable references in personal config");
 
         self.svn.password = resolve_optional_env(&self.svn.password_env, "svn.password_env");
-        self.github.token =
-            resolve_optional_env(&self.github.token_env, "github.token_env");
+        self.github.token = resolve_optional_env(&self.github.token_env, "github.token_env");
 
         debug!("personal config environment variable resolution complete");
         Ok(())

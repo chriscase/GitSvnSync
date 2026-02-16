@@ -84,6 +84,15 @@ impl SvnClient {
         Ok(())
     }
 
+    /// Checkout the SVN repository at HEAD into the given directory.
+    #[instrument(skip(self), fields(url = %self.url))]
+    pub async fn checkout_head(&self, path: &Path) -> Result<(), SvnError> {
+        let path_str = path.to_string_lossy().to_string();
+        self.run_svn(&["checkout", &self.url, &path_str]).await?;
+        info!(path = %path.display(), "svn checkout (HEAD) completed");
+        Ok(())
+    }
+
     #[instrument(skip(self, message), fields(path = %path.display()))]
     pub async fn commit(&self, path: &Path, message: &str, _author: &str) -> Result<i64, SvnError> {
         let path_str = path.to_string_lossy().to_string();

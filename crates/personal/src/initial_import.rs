@@ -11,8 +11,8 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use gitsvnsync_core::db::Database;
-use gitsvnsync_core::git::GitClient;
 use gitsvnsync_core::git::github::GitHubClient;
+use gitsvnsync_core::git::GitClient;
 use gitsvnsync_core::personal_config::PersonalConfig;
 use gitsvnsync_core::svn::SvnClient;
 
@@ -79,7 +79,11 @@ impl<'a> InitialImport<'a> {
             .nth(1)
             .context("invalid repo format, expected 'owner/repo'")?;
 
-        info!(repo, private = self.config.github.private, "creating GitHub repository");
+        info!(
+            repo,
+            private = self.config.github.private,
+            "creating GitHub repository"
+        );
         self.github_client
             .create_repo(
                 name,
@@ -220,12 +224,9 @@ impl<'a> InitialImport<'a> {
                 continue;
             }
 
-            let message = self.formatter.format_svn_to_git(
-                &entry.message,
-                rev,
-                &entry.author,
-                &entry.date,
-            );
+            let message =
+                self.formatter
+                    .format_svn_to_git(&entry.message, rev, &entry.author, &entry.date);
 
             let git_client = self.git_client.lock().await;
             match git_client.commit(
@@ -300,7 +301,11 @@ impl<'a> InitialImport<'a> {
             )
             .ok();
 
-        info!(count, revisions = log_entries.len(), "full import completed");
+        info!(
+            count,
+            revisions = log_entries.len(),
+            "full import completed"
+        );
         Ok(count)
     }
 }

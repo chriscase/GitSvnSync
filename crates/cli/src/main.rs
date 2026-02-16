@@ -167,9 +167,10 @@ async fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Init { output } => cmd_init(&output),
         Commands::Validate => cmd_validate(&cli.config),
-        Commands::Personal { personal_config, action } => {
-            personal::run_personal(action, &personal_config).await
-        }
+        Commands::Personal {
+            personal_config,
+            action,
+        } => personal::run_personal(action, &personal_config).await,
         _ => {
             // All other commands need the team-mode config and database
             let config = load_config(&cli.config)?;
