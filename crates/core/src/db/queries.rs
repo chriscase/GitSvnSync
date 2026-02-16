@@ -942,6 +942,154 @@ impl Database {
         let value = serde_json::to_string(mapping).unwrap_or_default();
         self.set_state(&key, &value)
     }
+
+    // -- pr_sync_log (personal branch mode) ---------------------------------
+
+    /// Insert a new PR sync log entry (status = 'pending').
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_pr_sync(
+        &self,
+        pr_number: i64,
+        pr_title: &str,
+        pr_branch: &str,
+        merge_sha: &str,
+        merge_strategy: &str,
+        commit_count: i64,
+    ) -> Result<i64, DatabaseError> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO pr_sync_log (pr_number, pr_title, pr_branch, merge_sha, merge_strategy,
+             commit_count, status, detected_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7)",
+            params![
+                pr_number,
+                pr_title,
+                pr_branch,
+                merge_sha,
+                merge_strategy,
+                commit_count,
+                now
+            ],
+        )?;
+        let id = conn.last_insert_rowid();
+        debug!(id, pr_number, merge_sha, "inserted pr_sync_log entry");
+        Ok(id)
+    }
+
+    /// Mark a PR sync as completed with the SVN revision range.
+    pub fn complete_pr_sync(
+        &self,
+        id: i64,
+        svn_rev_start: i64,
+        svn_rev_end: i64,
+    ) -> Result<(), DatabaseError> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn();
+        let changed = conn.execute(
+            "UPDATE pr_sync_log SET status = 'completed', svn_rev_start = ?1, svn_rev_end = ?2,
+             completed_at = ?3 WHERE id = ?4",
+            params![svn_rev_start, svn_rev_end, now, id],
+        )?;
+        if changed == 0 {
+            return Err(DatabaseError::NotFound {
+                entity: "pr_sync_log".into(),
+                id: id.to_string(),
+            });
+        }
+        debug!(
+            id,
+            svn_rev_start, svn_rev_end, "completed pr_sync_log entry"
+        );
+        Ok(())
+    }
+
+    /// Mark a PR sync as failed with an error message.
+    pub fn fail_pr_sync(&self, id: i64, error_message: &str) -> Result<(), DatabaseError> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn();
+        let changed = conn.execute(
+            "UPDATE pr_sync_log SET status = 'failed', error_message = ?1, completed_at = ?2
+             WHERE id = ?3",
+            params![error_message, now, id],
+        )?;
+        if changed == 0 {
+            return Err(DatabaseError::NotFound {
+                entity: "pr_sync_log".into(),
+                id: id.to_string(),
+            });
+        }
+        debug!(id, "failed pr_sync_log entry");
+        Ok(())
+    }
+
+    /// Check whether a PR merge SHA has already been processed.
+    pub fn is_pr_synced(&self, merge_sha: &str) -> Result<bool, DatabaseError> {
+        let conn = self.conn();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pr_sync_log WHERE merge_sha = ?1",
+            params![merge_sha],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// List PR sync log entries, most recent first.
+    pub fn list_pr_syncs(&self, limit: u32) -> Result<Vec<models::PrSyncEntry>, DatabaseError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, pr_number, pr_title, pr_branch, merge_sha, merge_strategy,
+             svn_rev_start, svn_rev_end, commit_count, status, error_message,
+             detected_at, completed_at
+             FROM pr_sync_log ORDER BY id DESC LIMIT ?1",
+        )?;
+        let entries = stmt
+            .query_map(params![limit], |row| {
+                Ok(models::PrSyncEntry {
+                    id: row.get(0)?,
+                    pr_number: row.get(1)?,
+                    pr_title: row.get(2)?,
+                    pr_branch: row.get(3)?,
+                    merge_sha: row.get(4)?,
+                    merge_strategy: row.get(5)?,
+                    svn_rev_start: row.get(6)?,
+                    svn_rev_end: row.get(7)?,
+                    commit_count: row.get(8)?,
+                    status: row.get(9)?,
+                    error_message: row.get(10)?,
+                    detected_at: row.get(11)?,
+                    completed_at: row.get(12)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(entries)
+    }
+
+    /// Get the most recent completed PR sync timestamp.
+    pub fn get_last_pr_sync_time(&self) -> Result<Option<String>, DatabaseError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT completed_at FROM pr_sync_log WHERE status = 'completed'
+             ORDER BY id DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map([], |row| row.get::<_, Option<String>>(0))?;
+        match rows.next() {
+            Some(Ok(val)) => Ok(val),
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
+
+    /// Count PR sync entries by status.
+    pub fn count_pr_syncs_by_status(&self, status: &str) -> Result<i64, DatabaseError> {
+        let conn = self.conn();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pr_sync_log WHERE status = ?1",
+            params![status],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
 }
 
 /// Parse a datetime string, returning Utc::now() as a fallback if parsing fails.
@@ -1045,5 +1193,66 @@ mod tests {
         assert_eq!(db.get_state("foo").unwrap().as_deref(), Some("bar"));
         db.set_state("foo", "baz").unwrap();
         assert_eq!(db.get_state("foo").unwrap().as_deref(), Some("baz"));
+    }
+
+    #[test]
+    fn test_pr_sync_log_crud() {
+        let db = setup_db();
+
+        // Insert
+        let id = db
+            .insert_pr_sync(42, "Add search", "feature/search", "abc123", "squash", 3)
+            .unwrap();
+        assert!(id > 0);
+
+        // Check exists
+        assert!(db.is_pr_synced("abc123").unwrap());
+        assert!(!db.is_pr_synced("nonexistent").unwrap());
+
+        // List
+        let entries = db.list_pr_syncs(10).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].pr_number, 42);
+        assert_eq!(entries[0].status, "pending");
+        assert_eq!(entries[0].merge_strategy, "squash");
+
+        // Complete
+        db.complete_pr_sync(id, 100, 102).unwrap();
+        let entries = db.list_pr_syncs(10).unwrap();
+        assert_eq!(entries[0].status, "completed");
+        assert_eq!(entries[0].svn_rev_start, Some(100));
+        assert_eq!(entries[0].svn_rev_end, Some(102));
+        assert!(entries[0].completed_at.is_some());
+    }
+
+    #[test]
+    fn test_pr_sync_log_fail() {
+        let db = setup_db();
+        let id = db
+            .insert_pr_sync(10, "Broken", "fix/broken", "def456", "merge", 1)
+            .unwrap();
+
+        db.fail_pr_sync(id, "SVN conflict on src/main.rs").unwrap();
+        let entries = db.list_pr_syncs(10).unwrap();
+        assert_eq!(entries[0].status, "failed");
+        assert_eq!(
+            entries[0].error_message.as_deref(),
+            Some("SVN conflict on src/main.rs")
+        );
+    }
+
+    #[test]
+    fn test_pr_sync_count_and_last_time() {
+        let db = setup_db();
+        assert_eq!(db.count_pr_syncs_by_status("completed").unwrap(), 0);
+        assert!(db.get_last_pr_sync_time().unwrap().is_none());
+
+        let id = db
+            .insert_pr_sync(1, "PR1", "feature/a", "sha1", "merge", 1)
+            .unwrap();
+        db.complete_pr_sync(id, 50, 50).unwrap();
+
+        assert_eq!(db.count_pr_syncs_by_status("completed").unwrap(), 1);
+        assert!(db.get_last_pr_sync_time().unwrap().is_some());
     }
 }

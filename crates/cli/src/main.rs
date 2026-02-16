@@ -3,6 +3,10 @@
 //! Provides subcommands for inspecting sync status, managing conflicts,
 //! editing identity mappings, viewing the audit log, and generating /
 //! validating configuration files.
+//!
+//! Also provides the `personal` subcommand group for Personal Branch Mode.
+
+mod personal;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -80,6 +84,16 @@ enum Commands {
         #[arg(short, long, default_value = "20")]
         limit: u32,
     },
+
+    /// Personal Branch Mode — individual SVN↔Git sync.
+    Personal {
+        /// Path to the personal config file.
+        #[arg(long, default_value = "~/.config/gitsvnsync/personal.toml")]
+        personal_config: String,
+
+        #[command(subcommand)]
+        action: personal::PersonalCommands,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -153,8 +167,12 @@ async fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Init { output } => cmd_init(&output),
         Commands::Validate => cmd_validate(&cli.config),
+        Commands::Personal {
+            personal_config,
+            action,
+        } => personal::run_personal(action, &personal_config).await,
         _ => {
-            // All other commands need the config and database
+            // All other commands need the team-mode config and database
             let config = load_config(&cli.config)?;
             let db = open_database(&config)?;
 

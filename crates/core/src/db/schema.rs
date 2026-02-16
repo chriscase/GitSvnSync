@@ -11,10 +11,11 @@ use crate::errors::DatabaseError;
 /// All migrations, in order. Each entry is `(version, description, sql)`.
 /// Versions start at 1. The current schema version is stored in the SQLite
 /// `user_version` pragma.
-static MIGRATIONS: &[(u32, &str, &str)] = &[(
-    1,
-    "initial schema",
-    r#"
+static MIGRATIONS: &[(u32, &str, &str)] = &[
+    (
+        1,
+        "initial schema",
+        r#"
         CREATE TABLE IF NOT EXISTS commit_map (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             svn_rev     INTEGER NOT NULL,
@@ -95,7 +96,32 @@ static MIGRATIONS: &[(u32, &str, &str)] = &[(
             updated_at  TEXT NOT NULL
         );
         "#,
-)];
+    ),
+    (
+        2,
+        "personal branch PR sync log",
+        r#"
+        CREATE TABLE IF NOT EXISTS pr_sync_log (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            pr_number       INTEGER NOT NULL,
+            pr_title        TEXT NOT NULL DEFAULT '',
+            pr_branch       TEXT NOT NULL DEFAULT '',
+            merge_sha       TEXT NOT NULL,
+            merge_strategy  TEXT NOT NULL DEFAULT 'unknown',
+            svn_rev_start   INTEGER,
+            svn_rev_end     INTEGER,
+            commit_count    INTEGER NOT NULL DEFAULT 0,
+            status          TEXT NOT NULL DEFAULT 'pending',
+            error_message   TEXT,
+            detected_at     TEXT NOT NULL,
+            completed_at    TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pr_sync_log_merge_sha ON pr_sync_log (merge_sha);
+        CREATE INDEX IF NOT EXISTS idx_pr_sync_log_status ON pr_sync_log (status);
+        "#,
+    ),
+];
 
 /// Run all pending migrations against `conn`.
 pub fn run_migrations(conn: &Connection) -> Result<(), DatabaseError> {
@@ -143,7 +169,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap();
-        assert_eq!(get_schema_version(&conn).unwrap(), 1);
+        assert_eq!(get_schema_version(&conn).unwrap(), 2);
     }
 
     #[test]
@@ -168,5 +194,6 @@ mod tests {
         assert!(tables.contains(&"audit_log".to_string()));
         assert!(tables.contains(&"sync_records".to_string()));
         assert!(tables.contains(&"kv_state".to_string()));
+        assert!(tables.contains(&"pr_sync_log".to_string()));
     }
 }
