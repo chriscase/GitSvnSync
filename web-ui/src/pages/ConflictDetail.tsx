@@ -18,17 +18,15 @@ export default function ConflictDetail() {
   });
 
   const resolveMutation = useMutation({
-    mutationFn: ({
-      resolution,
-      content,
-    }: {
-      resolution: string;
-      content?: string;
-    }) => api.resolveConflict(id!, resolution, content),
+    mutationFn: ({ resolution }: { resolution: string }) =>
+      api.resolveConflict(id!, resolution),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['conflicts'] });
       queryClient.invalidateQueries({ queryKey: ['conflict', id] });
       navigate('/conflicts');
+    },
+    onError: (err: Error) => {
+      alert(`Resolution failed: ${err.message}`);
     },
   });
 
@@ -79,11 +77,11 @@ export default function ConflictDetail() {
         </div>
         <div>
           <span className="text-gray-500">SVN Revision</span>
-          <p className="font-mono">{conflict.svn_rev ?? '-'}</p>
+          <p className="font-mono">{conflict.svn_revision ?? '-'}</p>
         </div>
         <div>
           <span className="text-gray-500">Git SHA</span>
-          <p className="font-mono truncate">{conflict.git_sha ?? '-'}</p>
+          <p className="font-mono truncate">{conflict.git_hash ?? '-'}</p>
         </div>
         <div>
           <span className="text-gray-500">Created</span>
@@ -168,10 +166,7 @@ export default function ConflictDetail() {
             {activeTab === 'edit' && (
               <button
                 onClick={() =>
-                  resolveMutation.mutate({
-                    resolution: 'custom',
-                    content: mergedContent,
-                  })
+                  resolveMutation.mutate({ resolution: 'custom' })
                 }
                 disabled={resolveMutation.isPending}
                 className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 text-sm font-medium"

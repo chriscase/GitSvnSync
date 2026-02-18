@@ -13,10 +13,15 @@ COPY crates/ crates/
 # Build release binaries
 RUN cargo build --release --bin gitsvnsync-daemon --bin gitsvnsync
 
+# Verify binaries were produced and are executable
+RUN test -x /app/target/release/gitsvnsync-daemon \
+    && test -x /app/target/release/gitsvnsync \
+    && /app/target/release/gitsvnsync --version
+
 # Runtime image
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     subversion \
     git \
     ca-certificates \
@@ -31,8 +36,9 @@ RUN useradd -r -s /usr/sbin/nologin -m -d /var/lib/gitsvnsync gitsvnsync
 COPY --from=builder /app/target/release/gitsvnsync-daemon /usr/local/bin/
 COPY --from=builder /app/target/release/gitsvnsync /usr/local/bin/
 
-# Copy default config
+# Copy default config (read-only for non-root)
 COPY config.example.toml /etc/gitsvnsync/config.toml
+RUN chmod 644 /etc/gitsvnsync/config.toml
 
 # Create data directory
 RUN mkdir -p /var/lib/gitsvnsync && chown gitsvnsync:gitsvnsync /var/lib/gitsvnsync

@@ -3,10 +3,12 @@
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
+use axum::http::HeaderMap;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
+use crate::api::auth::validate_session;
 use crate::api::status::AppError;
 use crate::AppState;
 
@@ -47,8 +49,11 @@ pub fn routes() -> Router<Arc<AppState>> {
 
 async fn list_audit(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(query): Query<AuditQuery>,
 ) -> Result<Json<AuditListResponse>, AppError> {
+    validate_session(&state, headers.get("authorization").and_then(|v| v.to_str().ok())).await?;
+
     let limit = query.limit.unwrap_or(50).min(500);
 
     let db = state

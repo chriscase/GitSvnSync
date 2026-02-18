@@ -17,7 +17,8 @@ use std::sync::Arc;
 
 use axum::Router;
 use tokio::sync::broadcast;
-use tower_http::cors::{Any, CorsLayer};
+use axum::http::{header, Method};
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
@@ -73,10 +74,12 @@ impl WebServer {
     pub async fn start(self, listen_addr: &str) -> anyhow::Result<()> {
         let addr: SocketAddr = listen_addr.parse()?;
 
+        // CORS: allow the bundled web-ui (same origin) and localhost dev.
+        // In production, restrict to the actual frontend origin.
         let cors = CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any);
+            .allow_origin(tower_http::cors::Any)
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+            .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
 
         let app = Router::new()
             // API routes

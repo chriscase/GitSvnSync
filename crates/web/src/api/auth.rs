@@ -56,7 +56,16 @@ async fn login(
         ));
     }
 
-    if body.password != configured_password {
+    // Constant-time comparison to prevent timing attacks.
+    let password_matches = body.password.len() == configured_password.len()
+        && body
+            .password
+            .bytes()
+            .zip(configured_password.bytes())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0;
+
+    if !password_matches {
         return Err(AppError::Unauthorized("invalid password".into()));
     }
 
@@ -116,6 +125,8 @@ async fn verify(
 ///
 /// Call this from handlers that require authentication. Returns `Ok(())` if
 /// the token is valid, or `Err(AppError::Unauthorized)` otherwise.
+///
+/// Also opportunistically prunes expired sessions to prevent unbounded growth.
 pub async fn validate_session(
     state: &Arc<AppState>,
     auth_header: Option<&str>,
@@ -129,9 +140,14 @@ pub async fn validate_session(
         .and_then(|h| h.strip_prefix("Bearer "))
         .ok_or_else(|| AppError::Unauthorized("missing or invalid Authorization header".into()))?;
 
-    let sessions = state.sessions.read().await;
+    let now = Utc::now();
+
+    // Validate and opportunistically prune expired sessions
+    let mut sessions = state.sessions.write().await;
+    sessions.retain(|_, expiry| *expiry > now);
+
     if let Some(expires_at) = sessions.get(token) {
-        if *expires_at > Utc::now() {
+        if *expires_at > now {
             return Ok(());
         }
     }

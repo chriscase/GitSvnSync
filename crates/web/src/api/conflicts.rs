@@ -3,10 +3,12 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
+use crate::api::auth::validate_session;
 use crate::api::status::AppError;
 use crate::AppState;
 
@@ -68,9 +70,12 @@ pub fn routes() -> Router<Arc<AppState>> {
 
 async fn list_conflicts(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(query): Query<ListConflictsQuery>,
 ) -> Result<Json<Vec<ConflictListItem>>, AppError> {
-    let limit = query.per_page.unwrap_or(20);
+    validate_session(&state, headers.get("authorization").and_then(|v| v.to_str().ok())).await?;
+
+    let limit = query.per_page.unwrap_or(20).min(100);
     let status_filter = query.status.as_deref();
 
     let db = state
@@ -100,8 +105,11 @@ async fn list_conflicts(
 
 async fn get_conflict(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<ConflictDetail>, AppError> {
+    validate_session(&state, headers.get("authorization").and_then(|v| v.to_str().ok())).await?;
+
     let db = state
         .db
         .lock()
@@ -130,9 +138,12 @@ async fn get_conflict(
 
 async fn resolve_conflict(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Json(body): Json<ResolveConflictRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    validate_session(&state, headers.get("authorization").and_then(|v| v.to_str().ok())).await?;
+
     let resolution = match body.resolution.as_str() {
         "accept_svn" | "accept_git" | "custom" => body.resolution.as_str(),
         other => {
@@ -148,7 +159,7 @@ async fn resolve_conflict(
         .lock()
         .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
     db.resolve_conflict(&id, "resolved", resolution, "api")
-        .map_err(|e| AppError::NotFound(format!("failed to resolve conflict: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("failed to resolve conflict: {}", e)))?;
 
     // Broadcast update via WebSocket
     let update = serde_json::json!({
@@ -166,14 +177,17 @@ async fn resolve_conflict(
 
 async fn defer_conflict(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    validate_session(&state, headers.get("authorization").and_then(|v| v.to_str().ok())).await?;
+
     let db = state
         .db
         .lock()
         .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
     db.resolve_conflict(&id, "deferred", "deferred", "api")
-        .map_err(|e| AppError::NotFound(format!("failed to defer conflict: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("failed to defer conflict: {}", e)))?;
 
     Ok(Json(serde_json::json!({
         "ok": true,

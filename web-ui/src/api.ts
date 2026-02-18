@@ -3,11 +3,13 @@ const API_BASE = '/api';
 export interface SyncStatus {
   state: string;
   last_sync_at: string | null;
+  last_svn_revision: number | null;
+  last_git_hash: string | null;
   total_syncs: number;
+  total_conflicts: number;
   active_conflicts: number;
+  total_errors: number;
   uptime_secs: number;
-  svn_watermark: string | null;
-  git_watermark: string | null;
 }
 
 export interface Conflict {
@@ -17,8 +19,8 @@ export interface Conflict {
   svn_content: string | null;
   git_content: string | null;
   base_content: string | null;
-  svn_rev: number | null;
-  git_sha: string | null;
+  svn_revision: number | null;
+  git_hash: string | null;
   status: string;
   resolution: string | null;
   resolved_by: string | null;
@@ -29,12 +31,17 @@ export interface Conflict {
 export interface AuditEntry {
   id: number;
   action: string;
-  direction: string;
+  direction: string | null;
   svn_rev: number | null;
   git_sha: string | null;
-  author: string;
-  details: string;
+  author: string | null;
+  details: string | null;
   created_at: string;
+}
+
+export interface AuditListResponse {
+  entries: AuditEntry[];
+  total: number;
 }
 
 export interface AuthorMapping {
@@ -70,23 +77,25 @@ export const api = {
   getHealth: () => fetchJson<{ ok: boolean }>('/status/health'),
 
   getConflicts: (status?: string) => {
-    const params = status ? `?status=${status}` : '';
-    return fetchJson<Conflict[]>(`/conflicts${params}`);
+    const params = new URLSearchParams();
+    if (status) params.append('status', status);
+    const qs = params.toString();
+    return fetchJson<Conflict[]>(`/conflicts${qs ? `?${qs}` : ''}`);
   },
 
   getConflict: (id: string) => fetchJson<Conflict>(`/conflicts/${id}`),
 
-  resolveConflict: (id: string, resolution: string, content?: string) =>
+  resolveConflict: (id: string, resolution: string) =>
     fetchJson<{ ok: boolean }>(`/conflicts/${id}/resolve`, {
       method: 'POST',
-      body: JSON.stringify({ resolution, content }),
+      body: JSON.stringify({ resolution }),
     }),
 
   deferConflict: (id: string) =>
     fetchJson<{ ok: boolean }>(`/conflicts/${id}/defer`, { method: 'POST' }),
 
-  getAuditLog: (limit = 50, offset = 0) =>
-    fetchJson<AuditEntry[]>(`/audit?limit=${limit}&offset=${offset}`),
+  getAuditLog: (limit = 50) =>
+    fetchJson<AuditListResponse>(`/audit?limit=${limit}`),
 
   getIdentityMappings: () => fetchJson<AuthorMapping[]>('/config/identity'),
 
@@ -102,6 +111,11 @@ export const api = {
       body: JSON.stringify({ password }),
     }),
 
-  logout: () =>
-    fetchJson<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
+  logout: () => {
+    const token = localStorage.getItem('session_token');
+    return fetchJson<{ ok: boolean }>('/auth/logout', {
+      method: 'POST',
+      body: JSON.stringify({ token: token ?? '' }),
+    });
+  },
 };

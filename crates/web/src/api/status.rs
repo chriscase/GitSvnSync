@@ -43,7 +43,16 @@ async fn health_check() -> Json<HealthResponse> {
     })
 }
 
-async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<StatusResponse>, AppError> {
+async fn get_status(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<StatusResponse>, AppError> {
+    crate::api::auth::validate_session(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
+
     let status = state
         .sync_engine
         .get_status()

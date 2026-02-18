@@ -2,18 +2,26 @@ import { useQuery } from '@tanstack/react-query';
 import { api, type AuditEntry } from '../api';
 
 export default function Dashboard() {
-  const { data: status, isLoading: statusLoading } = useQuery({
+  const { data: status, isLoading: statusLoading, isError, error } = useQuery({
     queryKey: ['status'],
     queryFn: api.getStatus,
   });
 
   const { data: recentActivity } = useQuery({
     queryKey: ['audit', 'recent'],
-    queryFn: () => api.getAuditLog(20, 0),
+    queryFn: () => api.getAuditLog(20),
   });
 
   if (statusLoading) {
     return <div className="text-center py-8 text-gray-500">Loading...</div>;
+  }
+
+  if (isError) {
+    return (
+      <div className="text-center py-8 text-red-500">
+        Error loading status: {error?.message ?? 'Unknown error'}
+      </div>
+    );
   }
 
   const formatUptime = (secs: number) => {
@@ -24,6 +32,8 @@ export default function Dashboard() {
     if (hours > 0) return `${hours}h ${mins}m`;
     return `${mins}m`;
   };
+
+  const entries = recentActivity?.entries ?? [];
 
   return (
     <div className="space-y-6">
@@ -66,15 +76,19 @@ export default function Dashboard() {
         </h2>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <span className="text-sm text-gray-500">SVN Watermark</span>
+            <span className="text-sm text-gray-500">Last SVN Revision</span>
             <p className="text-lg font-mono">
-              {status?.svn_watermark ?? 'Not synced'}
+              {status?.last_svn_revision != null
+                ? `r${status.last_svn_revision}`
+                : 'Not synced'}
             </p>
           </div>
           <div>
-            <span className="text-sm text-gray-500">Git Watermark</span>
+            <span className="text-sm text-gray-500">Last Git Hash</span>
             <p className="text-lg font-mono truncate">
-              {status?.git_watermark ?? 'Not synced'}
+              {status?.last_git_hash
+                ? status.last_git_hash.substring(0, 12)
+                : 'Not synced'}
             </p>
           </div>
         </div>
@@ -85,17 +99,21 @@ export default function Dashboard() {
         <h2 className="text-lg font-semibold text-gray-900 mb-4">
           Recent Activity
         </h2>
-        {recentActivity && recentActivity.length > 0 ? (
+        {entries.length > 0 ? (
           <div className="space-y-2">
-            {recentActivity.map((entry: AuditEntry) => (
+            {entries.map((entry: AuditEntry) => (
               <div
                 key={entry.id}
                 className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0"
               >
                 <div className="flex items-center space-x-3">
-                  <DirectionBadge direction={entry.direction} />
+                  {entry.direction && (
+                    <DirectionBadge direction={entry.direction} />
+                  )}
                   <span className="text-sm text-gray-900">{entry.action}</span>
-                  <span className="text-sm text-gray-500">{entry.author}</span>
+                  {entry.author && (
+                    <span className="text-sm text-gray-500">{entry.author}</span>
+                  )}
                 </div>
                 <span className="text-xs text-gray-400">
                   {new Date(entry.created_at).toLocaleString()}

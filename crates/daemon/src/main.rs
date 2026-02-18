@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use gitsvnsync_core::config::AppConfig;
@@ -149,6 +149,10 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Create a shutdown notify for cooperative cancellation
+    let shutdown = Arc::new(tokio::sync::Notify::new());
+    let scheduler_shutdown = shutdown.clone();
+
     // Create and start the scheduler
     let poll_interval = std::time::Duration::from_secs(config.daemon.poll_interval_secs);
     let mut sched =
@@ -156,7 +160,7 @@ async fn main() -> Result<()> {
 
     // Start the scheduler in a background task
     let scheduler_handle = tokio::spawn(async move {
-        sched.run().await;
+        sched.run(scheduler_shutdown).await;
     });
 
     // Wait for shutdown signal
@@ -164,12 +168,18 @@ async fn main() -> Result<()> {
 
     info!("Shutdown signal received, stopping...");
 
-    // Abort background tasks gracefully
-    scheduler_handle.abort();
-    web_handle.abort();
+    // Signal cooperative shutdown to the scheduler
+    shutdown.notify_waiters();
 
-    // Give tasks a moment to clean up
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // Wait for the scheduler to finish its current cycle (up to 10s)
+    match tokio::time::timeout(std::time::Duration::from_secs(10), scheduler_handle).await {
+        Ok(Ok(())) => info!("scheduler stopped gracefully"),
+        Ok(Err(e)) => warn!("scheduler task error: {}", e),
+        Err(_) => warn!("scheduler did not stop within 10s, forcing shutdown"),
+    }
+
+    // Abort the web server
+    web_handle.abort();
 
     info!("GitSvnSync daemon stopped.");
     Ok(())

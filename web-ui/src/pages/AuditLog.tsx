@@ -3,17 +3,26 @@ import { useQuery } from '@tanstack/react-query';
 import { api, type AuditEntry } from '../api';
 
 export default function AuditLog() {
-  const [offset, setOffset] = useState(0);
-  const limit = 50;
+  const [limit] = useState(50);
 
-  const { data: entries, isLoading } = useQuery({
-    queryKey: ['audit', offset],
-    queryFn: () => api.getAuditLog(limit, offset),
+  const { data: response, isLoading, isError, error } = useQuery({
+    queryKey: ['audit', limit],
+    queryFn: () => api.getAuditLog(limit),
   });
 
   if (isLoading) {
     return <div className="text-center py-8 text-gray-500">Loading...</div>;
   }
+
+  if (isError) {
+    return (
+      <div className="text-center py-8 text-red-500">
+        Error loading audit log: {error?.message ?? 'Unknown error'}
+      </div>
+    );
+  }
+
+  const entries = response?.entries ?? [];
 
   return (
     <div className="space-y-6">
@@ -47,19 +56,23 @@ export default function AuditLog() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
-            {(entries ?? []).map((entry: AuditEntry) => (
+            {entries.map((entry: AuditEntry) => (
               <tr key={entry.id} className="hover:bg-gray-50">
                 <td className="px-6 py-3 text-sm text-gray-500 whitespace-nowrap">
                   {new Date(entry.created_at).toLocaleString()}
                 </td>
                 <td className="px-6 py-3 whitespace-nowrap">
-                  <DirectionBadge direction={entry.direction} />
+                  {entry.direction ? (
+                    <DirectionBadge direction={entry.direction} />
+                  ) : (
+                    <span className="text-gray-400">-</span>
+                  )}
                 </td>
                 <td className="px-6 py-3 text-sm text-gray-900">
                   {entry.action}
                 </td>
                 <td className="px-6 py-3 text-sm text-gray-700">
-                  {entry.author}
+                  {entry.author ?? '-'}
                 </td>
                 <td className="px-6 py-3 text-sm font-mono text-gray-500">
                   {entry.svn_rev ?? '-'}
@@ -68,7 +81,7 @@ export default function AuditLog() {
                   {entry.git_sha ? entry.git_sha.substring(0, 8) : '-'}
                 </td>
                 <td className="px-6 py-3 text-sm text-gray-500 truncate max-w-[200px]">
-                  {entry.details}
+                  {entry.details ?? ''}
                 </td>
               </tr>
             ))}
@@ -76,25 +89,8 @@ export default function AuditLog() {
         </table>
       </div>
 
-      {/* Pagination */}
-      <div className="flex justify-between items-center">
-        <button
-          onClick={() => setOffset(Math.max(0, offset - limit))}
-          disabled={offset === 0}
-          className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 disabled:opacity-50 text-sm"
-        >
-          Previous
-        </button>
-        <span className="text-sm text-gray-500">
-          Showing {offset + 1} - {offset + (entries?.length ?? 0)}
-        </span>
-        <button
-          onClick={() => setOffset(offset + limit)}
-          disabled={(entries?.length ?? 0) < limit}
-          className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 disabled:opacity-50 text-sm"
-        >
-          Next
-        </button>
+      <div className="text-sm text-gray-500 text-center">
+        Showing {entries.length} of {response?.total ?? entries.length} entries
       </div>
     </div>
   );

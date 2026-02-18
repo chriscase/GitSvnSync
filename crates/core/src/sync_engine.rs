@@ -149,7 +149,7 @@ impl SyncEngine {
             .is_err()
         {
             return Err(SyncError::AlreadyRunning {
-                started_at: "unknown".into(),
+                started_at: self.started_at.to_rfc3339(),
             });
         }
 

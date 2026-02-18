@@ -1,11 +1,11 @@
 //! Sync scheduler that runs sync cycles on a configurable interval and
 //! supports webhook-triggered immediate syncs.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, Notify};
 use tokio::time;
 use tracing::{error, info, warn};
 
@@ -33,14 +33,13 @@ impl SchedulerStats {
 /// The sync scheduler.
 ///
 /// Runs sync cycles on a timer and also listens for webhook-triggered
-/// immediate sync requests. If a sync cycle is already running, the
-/// scheduler skips the next cycle rather than queuing up.
+/// immediate sync requests. The sync engine's own lock prevents concurrent
+/// cycles, so the scheduler simply skips if the engine reports already running.
 pub struct Scheduler {
     sync_engine: Arc<SyncEngine>,
     poll_interval: Duration,
     sync_rx: mpsc::Receiver<()>,
     ws_broadcast: broadcast::Sender<String>,
-    running: Arc<AtomicBool>,
     stats: Arc<SchedulerStats>,
 }
 
@@ -56,15 +55,15 @@ impl Scheduler {
             poll_interval,
             sync_rx,
             ws_broadcast,
-            running: Arc::new(AtomicBool::new(false)),
             stats: Arc::new(SchedulerStats::new()),
         }
     }
 
     /// Main scheduler loop.
     ///
-    /// This method runs until the task is cancelled (via abort or shutdown).
-    pub async fn run(&mut self) {
+    /// Runs until the `shutdown` notify fires, then returns so the caller
+    /// can perform a clean shutdown.
+    pub async fn run(&mut self, shutdown: Arc<Notify>) {
         info!(
             poll_interval_secs = self.poll_interval.as_secs(),
             "scheduler started"
@@ -77,6 +76,11 @@ impl Scheduler {
 
         loop {
             tokio::select! {
+                // Shutdown signal takes priority
+                _ = shutdown.notified() => {
+                    info!("scheduler received shutdown signal");
+                    break;
+                }
                 // Regular polling interval
                 _ = interval.tick() => {
                     self.maybe_run_cycle("scheduled").await;
@@ -90,16 +94,14 @@ impl Scheduler {
                 }
             }
         }
+
+        info!("scheduler stopped");
     }
 
-    /// Attempt to run a sync cycle. If one is already running, skip.
+    /// Attempt to run a sync cycle. If the engine is already running, skip.
     async fn maybe_run_cycle(&self, trigger: &str) {
-        // Check if a sync is already in progress (try_lock semantics)
-        if self
-            .running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
+        // The sync engine has its own atomic lock; check it first.
+        if self.sync_engine.is_running() {
             warn!(trigger, "skipping sync cycle: previous cycle still running");
             return;
         }
@@ -166,7 +168,5 @@ impl Scheduler {
                 let _ = self.ws_broadcast.send(err_msg.to_string());
             }
         }
-
-        self.running.store(false, Ordering::SeqCst);
     }
 }
