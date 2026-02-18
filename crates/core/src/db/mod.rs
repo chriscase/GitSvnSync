@@ -67,8 +67,14 @@ impl Database {
     ///
     /// Prefer using the typed query methods on [`Database`] over raw SQL
     /// whenever possible.
+    ///
+    /// If the Mutex is poisoned (a previous holder panicked), the lock is
+    /// recovered rather than propagating a panic.
     pub fn conn(&self) -> MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap()
+        self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("database mutex was poisoned, recovering");
+            poisoned.into_inner()
+        })
     }
 
     /// Execute a closure inside a SQLite transaction. If the closure returns
@@ -77,9 +83,9 @@ impl Database {
     where
         F: FnOnce(&Connection) -> Result<T, DatabaseError>,
     {
-        let conn = self.conn();
-        let tx = conn.unchecked_transaction()?;
-        let result = f(&conn)?;
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let result = f(&tx)?;
         tx.commit()?;
         Ok(result)
     }

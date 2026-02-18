@@ -1,7 +1,9 @@
 //! Asynchronous SVN CLI client.
 
+use std::fmt;
 use std::path::Path;
 use std::process::Stdio;
+use std::time::Duration;
 
 use tokio::process::Command;
 use tracing::{debug, info, instrument, warn};
@@ -11,12 +13,26 @@ use super::parser::{
 };
 use crate::errors::SvnError;
 
+/// Default timeout for SVN commands (5 minutes).
+const SVN_COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Asynchronous client for interacting with an SVN repository via the CLI.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SvnClient {
     url: String,
     username: String,
     password: String,
+}
+
+// Custom Debug implementation that redacts the password field.
+impl fmt::Debug for SvnClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SvnClient")
+            .field("url", &self.url)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl SvnClient {
@@ -61,6 +77,9 @@ impl SvnClient {
 
     #[instrument(skip(self), fields(url = %self.url, rev))]
     pub async fn diff(&self, rev: i64) -> Result<Vec<SvnDiffEntry>, SvnError> {
+        if rev < 1 {
+            return Err(SvnError::RevisionNotFound(rev));
+        }
         let rev_range = format!("{}:{}", rev - 1, rev);
         let output = self
             .run_svn(&["diff", "--summarize", "--xml", "-r", &rev_range, &self.url])
@@ -70,6 +89,9 @@ impl SvnClient {
 
     #[instrument(skip(self), fields(url = %self.url, rev))]
     pub async fn diff_full(&self, rev: i64) -> Result<String, SvnError> {
+        if rev < 1 {
+            return Err(SvnError::RevisionNotFound(rev));
+        }
         let rev_range = format!("{}:{}", rev - 1, rev);
         self.run_svn(&["diff", "-r", &rev_range, &self.url]).await
     }
@@ -247,13 +269,22 @@ impl SvnClient {
             .stderr(Stdio::piped());
 
         debug!(cmd = ?format!("svn {}", args.join(" ")), "running svn command");
-        let output = cmd.output().await.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                SvnError::BinaryNotFound("svn".into())
-            } else {
-                SvnError::IoError(e)
-            }
-        })?;
+        let output = tokio::time::timeout(SVN_COMMAND_TIMEOUT, cmd.output())
+            .await
+            .map_err(|_| {
+                SvnError::NetworkError(format!(
+                    "svn command timed out after {}s: svn {}",
+                    SVN_COMMAND_TIMEOUT.as_secs(),
+                    args.join(" ")
+                ))
+            })?
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    SvnError::BinaryNotFound("svn".into())
+                } else {
+                    SvnError::IoError(e)
+                }
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -277,17 +308,29 @@ impl SvnClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        let output = cmd.output().await.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                SvnError::BinaryNotFound("svn".into())
-            } else {
-                SvnError::IoError(e)
-            }
-        })?;
+        debug!(cmd = ?format!("svn {} (in {})", args.join(" "), dir.display()), "running svn command in dir");
+        let output = tokio::time::timeout(SVN_COMMAND_TIMEOUT, cmd.output())
+            .await
+            .map_err(|_| {
+                SvnError::NetworkError(format!(
+                    "svn command timed out after {}s: svn {} (in {})",
+                    SVN_COMMAND_TIMEOUT.as_secs(),
+                    args.join(" "),
+                    dir.display()
+                ))
+            })?
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    SvnError::BinaryNotFound("svn".into())
+                } else {
+                    SvnError::IoError(e)
+                }
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             let exit_code = output.status.code().unwrap_or(-1);
+            warn!(exit_code, %stderr, "svn command failed");
             return Err(SvnError::CommandFailed { exit_code, stderr });
         }
         Ok(String::from_utf8_lossy(&output.stdout).to_string())

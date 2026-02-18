@@ -105,7 +105,7 @@ create_issue() {
   num=$(gh issue create --repo "$REPO" \
     --title "$title" \
     --body "$body" \
-    --label "$labels" 2>&1 | grep -oP '\d+$')
+    --label "$labels" 2>&1 | grep -oE '[0-9]+$')
 
   ISSUE_NUMBERS["$key"]="$num"
   echo "  ✓ #${num}: ${title}"

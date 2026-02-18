@@ -512,6 +512,19 @@ impl AppConfig {
             });
         }
 
+        // Validate log_level against known tracing levels.
+        let valid_levels = ["trace", "debug", "info", "warn", "error"];
+        if !valid_levels.contains(&self.daemon.log_level.to_lowercase().as_str()) {
+            return Err(ConfigError::InvalidValue {
+                field: "daemon.log_level".into(),
+                detail: format!(
+                    "invalid log level '{}', must be one of: {}",
+                    self.daemon.log_level,
+                    valid_levels.join(", ")
+                ),
+            });
+        }
+
         Ok(())
     }
 

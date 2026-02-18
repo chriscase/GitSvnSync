@@ -244,11 +244,24 @@ impl IdentityMapper {
 }
 
 /// Build a reverse lookup map from email -> SVN username.
+///
+/// Warns if multiple SVN usernames map to the same email address (last-write-wins).
 fn build_reverse_cache(entries: &HashMap<String, AuthorEntry>) -> HashMap<String, String> {
-    entries
-        .iter()
-        .map(|(username, entry)| (entry.email.clone(), username.clone()))
-        .collect()
+    let mut reverse = HashMap::new();
+    for (username, entry) in entries {
+        if let Some(existing_username) = reverse.insert(entry.email.clone(), username.clone()) {
+            if existing_username != *username {
+                warn!(
+                    email = %entry.email,
+                    user1 = %existing_username,
+                    user2 = %username,
+                    "duplicate email in identity mapping — '{}' overwrites '{}' for email '{}'",
+                    username, existing_username, entry.email
+                );
+            }
+        }
+    }
+    reverse
 }
 
 #[cfg(test)]

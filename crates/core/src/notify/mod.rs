@@ -69,7 +69,7 @@ impl Notifier {
             }
         }
 
-        if !errors.is_empty() && self.slack.is_some() || self.email.is_some() {
+        if !errors.is_empty() && (self.slack.is_some() || self.email.is_some()) {
             // Only error if ALL channels failed.
             let has_slack = self.slack.is_some();
             let has_email = self.email.is_some();
@@ -199,8 +199,8 @@ fn format_conflict_email_html(conflict: &Conflict) -> String {
         <tr><td style=\"padding: 4px 12px; font-weight: bold;\">Status</td>\
             <td style=\"padding: 4px 12px;\">{}</td></tr>",
         html_escape(&conflict.file_path),
-        conflict.conflict_type,
-        conflict.status,
+        html_escape(&conflict.conflict_type.to_string()),
+        html_escape(&conflict.status.to_string()),
     );
 
     if let Some(rev) = conflict.svn_rev {

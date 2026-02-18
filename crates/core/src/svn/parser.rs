@@ -1,7 +1,7 @@
 //! Parsers for SVN XML output.
 
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::errors::SvnError;
 
@@ -67,9 +67,15 @@ pub fn parse_svn_log(xml: &str) -> Result<Vec<SvnLogEntry>, SvnError> {
             Some(pos) => &part[..pos],
             None => part,
         };
-        let revision = extract_attribute_from_fragment(entry_xml, "revision")
+        let revision = match extract_attribute_from_fragment(entry_xml, "revision")
             .and_then(|s| s.parse::<i64>().ok())
-            .unwrap_or(0);
+        {
+            Some(rev) => rev,
+            None => {
+                warn!("skipping SVN log entry with missing or unparseable revision attribute");
+                continue;
+            }
+        };
         let author = extract_tag_content(entry_xml, "author").unwrap_or_default();
         let date = extract_tag_content(entry_xml, "date").unwrap_or_default();
         let message = extract_tag_content(entry_xml, "msg").unwrap_or_default();
@@ -116,12 +122,36 @@ pub fn parse_svn_diff_summarize(xml: &str) -> Result<Vec<SvnDiffEntry>, SvnError
 fn extract_tag_content(xml: &str, tag: &str) -> Option<String> {
     let open = format!("<{}", tag);
     let close = format!("</{}>", tag);
-    let start_pos = xml.find(&open)?;
-    let after_open = &xml[start_pos + open.len()..];
-    let content_start = after_open.find('>')? + 1;
-    let content = &after_open[content_start..];
-    let end_pos = content.find(&close)?;
-    Some(content[..end_pos].trim().to_string())
+    let mut search_from = 0;
+    while let Some(rel_pos) = xml[search_from..].find(&open) {
+        let start_pos = search_from + rel_pos;
+        let after_open = &xml[start_pos + open.len()..];
+        // Ensure we matched the tag exactly (next char must be '>' or whitespace for attributes)
+        if let Some(ch) = after_open.chars().next() {
+            if ch != '>' && !ch.is_ascii_whitespace() {
+                // False match (e.g. <urlencoded> when looking for <url>), keep searching
+                search_from = start_pos + open.len();
+                continue;
+            }
+        }
+        let content_start = match after_open.find('>') {
+            Some(pos) => pos + 1,
+            None => return None,
+        };
+        let content = &after_open[content_start..];
+        let end_pos = content.find(&close)?;
+        return Some(xml_unescape(content[..end_pos].trim()));
+    }
+    None
+}
+
+/// Unescape standard XML entities.
+fn xml_unescape(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
 }
 
 fn extract_attribute(xml: &str, tag: &str, attr: &str) -> Option<String> {
@@ -210,5 +240,132 @@ mod tests {
         let entries = parse_svn_log(xml).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].revision, 100);
+    }
+
+    #[test]
+    fn test_parse_svn_log_multiple_entries() {
+        let xml = r#"<log>
+<logentry revision="100"><author>alice</author><date>2025-01-10</date>
+<paths><path action="M" kind="file">/trunk/main.rs</path></paths><msg>fix A</msg></logentry>
+<logentry revision="101"><author>bob</author><date>2025-01-11</date>
+<paths><path action="A" kind="file">/trunk/new.rs</path></paths><msg>add new</msg></logentry>
+</log>"#;
+        let entries = parse_svn_log(xml).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].revision, 100);
+        assert_eq!(entries[0].author, "alice");
+        assert_eq!(entries[1].revision, 101);
+        assert_eq!(entries[1].author, "bob");
+    }
+
+    #[test]
+    fn test_parse_svn_log_skips_invalid_revision() {
+        let xml = r#"<log>
+<logentry><author>alice</author><date>2025-01-10</date><msg>no rev</msg></logentry>
+<logentry revision="101"><author>bob</author><date>2025-01-11</date><msg>good</msg></logentry>
+</log>"#;
+        let entries = parse_svn_log(xml).unwrap();
+        // Entry without revision should be skipped
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].revision, 101);
+    }
+
+    #[test]
+    fn test_parse_svn_log_xml_entities() {
+        let xml = r#"<log><logentry revision="50"><author>alice</author><date>2025-01-10</date>
+<paths><path action="M" kind="file">/trunk/foo &amp; bar.rs</path></paths>
+<msg>fix &lt;bug&gt; &amp; improve</msg></logentry></log>"#;
+        let entries = parse_svn_log(xml).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].message, "fix <bug> & improve");
+    }
+
+    #[test]
+    fn test_parse_svn_log_empty() {
+        let xml = r#"<log></log>"#;
+        let entries = parse_svn_log(xml).unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svn_log_missing_author() {
+        let xml = r#"<log><logentry revision="99"><date>2025-01-10</date>
+<msg>anonymous commit</msg></logentry></log>"#;
+        let entries = parse_svn_log(xml).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].author, "");
+    }
+
+    #[test]
+    fn test_parse_svn_log_copy_from() {
+        let xml = r#"<log><logentry revision="200"><author>alice</author><date>2025-01-10</date>
+<paths><path action="A" kind="dir" copyfrom-path="/trunk" copyfrom-rev="199">/branches/feature</path></paths>
+<msg>branch</msg></logentry></log>"#;
+        let entries = parse_svn_log(xml).unwrap();
+        assert_eq!(entries[0].changed_paths.len(), 1);
+        assert_eq!(
+            entries[0].changed_paths[0].copy_from_path.as_deref(),
+            Some("/trunk")
+        );
+        assert_eq!(entries[0].changed_paths[0].copy_from_rev, Some(199));
+    }
+
+    #[test]
+    fn test_parse_svn_diff_summarize() {
+        let xml = r#"<?xml version="1.0"?>
+<diff><paths>
+<path item="modified" kind="file" props="none">/trunk/src/main.rs</path>
+<path item="added" kind="file" props="none">/trunk/src/new.rs</path>
+</paths></diff>"#;
+        let entries = parse_svn_diff_summarize(xml).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].kind, "modified");
+        assert_eq!(entries[0].path, "/trunk/src/main.rs");
+        assert_eq!(entries[1].kind, "added");
+    }
+
+    #[test]
+    fn test_parse_svn_diff_summarize_empty() {
+        let xml = r#"<?xml version="1.0"?><diff><paths></paths></diff>"#;
+        let entries = parse_svn_diff_summarize(xml).unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svn_diff_summarize_props_changed() {
+        let xml = r#"<diff><paths>
+<path item="none" kind="file" props="modified">/trunk/src/main.rs</path>
+</paths></diff>"#;
+        let entries = parse_svn_diff_summarize(xml).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].props_changed);
+    }
+
+    #[test]
+    fn test_xml_unescape() {
+        assert_eq!(xml_unescape("foo &amp; bar"), "foo & bar");
+        assert_eq!(xml_unescape("a &lt; b &gt; c"), "a < b > c");
+        assert_eq!(xml_unescape("&quot;hello&quot;"), "\"hello\"");
+        assert_eq!(xml_unescape("it&apos;s"), "it's");
+        assert_eq!(xml_unescape("no entities"), "no entities");
+    }
+
+    #[test]
+    fn test_extract_tag_content_no_prefix_match() {
+        // Searching for <url> should NOT match <urlencoded>
+        let xml = r#"<urlencoded>wrong</urlencoded><url>right</url>"#;
+        let result = extract_tag_content(xml, "url");
+        assert_eq!(result, Some("right".to_string()));
+    }
+
+    #[test]
+    fn test_parse_svn_info_with_entities() {
+        let xml = r#"<info><entry kind="dir" path="." revision="5">
+<url>https://svn.example.com/repo/trunk</url>
+<repository><root>https://svn.example.com/repo</root>
+<uuid>a1b2c3d4</uuid></repository>
+<commit revision="5"></commit></entry></info>"#;
+        let info = parse_svn_info(xml).unwrap();
+        assert_eq!(info.url, "https://svn.example.com/repo/trunk");
     }
 }

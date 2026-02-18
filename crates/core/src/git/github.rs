@@ -126,6 +126,7 @@ impl GitHubClient {
         );
         let http = reqwest::Client::builder()
             .default_headers(headers)
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("failed to build reqwest client");
         info!(api_url = %api_url, "created GitHubClient");
