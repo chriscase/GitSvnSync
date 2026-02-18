@@ -141,6 +141,9 @@ impl SyncEngine {
     /// went wrong. Conflicts that can be auto-merged are handled inline;
     /// conflicts that require manual resolution are recorded in the database
     /// and the cycle still returns `Ok` (with the conflict count in stats).
+    ///
+    /// The sync lock is released via a drop guard so it is freed even if
+    /// the cycle panics.
     pub async fn run_sync_cycle(&self) -> Result<SyncStats, SyncError> {
         // Acquire the sync lock.
         if self
@@ -152,6 +155,9 @@ impl SyncEngine {
                 started_at: self.started_at.to_rfc3339(),
             });
         }
+
+        // RAII guard that clears the running flag on drop (even on panic).
+        let _guard = SyncLockGuard(self.running.clone());
 
         let mut stats = SyncStats {
             started_at: Utc::now().to_rfc3339(),
@@ -187,9 +193,7 @@ impl SyncEngine {
         };
         let _ = self.db.insert_audit_entry(&audit);
 
-        // Release the sync lock.
-        self.running.store(false, Ordering::SeqCst);
-
+        // Lock is released by _guard drop (happens here at scope end).
         result.map(|()| stats)
     }
 
@@ -539,6 +543,21 @@ impl SyncEngine {
         } else {
             false
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sync lock RAII guard
+// ---------------------------------------------------------------------------
+
+/// Drop guard that resets the `running` flag to `false`.
+///
+/// This ensures the sync lock is always released, even if a sync cycle panics.
+struct SyncLockGuard(Arc<AtomicBool>);
+
+impl Drop for SyncLockGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
     }
 }
 

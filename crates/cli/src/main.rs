@@ -229,6 +229,7 @@ layout = "standard"
 trunk_path = "trunk"
 branches_path = "branches"
 tags_path = "tags"
+# webhook_secret_env = "SVN_WEBHOOK_SECRET"
 
 [github]
 api_url = "https://api.github.com"

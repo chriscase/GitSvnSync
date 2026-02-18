@@ -26,6 +26,10 @@ layout = "standard"
 # branches = "feature-branches"
 # tags = "releases"
 
+# Environment variable containing a shared secret for SVN post-commit webhook auth.
+# If set, the SVN hook must send this value in the X-Webhook-Secret header.
+# webhook_secret_env = "GITSVNSYNC_SVN_WEBHOOK_SECRET"
+
 [github]
 # GitHub API URL
 # For GitHub Enterprise Server: "https://github.company.com/api/v3"

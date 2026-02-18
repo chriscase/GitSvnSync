@@ -79,7 +79,7 @@ async fn github_webhook(
     body: Bytes,
 ) -> Result<Json<WebhookResponse>, AppError> {
     // Verify webhook signature if a secret is configured
-    if let Some(ref _secret_env) = state.config.github.webhook_secret_env {
+    if state.config.github.webhook_secret.is_some() {
         let signature = headers
             .get("x-hub-signature-256")
             .and_then(|v| v.to_str().ok())
@@ -151,8 +151,29 @@ async fn github_webhook(
 
 async fn svn_webhook(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(payload): Json<SvnPostCommitPayload>,
 ) -> Result<Json<WebhookResponse>, AppError> {
+    // Verify shared secret if configured
+    if let Some(ref secret) = state.config.svn.webhook_secret {
+        let provided = headers
+            .get("x-webhook-secret")
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| AppError::Unauthorized("missing X-Webhook-Secret header".into()))?;
+
+        // Constant-time comparison
+        let matches = provided.len() == secret.len()
+            && provided
+                .bytes()
+                .zip(secret.bytes())
+                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                == 0;
+
+        if !matches {
+            return Err(AppError::Unauthorized("invalid webhook secret".into()));
+        }
+    }
+
     info!(
         revision = payload.revision,
         author = %payload.author,

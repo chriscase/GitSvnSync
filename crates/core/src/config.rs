@@ -132,9 +132,17 @@ pub struct SvnConfig {
     #[serde(default = "default_tags")]
     pub tags_path: String,
 
+    /// Environment variable holding a shared secret for SVN webhook authentication.
+    #[serde(default)]
+    pub webhook_secret_env: Option<String>,
+
     /// Resolved password (populated by `resolve_env_vars`).
     #[serde(skip)]
     pub password: Option<String>,
+
+    /// Resolved SVN webhook secret.
+    #[serde(skip)]
+    pub webhook_secret: Option<String>,
 }
 
 fn default_trunk() -> String {
@@ -450,6 +458,12 @@ impl AppConfig {
         if let Some(ref env_name) = self.github.webhook_secret_env {
             self.github.webhook_secret =
                 resolve_optional_env(env_name, "github.webhook_secret_env");
+        }
+
+        // SVN webhook secret
+        if let Some(ref env_name) = self.svn.webhook_secret_env {
+            self.svn.webhook_secret =
+                resolve_optional_env(env_name, "svn.webhook_secret_env");
         }
 
         // Web admin password

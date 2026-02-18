@@ -15,6 +15,7 @@ pub mod ws;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::extract::DefaultBodyLimit;
 use axum::Router;
 use tokio::sync::broadcast;
 use axum::http::{header, Method};
@@ -92,6 +93,7 @@ impl WebServer {
             // WebSocket
             .merge(ws::routes())
             // Middleware
+            .layer(DefaultBodyLimit::max(2 * 1024 * 1024)) // 2 MB max request body
             .layer(TraceLayer::new_for_http())
             .layer(cors)
             .with_state(self.state);
