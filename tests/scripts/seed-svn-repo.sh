@@ -4,7 +4,7 @@ set -euo pipefail
 # Seed the test SVN repository with sample data
 # Requires: SVN server running at localhost:8081
 
-SVN_URL="http://localhost:8081/svn/testrepo"
+SVN_URL="${GITSVNSYNC_TEST_SVN_URL:-http://localhost:8081/svn/testrepo}"
 SVN_USER="alice"
 SVN_PASS="testpass123"
 TMP_DIR=$(mktemp -d)

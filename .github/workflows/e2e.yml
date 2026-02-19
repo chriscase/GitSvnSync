@@ -28,10 +28,20 @@ jobs:
       - name: Start test environment
         run: |
           docker compose -f tests/docker-compose.yml up -d --build
-          echo "Waiting for services..."
-          sleep 15
+          echo "Waiting for services to be healthy..."
+          # Wait for Docker Compose health checks instead of a fixed sleep.
+          # Falls back to 60s timeout if services don't become healthy.
+          timeout 60 bash -c '
+            until docker compose -f tests/docker-compose.yml ps --format json | \
+              python3 -c "import sys,json; services=json.loads(sys.stdin.read()); exit(0 if all(s.get(\"Health\",\"\").startswith(\"healthy\") for s in services if \"Health\" in s) and len([s for s in services if \"Health\" in s]) > 0 else 1)" 2>/dev/null; do
+              echo "  waiting for health checks..."
+              sleep 3
+            done
+          ' || { echo "Services did not become healthy within 60s, continuing anyway..."; sleep 5; }
+          docker compose -f tests/docker-compose.yml ps
 
       - name: Run E2E tests
+        timeout-minutes: 10
         run: cargo test --test '*' -- --ignored --nocapture
         env:
           GITSVNSYNC_TEST_SVN_URL: http://localhost:8081/svn/testrepo

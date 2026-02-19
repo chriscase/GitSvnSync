@@ -4,7 +4,7 @@ set -euo pipefail
 # Seed the test Gitea repository with sample data
 # Requires: Gitea running at localhost:3000
 
-GITEA_URL="http://localhost:3000"
+GITEA_URL="${GITSVNSYNC_TEST_GITEA_URL:-http://localhost:3000}"
 GITEA_TOKEN="${GITSVNSYNC_TEST_GITEA_TOKEN:-test-token}"
 TMP_DIR=$(mktemp -d)
 trap "rm -rf $TMP_DIR" EXIT

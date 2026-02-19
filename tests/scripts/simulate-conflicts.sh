@@ -4,8 +4,8 @@ set -euo pipefail
 # Simulate various conflict scenarios for testing
 # Requires: Both SVN and Git test repos to be seeded
 
-SVN_URL="http://localhost:8081/svn/testrepo/trunk"
-GITEA_URL="http://localhost:3000"
+SVN_URL="${GITSVNSYNC_TEST_SVN_URL:-http://localhost:8081/svn/testrepo}/trunk"
+GITEA_URL="${GITSVNSYNC_TEST_GITEA_URL:-http://localhost:3000}"
 SVN_USER="alice"
 SVN_PASS="testpass123"
 
