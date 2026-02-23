@@ -131,7 +131,7 @@ async fn build_engine(config_path: &str) -> Result<(PersonalSyncEngine, Personal
         GitClient::new(&git_repo_path).context("failed to open git repository")?
     } else {
         std::fs::create_dir_all(&git_repo_path).context("failed to create git repo directory")?;
-        let remote_url = format!("https://github.com/{}.git", config.github.repo);
+        let remote_url = config.github.clone_url();
         GitClient::clone_repo(&remote_url, &git_repo_path, config.github.token.as_deref())
             .context("failed to clone git repository")?
     };
@@ -256,7 +256,7 @@ async fn cmd_import(config_path: &str, mode: ImportMode) -> Result<()> {
     } else {
         std::fs::create_dir_all(&git_repo_path).context("failed to create git repo directory")?;
         // For import, try to clone first; if repo doesn't exist yet, init locally
-        let remote_url = format!("https://github.com/{}.git", config.github.repo);
+        let remote_url = config.github.clone_url();
         match GitClient::clone_repo(&remote_url, &git_repo_path, config.github.token.as_deref()) {
             Ok(client) => client,
             Err(_) => {

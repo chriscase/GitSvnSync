@@ -32,9 +32,16 @@ layout = "standard"
 
 [github]
 # GitHub API URL
-# For GitHub Enterprise Server: "https://github.company.com/api/v3"
-# For GitHub.com: "https://api.github.com"
+# For GitHub.com:                "https://api.github.com"
+# For GitHub Enterprise Server:  "https://github.company.com/api/v3"
 api_url = "https://api.github.com"
+# Optional: explicit Git clone/push base URL.
+# When omitted the clone URL is derived automatically from api_url:
+#   api.github.com           -> https://github.com/{repo}.git
+#   <host>/api/v3            -> https://<host>/{repo}.git
+# Set this only if your Git host differs from the API host.
+# git_base_url = "https://github.company.com"
+#
 # Repository in "owner/name" format
 repo = "org/project"
 # Environment variable containing a GitHub token (PAT or GitHub App token)

@@ -111,7 +111,7 @@ async fn main() -> Result<()> {
     let git_client = if git_repo_path.join(".git").exists() {
         GitClient::new(&git_repo_path).context("failed to open existing Git repository")?
     } else {
-        let clone_url = format!("https://github.com/{}.git", config.github.repo);
+        let clone_url = config.github.clone_url();
         let token = config.github.token.as_deref();
         GitClient::clone_repo(&clone_url, &git_repo_path, token)
             .context("failed to clone Git repository")?

@@ -43,7 +43,7 @@ pub async fn run_import(config: &PersonalConfig, mode: &str) -> Result<()> {
         GitClient::new(&git_repo_path).context("failed to open git repository")?
     } else {
         std::fs::create_dir_all(&git_repo_path).context("failed to create git repo directory")?;
-        let remote_url = format!("https://github.com/{}.git", config.github.repo);
+        let remote_url = config.github.clone_url();
         match GitClient::clone_repo(&remote_url, &git_repo_path, config.github.token.as_deref()) {
             Ok(client) => client,
             Err(_) => GitClient::init(&git_repo_path).context("failed to init git repository")?,

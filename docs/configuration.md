@@ -31,6 +31,7 @@ GitSvnSync is configured via a TOML file, typically at `/etc/gitsvnsync/config.t
 | `token_env` | string | yes | Environment variable containing GitHub token |
 | `webhook_secret_env` | string | no | Environment variable containing webhook secret |
 | `default_branch` | string | no | Default branch name (default: `"main"`) |
+| `git_base_url` | string | no | Explicit Git clone base URL override. When omitted, derived automatically from `api_url` (`https://api.github.com` → `https://github.com`; `https://host/api/v3` → `https://host`). Set this only when your enterprise instance uses a non-standard clone endpoint. **Note:** Enterprise support is theoretical — pending live GHES/GHEC validation. |
 
 ## [identity]
 

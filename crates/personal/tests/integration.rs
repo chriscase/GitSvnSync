@@ -262,6 +262,7 @@ fn make_test_config(svn_url: &str, data_dir: &Path) -> PersonalConfig {
             auto_create: false,
             private: true,
             token: None,
+            git_base_url: None,
         },
         developer: DeveloperConfig {
             name: "Test User".into(),

@@ -111,6 +111,13 @@ pub struct PersonalGitHubConfig {
     #[serde(default = "default_github_api_url")]
     pub api_url: String,
 
+    /// Explicit Git clone/push base URL.  When set, this overrides the
+    /// automatic derivation from `api_url`.  Useful for non-standard
+    /// enterprise setups where the Git host differs from the API host.
+    /// Example: `https://github.company.com`
+    #[serde(default)]
+    pub git_base_url: Option<String>,
+
     /// Repository in `owner/repo` format.
     pub repo: String,
 
@@ -132,6 +139,20 @@ pub struct PersonalGitHubConfig {
     /// Resolved token (populated by `resolve_env_vars`).
     #[serde(skip)]
     pub token: Option<String>,
+}
+
+impl PersonalGitHubConfig {
+    /// Derive the full HTTPS clone URL for the configured repository.
+    ///
+    /// Uses `git_base_url` if set, otherwise derives from `api_url`.
+    /// See [`crate::git::remote_url::derive_git_remote_url`] for details.
+    pub fn clone_url(&self) -> String {
+        crate::git::remote_url::derive_git_remote_url(
+            &self.api_url,
+            self.git_base_url.as_deref(),
+            &self.repo,
+        )
+    }
 }
 
 fn default_github_api_url() -> String {
