@@ -216,14 +216,28 @@ impl SyncEngine {
                 .map(|dt| dt.with_timezone(&Utc))
         });
 
-        let last_svn_rev = self
+        let last_svn_rev = match self
             .db
-            .get_last_svn_revision()
-            .map_err(SyncError::DatabaseError)?;
-        let last_git_hash = self
+            .get_state("last_svn_rev")
+            .map_err(SyncError::DatabaseError)?
+        {
+            Some(s) => s.parse::<i64>().ok(),
+            None => self
+                .db
+                .get_last_svn_revision()
+                .map_err(SyncError::DatabaseError)?,
+        };
+        let last_git_hash = match self
             .db
-            .get_last_git_hash()
-            .map_err(SyncError::DatabaseError)?;
+            .get_state("last_git_hash")
+            .map_err(SyncError::DatabaseError)?
+        {
+            Some(s) if !s.is_empty() => Some(s),
+            _ => self
+                .db
+                .get_last_git_hash()
+                .map_err(SyncError::DatabaseError)?,
+        };
         let total_syncs = self
             .db
             .count_sync_records()
@@ -342,12 +356,17 @@ impl SyncEngine {
             };
 
             // 2. Apply the diff to the Git working tree.
-            if !diff.trim().is_empty() {
-                apply_diff_to_path(&repo_path, &diff)
-                    .await
-                    .map_err(SyncError::GitError)?;
+            // Try git apply first; fall back to export-based copy if the diff
+            // is empty or in a format git cannot parse (e.g. SVN property-only
+            // changes or initial adds).
+            let diff_applied = if !diff.trim().is_empty() {
+                apply_diff_to_path(&repo_path, &diff).await.is_ok()
             } else {
-                // If no diff available, use svn export to copy changed files.
+                false
+            };
+
+            if !diff_applied {
+                // Fallback: use svn export to copy changed files.
                 let export_dir = tempfile::tempdir().map_err(|e| {
                     SyncError::GitError(crate::errors::GitError::IoError(e))
                 })?;
@@ -598,11 +617,21 @@ impl SyncEngine {
     // -----------------------------------------------------------------------
 
     async fn fetch_svn_changes(&self) -> Result<Vec<SvnChangeSet>, SyncError> {
-        let last_rev = self
+        // Check the state table first (written by sync_svn_to_git), then fall
+        // back to commit_map / sync_records for databases created by older
+        // versions.
+        let last_rev = match self
             .db
-            .get_last_svn_revision()
+            .get_state("last_svn_rev")
             .map_err(SyncError::DatabaseError)?
-            .unwrap_or(0);
+        {
+            Some(s) => s.parse::<i64>().unwrap_or(0),
+            None => self
+                .db
+                .get_last_svn_revision()
+                .map_err(SyncError::DatabaseError)?
+                .unwrap_or(0),
+        };
 
         info!(since_rev = last_rev, "fetching SVN changes");
 
@@ -632,7 +661,8 @@ impl SyncEngine {
                     .changed_paths
                     .iter()
                     .map(|p| ChangedFile {
-                        path: p.path.clone(),
+                        // SVN paths have leading '/' — strip it for filesystem joins.
+                        path: p.path.strip_prefix('/').unwrap_or(&p.path).to_string(),
                         action: p.action.clone(),
                         content: None,
                         is_binary: false,
@@ -652,10 +682,20 @@ impl SyncEngine {
         let token = self.config.github.token.as_deref();
         git.fetch("origin", token).map_err(SyncError::GitError)?;
 
-        let last_hash = self
+        // Check the state table first (written by sync_git_to_svn), then fall
+        // back to commit_map / sync_records for databases created by older
+        // versions.
+        let last_hash = match self
             .db
-            .get_last_git_hash()
-            .map_err(SyncError::DatabaseError)?;
+            .get_state("last_git_hash")
+            .map_err(SyncError::DatabaseError)?
+        {
+            Some(s) if !s.is_empty() => Some(s),
+            _ => self
+                .db
+                .get_last_git_hash()
+                .map_err(SyncError::DatabaseError)?,
+        };
 
         info!(since_sha = ?last_hash, "fetching Git changes");
 

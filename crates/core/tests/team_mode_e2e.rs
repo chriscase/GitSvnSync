@@ -1,0 +1,651 @@
+//! End-to-end tests for team-mode bidirectional SVN <-> Git synchronization.
+//!
+//! These tests exercise the real `SyncEngine` with:
+//! - Local SVN repos via `svnadmin create` (file:// protocol)
+//! - Local Git repos with bare "origin" for pushes
+//! - Real SQLite databases
+//! - Real identity mapping
+//!
+//! No network I/O: SVN uses `file://` URLs, Git uses local bare repos.
+//!
+//! Tests skip gracefully if `svn` / `svnadmin` are not installed.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Arc;
+
+use tempfile::TempDir;
+
+use gitsvnsync_core::config::{AppConfig, IdentityConfig};
+use gitsvnsync_core::db::Database;
+use gitsvnsync_core::git::GitClient;
+use gitsvnsync_core::identity::IdentityMapper;
+use gitsvnsync_core::svn::SvnClient;
+use gitsvnsync_core::sync_engine::SyncEngine;
+
+// ===========================================================================
+// Helpers
+// ===========================================================================
+
+fn svn_available() -> bool {
+    let svn_ok = Command::new("svn")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    let svnadmin_ok = Command::new("svnadmin")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    svn_ok && svnadmin_ok
+}
+
+fn create_svn_repo(dir: &Path) -> String {
+    let repo_dir = dir.join("svn_repo");
+    let status = Command::new("svnadmin")
+        .args(["create", repo_dir.to_str().unwrap()])
+        .status()
+        .expect("failed to run svnadmin create");
+    assert!(status.success(), "svnadmin create failed");
+
+    let hooks_dir = repo_dir.join("hooks");
+    let pre_revprop_change = hooks_dir.join("pre-revprop-change");
+    std::fs::write(&pre_revprop_change, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&pre_revprop_change, std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+    }
+
+    format!("file://{}", repo_dir.display())
+}
+
+fn svn_checkout(url: &str, wc_path: &Path) {
+    let status = Command::new("svn")
+        .args([
+            "checkout",
+            url,
+            wc_path.to_str().unwrap(),
+            "--non-interactive",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .status()
+        .expect("failed to run svn checkout");
+    assert!(status.success(), "svn checkout failed");
+}
+
+fn svn_commit_file(wc_path: &Path, filename: &str, content: &str, message: &str) -> i64 {
+    let file_path = wc_path.join(filename);
+
+    if let Some(parent) = file_path.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent).unwrap();
+            let mut rel = PathBuf::new();
+            for component in Path::new(filename).parent().unwrap().components() {
+                rel = rel.join(component);
+                let abs = wc_path.join(&rel);
+                let _ = Command::new("svn")
+                    .args(["add", "--depth=empty", abs.to_str().unwrap()])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+            }
+        }
+    }
+
+    std::fs::write(&file_path, content).unwrap();
+
+    let status_output = Command::new("svn")
+        .args(["status", file_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let status_str = String::from_utf8_lossy(&status_output.stdout);
+    if status_str.contains('?') {
+        let add_status = Command::new("svn")
+            .args(["add", file_path.to_str().unwrap()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(add_status.success(), "svn add failed");
+    }
+
+    let output = Command::new("svn")
+        .args([
+            "commit",
+            "-m",
+            message,
+            wc_path.to_str().unwrap(),
+            "--non-interactive",
+        ])
+        .output()
+        .expect("svn commit failed");
+    assert!(
+        output.status.success(),
+        "svn commit failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Committed revision") {
+            return trimmed
+                .trim_start_matches("Committed revision")
+                .trim()
+                .trim_end_matches('.')
+                .parse::<i64>()
+                .expect("failed to parse revision number");
+        }
+    }
+    panic!("could not parse committed revision from: {}", stdout);
+}
+
+fn setup_git_with_bare_origin(work_dir: &Path, bare_dir: &Path) -> GitClient {
+    git2::Repository::init_bare(bare_dir).expect("failed to init bare repo");
+    let git_client = GitClient::init(work_dir).expect("failed to init git repo");
+
+    let repo = git2::Repository::open(work_dir).expect("failed to open repo");
+    repo.remote("origin", bare_dir.to_str().unwrap())
+        .expect("failed to add origin remote");
+
+    std::fs::write(work_dir.join(".gitkeep"), "").unwrap();
+    git_client
+        .commit(
+            "initial commit",
+            "Test User",
+            "test@example.com",
+            "Test User",
+            "test@example.com",
+        )
+        .expect("failed to create initial commit");
+
+    {
+        let repo = git2::Repository::open(work_dir).unwrap();
+        let head = repo.head().unwrap();
+        let head_name = head.name().unwrap_or("");
+        if head_name != "refs/heads/main" {
+            let mut branch = repo
+                .find_branch(
+                    head_name.strip_prefix("refs/heads/").unwrap_or("master"),
+                    git2::BranchType::Local,
+                )
+                .unwrap();
+            branch.rename("main", true).unwrap();
+        }
+    }
+
+    git_client
+        .push("origin", "main", None)
+        .expect("failed to push initial commit to origin");
+
+    git_client
+}
+
+fn setup_db(path: &Path) -> Database {
+    let db = Database::new(path).expect("failed to create database");
+    db.initialize()
+        .expect("failed to initialize database schema");
+    db
+}
+
+fn make_app_config(svn_url: &str, data_dir: &Path) -> AppConfig {
+    let toml_str = format!(
+        r#"
+[daemon]
+poll_interval_secs = 5
+log_level = "debug"
+data_dir = "{}"
+
+[svn]
+url = "{}"
+username = ""
+password_env = "GITSVNSYNC_TEST_SVN_PW"
+
+[github]
+repo = "test/test-repo"
+token_env = "GITSVNSYNC_TEST_GH_TOKEN"
+"#,
+        data_dir.display(),
+        svn_url
+    );
+    let mut config: AppConfig = toml::from_str(&toml_str).unwrap();
+    config.svn.password = Some(String::new());
+    config.github.token = Some(String::new());
+    config
+}
+
+fn make_identity_mapper() -> IdentityMapper {
+    let config = IdentityConfig {
+        email_domain: Some("example.com".into()),
+        ..Default::default()
+    };
+    IdentityMapper::new(&config).unwrap()
+}
+
+/// Get the SHA of the current HEAD commit.
+fn get_head_sha(repo_path: &Path) -> String {
+    let repo = git2::Repository::open(repo_path).unwrap();
+    let head = repo.head().unwrap();
+    head.target().unwrap().to_string()
+}
+
+fn count_git_commits(repo_path: &Path) -> usize {
+    let repo = git2::Repository::open(repo_path).unwrap();
+    let head = match repo.head() {
+        Ok(h) => h,
+        Err(_) => return 0,
+    };
+    let oid = head.target().unwrap();
+    let mut revwalk = repo.revwalk().unwrap();
+    revwalk.push(oid).unwrap();
+    revwalk.count()
+}
+
+fn get_git_commit_message(repo_path: &Path, index: usize) -> String {
+    let repo = git2::Repository::open(repo_path).unwrap();
+    let head = repo.head().unwrap();
+    let oid = head.target().unwrap();
+    let mut revwalk = repo.revwalk().unwrap();
+    revwalk.push(oid).unwrap();
+    revwalk
+        .set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)
+        .unwrap();
+    let oids: Vec<_> = revwalk.collect::<Result<Vec<_>, _>>().unwrap();
+    let commit = repo.find_commit(oids[index]).unwrap();
+    commit.message().unwrap_or("").to_string()
+}
+
+// ===========================================================================
+// Test 1: SVN → Git sync via SyncEngine
+// ===========================================================================
+
+/// Verify that commits made in SVN are synced to the Git repository via the
+/// real SyncEngine.
+#[tokio::test]
+async fn test_team_mode_svn_to_git_sync() {
+    if !svn_available() {
+        eprintln!("SKIPPED: svn/svnadmin not found in PATH");
+        return;
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let svn_url = create_svn_repo(tmp.path());
+    let wc_path = tmp.path().join("wc");
+    svn_checkout(&svn_url, &wc_path);
+
+    // Create SVN commits.
+    svn_commit_file(&wc_path, "readme.txt", "Hello from SVN", "Add readme");
+    svn_commit_file(&wc_path, "lib.rs", "fn main() {}", "Add initial source");
+
+    // Set up Git repo.
+    let git_work_dir = tmp.path().join("git_work");
+    let bare_dir = tmp.path().join("origin.git");
+    let git_client = setup_git_with_bare_origin(&git_work_dir, &bare_dir);
+
+    // Seed the Git watermark to HEAD so the engine only looks at SVN changes.
+    let db = setup_db(&tmp.path().join("sync.db"));
+    let head_sha = get_head_sha(&git_work_dir);
+    let _ = db.set_state("last_git_hash", &head_sha);
+
+    let config = make_app_config(&svn_url, tmp.path());
+    let svn_client = SvnClient::new(&svn_url, "", "");
+    let mapper = Arc::new(make_identity_mapper());
+
+    let engine = SyncEngine::new(config, db, svn_client, git_client, mapper);
+    let stats = engine.run_sync_cycle().await.expect("sync cycle failed");
+
+    // SVN had 2 revisions.
+    assert_eq!(stats.svn_to_git_count, 2, "expected 2 SVN revisions synced");
+    assert_eq!(stats.conflicts_detected, 0, "expected no conflicts");
+
+    // Git should now have: initial commit + 2 synced commits = 3.
+    assert_eq!(count_git_commits(&git_work_dir), 3);
+
+    // The most recent commit should contain the sync marker.
+    let latest_msg = get_git_commit_message(&git_work_dir, 0);
+    assert!(
+        latest_msg.contains("[gitsvnsync]"),
+        "expected sync marker in commit message, got: {}",
+        latest_msg
+    );
+
+    // Files should exist in the Git working tree.
+    assert!(git_work_dir.join("readme.txt").exists());
+    assert!(git_work_dir.join("lib.rs").exists());
+    assert_eq!(
+        std::fs::read_to_string(git_work_dir.join("readme.txt")).unwrap(),
+        "Hello from SVN"
+    );
+}
+
+// ===========================================================================
+// Test 2: Git → SVN sync via SyncEngine
+// ===========================================================================
+
+/// Verify that commits made in Git are synced to SVN.
+#[tokio::test]
+async fn test_team_mode_git_to_svn_sync() {
+    if !svn_available() {
+        eprintln!("SKIPPED: svn/svnadmin not found in PATH");
+        return;
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let svn_url = create_svn_repo(tmp.path());
+
+    // SVN needs at least one commit for checkout to work.
+    let wc_path = tmp.path().join("wc");
+    svn_checkout(&svn_url, &wc_path);
+    svn_commit_file(&wc_path, ".gitkeep", "", "Initial SVN commit");
+
+    // Set up Git repo.
+    let git_work_dir = tmp.path().join("git_work");
+    let bare_dir = tmp.path().join("origin.git");
+    let git_client = setup_git_with_bare_origin(&git_work_dir, &bare_dir);
+
+    // Record the initial Git SHA before making test commits.
+    let initial_sha = get_head_sha(&git_work_dir);
+
+    // Make a Git commit that the engine should sync to SVN.
+    std::fs::write(git_work_dir.join("app.js"), "console.log('hello');\n").unwrap();
+    git_client
+        .commit(
+            "Add app.js",
+            "Dev User",
+            "dev@example.com",
+            "Dev User",
+            "dev@example.com",
+        )
+        .unwrap();
+    git_client.push("origin", "main", None).unwrap();
+
+    // Set up DB and engine, seeding watermarks.
+    let db = setup_db(&tmp.path().join("sync.db"));
+    let _ = db.set_state("last_svn_rev", "1");
+    let _ = db.set_state("last_git_hash", &initial_sha);
+
+    let config = make_app_config(&svn_url, tmp.path());
+    let svn_client = SvnClient::new(&svn_url, "", "");
+    let mapper = Arc::new(make_identity_mapper());
+
+    let engine = SyncEngine::new(config, db, svn_client, git_client, mapper);
+    let stats = engine.run_sync_cycle().await.expect("sync cycle failed");
+
+    assert_eq!(stats.git_to_svn_count, 1, "expected 1 Git commit synced");
+    assert_eq!(stats.conflicts_detected, 0, "expected no conflicts");
+
+    // Verify the file landed in SVN by exporting.
+    let svn_verify = SvnClient::new(&svn_url, "", "");
+    let verify_dir = tmp.path().join("verify");
+    svn_verify.export("", 2, &verify_dir).await.unwrap();
+    assert!(verify_dir.join("app.js").exists());
+    assert_eq!(
+        std::fs::read_to_string(verify_dir.join("app.js")).unwrap(),
+        "console.log('hello');\n"
+    );
+}
+
+// ===========================================================================
+// Test 3: Bidirectional sync (mixed SVN + Git usage)
+// ===========================================================================
+
+/// Both SVN and Git users commit (to different files). A single sync cycle
+/// replicates both directions without conflicts.
+#[tokio::test]
+async fn test_team_mode_bidirectional_sync() {
+    if !svn_available() {
+        eprintln!("SKIPPED: svn/svnadmin not found in PATH");
+        return;
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let svn_url = create_svn_repo(tmp.path());
+
+    let wc_path = tmp.path().join("wc");
+    svn_checkout(&svn_url, &wc_path);
+    svn_commit_file(&wc_path, ".gitkeep", "", "Initial commit");
+
+    let git_work_dir = tmp.path().join("git_work");
+    let bare_dir = tmp.path().join("origin.git");
+    let git_client = setup_git_with_bare_origin(&git_work_dir, &bare_dir);
+
+    let initial_sha = get_head_sha(&git_work_dir);
+
+    // SVN user adds a file.
+    svn_commit_file(&wc_path, "svn_file.txt", "from SVN user", "SVN adds file");
+
+    // Git user adds a different file.
+    std::fs::write(git_work_dir.join("git_file.txt"), "from Git user").unwrap();
+    git_client
+        .commit(
+            "Git adds file",
+            "Git User",
+            "gituser@example.com",
+            "Git User",
+            "gituser@example.com",
+        )
+        .unwrap();
+    git_client.push("origin", "main", None).unwrap();
+
+    // Seed watermarks past initial commits.
+    let db = setup_db(&tmp.path().join("sync.db"));
+    let _ = db.set_state("last_svn_rev", "1");
+    let _ = db.set_state("last_git_hash", &initial_sha);
+
+    let config = make_app_config(&svn_url, tmp.path());
+    let svn_client = SvnClient::new(&svn_url, "", "");
+    let mapper = Arc::new(make_identity_mapper());
+
+    let engine = SyncEngine::new(config, db, svn_client, git_client, mapper);
+    let stats = engine.run_sync_cycle().await.expect("sync cycle failed");
+
+    assert_eq!(
+        stats.svn_to_git_count, 1,
+        "expected 1 SVN revision synced to Git"
+    );
+    assert_eq!(
+        stats.git_to_svn_count, 1,
+        "expected 1 Git commit synced to SVN"
+    );
+    assert_eq!(stats.conflicts_detected, 0, "expected no conflicts");
+
+    // Verify SVN file appeared in Git working tree.
+    assert!(
+        git_work_dir.join("svn_file.txt").exists(),
+        "SVN file should be synced to Git"
+    );
+
+    // Verify Git file appeared in SVN.
+    let svn_verify = SvnClient::new(&svn_url, "", "");
+    let info = svn_verify.info().await.unwrap();
+    let verify_dir = tmp.path().join("verify");
+    svn_verify
+        .export("", info.latest_rev, &verify_dir)
+        .await
+        .unwrap();
+    assert!(
+        verify_dir.join("git_file.txt").exists(),
+        "Git file should be synced to SVN"
+    );
+}
+
+// ===========================================================================
+// Test 4: Echo suppression in team mode
+// ===========================================================================
+
+/// After syncing SVN→Git, a second sync cycle should NOT re-sync the echo
+/// commits back to SVN.
+#[tokio::test]
+async fn test_team_mode_echo_suppression() {
+    if !svn_available() {
+        eprintln!("SKIPPED: svn/svnadmin not found in PATH");
+        return;
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let svn_url = create_svn_repo(tmp.path());
+    let wc_path = tmp.path().join("wc");
+    svn_checkout(&svn_url, &wc_path);
+    svn_commit_file(&wc_path, "first.txt", "content", "First commit");
+
+    let git_work_dir = tmp.path().join("git_work");
+    let bare_dir = tmp.path().join("origin.git");
+    let git_client = setup_git_with_bare_origin(&git_work_dir, &bare_dir);
+
+    // Seed Git watermark so the initial commit isn't synced to SVN.
+    let db = setup_db(&tmp.path().join("sync.db"));
+    let head_sha = get_head_sha(&git_work_dir);
+    let _ = db.set_state("last_git_hash", &head_sha);
+
+    let config = make_app_config(&svn_url, tmp.path());
+    let svn_client = SvnClient::new(&svn_url, "", "");
+    let mapper = Arc::new(make_identity_mapper());
+
+    let engine = SyncEngine::new(config, db, svn_client, git_client, mapper);
+
+    // First cycle: syncs SVN→Git.
+    let stats1 = engine.run_sync_cycle().await.expect("first sync failed");
+    assert_eq!(stats1.svn_to_git_count, 1);
+
+    // Second cycle: echo commits in Git should be skipped.
+    let stats2 = engine.run_sync_cycle().await.expect("second sync failed");
+    assert_eq!(
+        stats2.git_to_svn_count, 0,
+        "echo commits should not be re-synced to SVN"
+    );
+    assert_eq!(
+        stats2.svn_to_git_count, 0,
+        "no new SVN commits should exist"
+    );
+}
+
+// ===========================================================================
+// Test 5: Conflict detection with overlapping files
+// ===========================================================================
+
+/// When both SVN and Git modify the same file, the engine should detect
+/// a conflict.
+#[tokio::test]
+async fn test_team_mode_conflict_detection() {
+    if !svn_available() {
+        eprintln!("SKIPPED: svn/svnadmin not found in PATH");
+        return;
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let svn_url = create_svn_repo(tmp.path());
+
+    // Seed SVN with a base file.
+    let wc_path = tmp.path().join("wc");
+    svn_checkout(&svn_url, &wc_path);
+    svn_commit_file(&wc_path, "shared.txt", "base content", "Add shared file");
+
+    let git_work_dir = tmp.path().join("git_work");
+    let bare_dir = tmp.path().join("origin.git");
+    let git_client = setup_git_with_bare_origin(&git_work_dir, &bare_dir);
+
+    let initial_sha = get_head_sha(&git_work_dir);
+
+    // SVN user modifies the file.
+    svn_commit_file(&wc_path, "shared.txt", "SVN version", "SVN edits shared");
+
+    // Git user also modifies the same file.
+    std::fs::write(git_work_dir.join("shared.txt"), "Git version").unwrap();
+    git_client
+        .commit(
+            "Git edits shared",
+            "Git User",
+            "gituser@example.com",
+            "Git User",
+            "gituser@example.com",
+        )
+        .unwrap();
+    git_client.push("origin", "main", None).unwrap();
+
+    // Seed watermarks past the initial commits.
+    let db = setup_db(&tmp.path().join("sync.db"));
+    let _ = db.set_state("last_svn_rev", "1");
+    let _ = db.set_state("last_git_hash", &initial_sha);
+
+    let config = make_app_config(&svn_url, tmp.path());
+    let svn_client = SvnClient::new(&svn_url, "", "");
+    let mapper = Arc::new(make_identity_mapper());
+
+    let engine = SyncEngine::new(config, db, svn_client, git_client, mapper);
+    let stats = engine.run_sync_cycle().await.expect("sync cycle failed");
+
+    // Both sides modified "shared.txt" — should detect a conflict.
+    assert!(
+        stats.conflicts_detected > 0,
+        "expected at least 1 conflict when both sides edit same file, got {}",
+        stats.conflicts_detected
+    );
+}
+
+// ===========================================================================
+// Test 6: Commit mapping integrity
+// ===========================================================================
+
+/// After a sync cycle, verify database records.
+#[tokio::test]
+async fn test_team_mode_commit_mapping_integrity() {
+    if !svn_available() {
+        eprintln!("SKIPPED: svn/svnadmin not found in PATH");
+        return;
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let svn_url = create_svn_repo(tmp.path());
+    let wc_path = tmp.path().join("wc");
+    svn_checkout(&svn_url, &wc_path);
+
+    svn_commit_file(&wc_path, "a.txt", "alpha", "Add a");
+    svn_commit_file(&wc_path, "b.txt", "bravo", "Add b");
+
+    let git_work_dir = tmp.path().join("git_work");
+    let bare_dir = tmp.path().join("origin.git");
+    let git_client = setup_git_with_bare_origin(&git_work_dir, &bare_dir);
+
+    // Seed Git watermark so the initial commit doesn't get synced.
+    let db = setup_db(&tmp.path().join("sync.db"));
+    let head_sha = get_head_sha(&git_work_dir);
+    let _ = db.set_state("last_git_hash", &head_sha);
+
+    let config = make_app_config(&svn_url, tmp.path());
+    let svn_client = SvnClient::new(&svn_url, "", "");
+    let mapper = Arc::new(make_identity_mapper());
+
+    let engine = SyncEngine::new(config, db, svn_client, git_client, mapper);
+    let stats = engine.run_sync_cycle().await.expect("sync cycle failed");
+    assert_eq!(stats.svn_to_git_count, 2);
+
+    // Verify sync records were written (SVN→Git only).
+    let sync_count = engine.db().count_sync_records().unwrap();
+    assert_eq!(sync_count, 2, "expected 2 sync records in the database");
+
+    // Verify no errors recorded.
+    let error_count = engine.db().count_errors().unwrap();
+    assert_eq!(error_count, 0, "expected no errors in audit log");
+
+    // Verify last SVN revision was updated.
+    let last_rev = engine.db().get_last_svn_revision().unwrap();
+    assert!(
+        last_rev.is_some(),
+        "expected last SVN revision to be recorded"
+    );
+    assert!(
+        last_rev.unwrap() >= 2,
+        "expected last SVN revision >= 2, got {:?}",
+        last_rev
+    );
+}

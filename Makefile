@@ -8,10 +8,10 @@ release:
 	cargo build --release
 
 test:
-	cargo test
+	cargo test --workspace
 
 lint:
-	cargo clippy -- -D warnings
+	cargo clippy --workspace -- -D warnings
 	cargo fmt --check
 
 fmt:
@@ -45,12 +45,12 @@ test-env-logs:
 	docker compose -f tests/docker-compose.yml logs -f
 
 test-all: test
-	cargo test --test '*' -- --ignored
+	cargo test --workspace --test '*' -- --ignored
 
 # E2E tests (requires test environment running)
 test-e2e:
 	@echo "Running E2E tests against Docker environment..."
-	cargo test --test '*' -- --ignored --nocapture
+	cargo test --workspace --test '*' -- --ignored --nocapture
 
 # Installation
 install: release
