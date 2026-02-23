@@ -316,6 +316,79 @@ impl GitClient {
         Ok(commit.parent_count())
     }
 
+    /// Get the list of changed files for a specific commit.
+    ///
+    /// Returns a vec of `(action, path)` tuples where action is "A" (added),
+    /// "M" (modified), or "D" (deleted).
+    pub fn get_changed_files(&self, sha: &str) -> Result<Vec<(String, String)>, GitError> {
+        let oid = Oid::from_str(sha)?;
+        let commit = self.repo.find_commit(oid)?;
+        let tree = commit.tree()?;
+
+        let parent_tree = if commit.parent_count() > 0 {
+            Some(commit.parent(0)?.tree()?)
+        } else {
+            None
+        };
+
+        let diff =
+            self.repo
+                .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
+
+        let mut changes = Vec::new();
+        diff.foreach(
+            &mut |delta, _progress| {
+                let action = match delta.status() {
+                    git2::Delta::Added | git2::Delta::Untracked => "A",
+                    git2::Delta::Deleted => "D",
+                    git2::Delta::Modified => "M",
+                    git2::Delta::Renamed => "M",
+                    _ => "M",
+                };
+                let path = delta
+                    .new_file()
+                    .path()
+                    .or_else(|| delta.old_file().path())
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                if !path.is_empty() {
+                    changes.push((action.to_string(), path));
+                }
+                true
+            },
+            None,
+            None,
+            None,
+        )?;
+
+        debug!(sha, count = changes.len(), "got changed files for commit");
+        Ok(changes)
+    }
+
+    /// Get the content of a file at a specific commit.
+    ///
+    /// Returns `None` if the file does not exist in that commit's tree.
+    pub fn get_file_content_at_commit(
+        &self,
+        sha: &str,
+        file_path: &str,
+    ) -> Result<Option<Vec<u8>>, GitError> {
+        let oid = Oid::from_str(sha)?;
+        let commit = self.repo.find_commit(oid)?;
+        let tree = commit.tree()?;
+
+        match tree.get_path(std::path::Path::new(file_path)) {
+            Ok(entry) => {
+                let obj = entry.to_object(&self.repo)?;
+                let blob = obj
+                    .as_blob()
+                    .ok_or_else(|| GitError::RefNotFound(file_path.to_string()))?;
+                Ok(Some(blob.content().to_vec()))
+            }
+            Err(_) => Ok(None),
+        }
+    }
+
     /// Apply a unified diff to the working tree.
     #[instrument(skip(self, diff_content))]
     pub async fn apply_diff(&self, diff_content: &str) -> Result<(), GitError> {
@@ -471,5 +544,73 @@ mod tests {
 
         // Second commit has 1 parent
         assert_eq!(client.get_parent_count(&oid2.to_string()).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_get_changed_files() {
+        let dir = tempfile::tempdir().unwrap();
+        Repository::init(dir.path()).unwrap();
+        let client = GitClient::new(dir.path()).unwrap();
+
+        // First commit: add a.txt
+        std::fs::write(dir.path().join("a.txt"), "hello").unwrap();
+        let oid1 = client
+            .commit("add a", "T", "t@t.com", "T", "t@t.com")
+            .unwrap();
+
+        let files1 = client.get_changed_files(&oid1.to_string()).unwrap();
+        assert_eq!(files1.len(), 1);
+        assert_eq!(files1[0].0, "A"); // Added
+        assert_eq!(files1[0].1, "a.txt");
+
+        // Second commit: modify a.txt, add b.txt
+        std::fs::write(dir.path().join("a.txt"), "modified").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "new file").unwrap();
+        let oid2 = client
+            .commit("modify a, add b", "T", "t@t.com", "T", "t@t.com")
+            .unwrap();
+
+        let files2 = client.get_changed_files(&oid2.to_string()).unwrap();
+        assert_eq!(files2.len(), 2);
+        let paths: Vec<&str> = files2.iter().map(|(_, p)| p.as_str()).collect();
+        assert!(paths.contains(&"a.txt"));
+        assert!(paths.contains(&"b.txt"));
+    }
+
+    #[test]
+    fn test_get_file_content_at_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        Repository::init(dir.path()).unwrap();
+        let client = GitClient::new(dir.path()).unwrap();
+
+        std::fs::write(dir.path().join("data.txt"), "version 1").unwrap();
+        let oid1 = client
+            .commit("v1", "T", "t@t.com", "T", "t@t.com")
+            .unwrap();
+
+        std::fs::write(dir.path().join("data.txt"), "version 2").unwrap();
+        let oid2 = client
+            .commit("v2", "T", "t@t.com", "T", "t@t.com")
+            .unwrap();
+
+        // Read content at commit 1
+        let content1 = client
+            .get_file_content_at_commit(&oid1.to_string(), "data.txt")
+            .unwrap()
+            .unwrap();
+        assert_eq!(String::from_utf8(content1).unwrap(), "version 1");
+
+        // Read content at commit 2
+        let content2 = client
+            .get_file_content_at_commit(&oid2.to_string(), "data.txt")
+            .unwrap()
+            .unwrap();
+        assert_eq!(String::from_utf8(content2).unwrap(), "version 2");
+
+        // Read non-existent file
+        let missing = client
+            .get_file_content_at_commit(&oid1.to_string(), "nonexistent.txt")
+            .unwrap();
+        assert!(missing.is_none());
     }
 }
