@@ -730,6 +730,12 @@ impl SyncEngine {
             });
         }
 
+        // Reverse so oldest commits are replayed first.  get_commits_since
+        // returns newest-first (revwalk order), but sync_git_to_svn must
+        // apply changes chronologically so the final SVN tree matches the
+        // latest Git state and intermediate revisions map correctly.
+        change_sets.reverse();
+
         debug!(count = change_sets.len(), "fetched Git change sets");
         Ok(change_sets)
     }

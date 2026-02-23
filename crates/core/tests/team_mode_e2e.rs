@@ -649,3 +649,132 @@ async fn test_team_mode_commit_mapping_integrity() {
         last_rev
     );
 }
+
+// ===========================================================================
+// Test 7: Multi-commit Git → SVN replay order
+// ===========================================================================
+
+/// When multiple Git commits modify the same file, they must be replayed
+/// oldest-first so that the final SVN content matches the latest Git state
+/// and intermediate SVN revisions map correctly.
+#[tokio::test]
+async fn test_team_mode_git_to_svn_multi_commit_order() {
+    if !svn_available() {
+        eprintln!("SKIPPED: svn/svnadmin not found in PATH");
+        return;
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let svn_url = create_svn_repo(tmp.path());
+
+    // SVN needs an initial commit for checkout_head to work.
+    let wc_path = tmp.path().join("wc");
+    svn_checkout(&svn_url, &wc_path);
+    svn_commit_file(&wc_path, ".gitkeep", "", "Initial SVN commit");
+
+    // Set up Git repo.
+    let git_work_dir = tmp.path().join("git_work");
+    let bare_dir = tmp.path().join("origin.git");
+    let git_client = setup_git_with_bare_origin(&git_work_dir, &bare_dir);
+
+    let initial_sha = get_head_sha(&git_work_dir);
+
+    // Make 3 sequential Git commits modifying the same file.
+    std::fs::write(git_work_dir.join("data.txt"), "version 1\n").unwrap();
+    git_client
+        .commit(
+            "Write version 1",
+            "Dev",
+            "dev@example.com",
+            "Dev",
+            "dev@example.com",
+        )
+        .unwrap();
+
+    std::fs::write(git_work_dir.join("data.txt"), "version 2\n").unwrap();
+    git_client
+        .commit(
+            "Write version 2",
+            "Dev",
+            "dev@example.com",
+            "Dev",
+            "dev@example.com",
+        )
+        .unwrap();
+
+    std::fs::write(git_work_dir.join("data.txt"), "version 3\n").unwrap();
+    git_client
+        .commit(
+            "Write version 3",
+            "Dev",
+            "dev@example.com",
+            "Dev",
+            "dev@example.com",
+        )
+        .unwrap();
+
+    git_client.push("origin", "main", None).unwrap();
+
+    // Set up DB and engine.
+    let db = setup_db(&tmp.path().join("sync.db"));
+    let _ = db.set_state("last_svn_rev", "1");
+    let _ = db.set_state("last_git_hash", &initial_sha);
+
+    let config = make_app_config(&svn_url, tmp.path());
+    let svn_client = SvnClient::new(&svn_url, "", "");
+    let mapper = Arc::new(make_identity_mapper());
+
+    let engine = SyncEngine::new(config, db, svn_client, git_client, mapper);
+    let stats = engine.run_sync_cycle().await.expect("sync cycle failed");
+
+    assert_eq!(stats.git_to_svn_count, 3, "expected 3 Git commits synced");
+    assert_eq!(stats.conflicts_detected, 0, "expected no conflicts");
+
+    // Verify final SVN content matches the LATEST Git commit.
+    let svn_verify = SvnClient::new(&svn_url, "", "");
+    let info = svn_verify.info().await.unwrap();
+    let verify_dir = tmp.path().join("verify_final");
+    svn_verify
+        .export("", info.latest_rev, &verify_dir)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(verify_dir.join("data.txt")).unwrap(),
+        "version 3\n",
+        "final SVN content must match the newest Git commit"
+    );
+
+    // Verify intermediate SVN revisions have correct chronological content.
+    // Rev 2 = first synced commit ("version 1"), Rev 3 = second, Rev 4 = third.
+    let verify_v1 = tmp.path().join("verify_v1");
+    svn_verify.export("", 2, &verify_v1).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(verify_v1.join("data.txt")).unwrap(),
+        "version 1\n",
+        "SVN r2 should contain version 1 (oldest commit first)"
+    );
+
+    let verify_v2 = tmp.path().join("verify_v2");
+    svn_verify.export("", 3, &verify_v2).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(verify_v2.join("data.txt")).unwrap(),
+        "version 2\n",
+        "SVN r3 should contain version 2 (middle commit)"
+    );
+
+    // Verify sync records were written with correct count.
+    let sync_count = engine.db().count_sync_records().unwrap();
+    assert_eq!(sync_count, 3, "expected 3 sync records");
+
+    // Verify watermark advanced to the latest Git SHA (the third commit).
+    let final_git_hash = engine
+        .db()
+        .get_state("last_git_hash")
+        .unwrap()
+        .expect("last_git_hash should be set");
+    let head_sha = get_head_sha(&tmp.path().join("git_work"));
+    assert_eq!(
+        final_git_hash, head_sha,
+        "watermark must point to the latest Git commit"
+    );
+}
