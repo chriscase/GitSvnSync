@@ -229,9 +229,9 @@ gitsvnsync personal conflicts resolve ID --accept git  # Resolve a conflict
 Spin up a complete isolated test environment with one command:
 
 ```bash
-make test-env-up    # Starts SVN server + Gitea + daemon via Docker Compose
-make test-all       # Runs the full E2E test suite
-make test-env-down  # Tears everything down
+make test           # Unit tests only
+make test-e2e       # E2E / integration tests (requires svn + svnadmin)
+make test-all       # Unit tests + E2E / integration tests
 ```
 
 ### Building

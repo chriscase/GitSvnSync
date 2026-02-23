@@ -45,12 +45,12 @@ test-env-logs:
 	docker compose -f tests/docker-compose.yml logs -f
 
 test-all: test
-	cargo test --workspace --test '*' -- --ignored
+	cargo test --workspace --test '*' -- --nocapture
 
-# E2E tests (requires test environment running)
+# E2E / integration tests (requires svn + svnadmin in PATH)
 test-e2e:
-	@echo "Running E2E tests against Docker environment..."
-	cargo test --workspace --test '*' -- --ignored --nocapture
+	@echo "Running E2E and integration tests..."
+	cargo test --workspace --test '*' -- --nocapture
 
 # Installation
 install: release

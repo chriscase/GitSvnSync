@@ -22,45 +22,27 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y subversion
 
+      - name: Verify tools
+        run: svn --version --quiet && svnadmin --version --quiet && git --version
+
       - name: Build project
         run: cargo build --workspace
 
-      - name: Start test environment
-        run: |
-          docker compose -f tests/docker-compose.yml up -d --build
-          echo "Waiting for services to be healthy..."
-          # Wait for Docker Compose health checks instead of a fixed sleep.
-          # Falls back to 60s timeout if services don't become healthy.
-          timeout 60 bash -c '
-            until docker compose -f tests/docker-compose.yml ps --format json | \
-              python3 -c "import sys,json; services=json.loads(sys.stdin.read()); exit(0 if all(s.get(\"Health\",\"\").startswith(\"healthy\") for s in services if \"Health\" in s) and len([s for s in services if \"Health\" in s]) > 0 else 1)" 2>/dev/null; do
-              echo "  waiting for health checks..."
-              sleep 3
-            done
-          ' || { echo "Services did not become healthy within 60s, continuing anyway..."; sleep 5; }
-          docker compose -f tests/docker-compose.yml ps
-
       - name: Run E2E tests
         timeout-minutes: 10
-        run: cargo test --test '*' -- --ignored --nocapture
-        env:
-          GITSVNSYNC_TEST_SVN_URL: http://localhost:8081/svn/testrepo
-          GITSVNSYNC_TEST_GITEA_URL: http://localhost:3000
-          GITSVNSYNC_TEST_DAEMON_URL: http://localhost:8080
-
-      - name: Collect logs on failure
-        if: failure()
         run: |
-          docker compose -f tests/docker-compose.yml logs > test-logs.txt
-          cat test-logs.txt
-
-      - name: Upload logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-test-logs
-          path: test-logs.txt
-
-      - name: Tear down test environment
-        if: always()
-        run: docker compose -f tests/docker-compose.yml down -v
+          set -euo pipefail
+          cargo test --workspace --test '*' -- --nocapture 2>&1 | tee test-output.txt
+          # Guard: fail if zero tests were executed across all test binaries.
+          total=$(grep -Eo '[0-9]+ passed' test-output.txt | awk '{s+=$1} END {print s+0}')
+          echo "Total tests passed: $total"
+          if [ "$total" -eq 0 ]; then
+            echo "::error::E2E job executed zero tests — check test filters"
+            exit 1
+          fi
+        env:
+          RUST_BACKTRACE: 1
+          GIT_AUTHOR_NAME: "Test User"
+          GIT_AUTHOR_EMAIL: "test@example.com"
+          GIT_COMMITTER_NAME: "Test User"
+          GIT_COMMITTER_EMAIL: "test@example.com"
