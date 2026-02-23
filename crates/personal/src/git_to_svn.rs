@@ -5,7 +5,7 @@
 //! SVN with metadata trailers (Git SHA, PR number, branch) for traceability
 //! and echo suppression.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -13,6 +13,7 @@ use tracing::{debug, error, info, instrument, warn};
 
 use gitsvnsync_core::db::Database;
 use gitsvnsync_core::git::github::{GitHubClient, GitHubCommit, PullRequest};
+use gitsvnsync_core::git::GitClient;
 use gitsvnsync_core::personal_config::PersonalConfig;
 use gitsvnsync_core::svn::SvnClient;
 
@@ -448,22 +449,71 @@ impl GitToSvnSync {
         Ok(svn_rev)
     }
 
-    /// Copy changed files from the local Git repository into the SVN working
-    /// copy directory. This performs a simple file-level sync by walking the
-    /// Git repo and mirroring file additions, modifications, and deletions.
+    /// Apply only the specific files changed in this commit to the SVN working
+    /// copy. Uses git2 to read the commit's diff and extract per-file content
+    /// at the commit SHA, avoiding full-tree copies that could leak unrelated
+    /// workspace state or collapse multi-commit PRs.
     async fn apply_git_changes_to_svn(&self, commit: &GitHubCommit) -> Result<()> {
-        // Use a simple recursive directory copy from git repo to SVN working copy,
-        // skipping VCS metadata directories (.git, .svn).
-        copy_tree(&self.git_repo_path, &self.svn_wc_path)
-            .context("failed to copy git tree to SVN working copy")?;
+        let git_client = GitClient::new(&self.git_repo_path)
+            .context("failed to open local git repo for commit diff")?;
 
-        // Clean up files in SVN WC that no longer exist in Git repo.
-        remove_stale_files(&self.git_repo_path, &self.svn_wc_path)
-            .context("failed to clean stale files from SVN working copy")?;
+        // Get the list of files changed in this specific commit.
+        let changed_files = git_client
+            .get_changed_files(&commit.sha)
+            .context("failed to get changed files for commit")?;
+
+        if changed_files.is_empty() {
+            debug!(git_sha = %commit.sha, "commit has no file changes");
+            return Ok(());
+        }
+
+        for (action, file_path) in &changed_files {
+            let dst = self.svn_wc_path.join(file_path);
+
+            match action.as_str() {
+                "D" => {
+                    // File was deleted in this commit: remove it from SVN WC
+                    // so `svn status` picks it up as missing.
+                    if dst.exists() {
+                        std::fs::remove_file(&dst).with_context(|| {
+                            format!("failed to remove deleted file: {}", dst.display())
+                        })?;
+                    }
+                }
+                _ => {
+                    // File was added or modified: read its content at this
+                    // specific commit SHA and write to the SVN WC.
+                    if let Some(content) = git_client
+                        .get_file_content_at_commit(&commit.sha, file_path)
+                        .with_context(|| {
+                            format!(
+                                "failed to read file '{}' at commit {}",
+                                file_path, &commit.sha
+                            )
+                        })?
+                    {
+                        if let Some(parent) = dst.parent() {
+                            if !parent.exists() {
+                                std::fs::create_dir_all(parent).with_context(|| {
+                                    format!(
+                                        "failed to create directory: {}",
+                                        parent.display()
+                                    )
+                                })?;
+                            }
+                        }
+                        std::fs::write(&dst, &content).with_context(|| {
+                            format!("failed to write file: {}", dst.display())
+                        })?;
+                    }
+                }
+            }
+        }
 
         debug!(
             git_sha = %commit.sha,
-            "applied git changes to SVN working copy"
+            file_count = changed_files.len(),
+            "applied commit-specific changes to SVN working copy"
         );
 
         Ok(())
@@ -497,12 +547,13 @@ impl GitToSvnSync {
 }
 
 // ---------------------------------------------------------------------------
-// File-level helpers
+// File-level helpers (retained for tests)
 // ---------------------------------------------------------------------------
 
 /// Recursively copy files from `src` to `dst`, skipping `.git` and `.svn`
 /// directories. Existing files are overwritten.
-fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
+#[cfg(test)]
+fn copy_tree(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
     let entries = std::fs::read_dir(src)
         .with_context(|| format!("failed to read directory: {}", src.display()))?;
 
@@ -542,7 +593,8 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
 
 /// Remove files from `dst` that no longer exist in `src`, skipping `.git`
 /// and `.svn` directories. Empty directories are also removed.
-fn remove_stale_files(src: &Path, dst: &Path) -> Result<()> {
+#[cfg(test)]
+fn remove_stale_files(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
     let entries = match std::fs::read_dir(dst) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
