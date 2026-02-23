@@ -138,6 +138,10 @@ impl SvnToGitSync {
             Self::copy_tree(export_dir.path(), &repo_path)
                 .with_context(|| format!("failed to copy exported files for r{}", rev))?;
 
+            // 6b. Remove files from the Git tree that are no longer in the SVN export.
+            Self::remove_stale_files(export_dir.path(), &repo_path)
+                .with_context(|| format!("failed to remove stale files for r{}", rev))?;
+
             // 7. Format the commit message with metadata trailers.
             let commit_message =
                 self.formatter
@@ -283,6 +287,59 @@ impl SvnToGitSync {
 
         Ok(())
     }
+
+    /// Remove files and directories from `dst` (Git working tree) that do not
+    /// exist in `src` (SVN export). Hidden entries (starting with `.`) at the
+    /// root level are always skipped so `.git/` is never touched.
+    fn remove_stale_files(src: &Path, dst: &Path) -> Result<()> {
+        Self::remove_stale_inner(src, dst, true)
+    }
+
+    fn remove_stale_inner(src: &Path, dst: &Path, is_root: bool) -> Result<()> {
+        let entries = match std::fs::read_dir(dst) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("failed to read directory: {}", dst.display()));
+            }
+        };
+
+        for entry in entries {
+            let entry = entry?;
+            let file_name = entry.file_name();
+            let name_str = file_name.to_string_lossy();
+
+            // Skip dotfiles/dotdirs at root to protect .git/.
+            if is_root && name_str.starts_with('.') {
+                continue;
+            }
+
+            let src_path = src.join(&file_name);
+            let dst_path = entry.path();
+
+            if dst_path.is_dir() {
+                if src_path.is_dir() {
+                    // Both exist — recurse.
+                    Self::remove_stale_inner(&src_path, &dst_path, false)?;
+                } else {
+                    // Directory exists in Git but not in SVN export — remove it.
+                    std::fs::remove_dir_all(&dst_path).with_context(|| {
+                        format!("failed to remove stale directory: {}", dst_path.display())
+                    })?;
+                    debug!(path = %dst_path.display(), "removed stale directory");
+                }
+            } else if !src_path.exists() {
+                // File exists in Git but not in SVN export — remove it.
+                std::fs::remove_file(&dst_path).with_context(|| {
+                    format!("failed to remove stale file: {}", dst_path.display())
+                })?;
+                debug!(path = %dst_path.display(), "removed stale file");
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -363,6 +420,49 @@ mod tests {
             std::fs::read_to_string(dst.path().join("file.txt")).unwrap(),
             "new content"
         );
+    }
+
+    #[test]
+    fn test_remove_stale_files_basic() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+
+        // src has one file; dst has two files plus .git/.
+        std::fs::write(src.path().join("keep.txt"), "keep").unwrap();
+
+        std::fs::write(dst.path().join("keep.txt"), "keep").unwrap();
+        std::fs::write(dst.path().join("stale.txt"), "remove me").unwrap();
+        std::fs::create_dir(dst.path().join(".git")).unwrap();
+        std::fs::write(dst.path().join(".git/HEAD"), "ref: refs/heads/main").unwrap();
+
+        SvnToGitSync::remove_stale_files(src.path(), dst.path()).unwrap();
+
+        assert!(dst.path().join("keep.txt").exists());
+        assert!(!dst.path().join("stale.txt").exists());
+        // .git must be preserved (root dotdir).
+        assert!(dst.path().join(".git/HEAD").exists());
+    }
+
+    #[test]
+    fn test_remove_stale_files_nested_dirs() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+
+        // src has subdir/a.txt; dst has subdir/a.txt and subdir/b.txt and old_dir/.
+        std::fs::create_dir(src.path().join("subdir")).unwrap();
+        std::fs::write(src.path().join("subdir/a.txt"), "a").unwrap();
+
+        std::fs::create_dir(dst.path().join("subdir")).unwrap();
+        std::fs::write(dst.path().join("subdir/a.txt"), "a").unwrap();
+        std::fs::write(dst.path().join("subdir/b.txt"), "b").unwrap();
+        std::fs::create_dir(dst.path().join("old_dir")).unwrap();
+        std::fs::write(dst.path().join("old_dir/old.txt"), "old").unwrap();
+
+        SvnToGitSync::remove_stale_files(src.path(), dst.path()).unwrap();
+
+        assert!(dst.path().join("subdir/a.txt").exists());
+        assert!(!dst.path().join("subdir/b.txt").exists());
+        assert!(!dst.path().join("old_dir").exists());
     }
 
     #[test]

@@ -1328,17 +1328,16 @@ async fn test_svn_to_git_file_deletion() {
     let synced = syncer.sync().await.expect("sync failed");
     assert_eq!(synced, 2);
 
-    // After syncing both revisions, the deleted file should not exist in git
-    // (because svn export of r2 will not include delete_me.txt).
+    // After syncing both revisions, the kept file should exist and the
+    // deleted file should be gone (stale-file pruning removes it).
     assert!(git_work_dir.join("keep.txt").exists());
-    // The SvnToGitSync uses `svn export` which gets the full tree at each revision.
-    // After rev 2, delete_me.txt won't be in the export. However, copy_tree
-    // only copies from src to dst -- it doesn't delete files that are missing
-    // from the src. This is a known limitation of the copy_tree approach.
-    // The test verifies the sync completes without errors.
     assert_eq!(
         std::fs::read_to_string(git_work_dir.join("keep.txt")).unwrap(),
         "keep me"
+    );
+    assert!(
+        !git_work_dir.join("delete_me.txt").exists(),
+        "deleted SVN file should be removed from Git working tree"
     );
 }
 
