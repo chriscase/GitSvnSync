@@ -434,10 +434,24 @@ impl GitHubClient {
         if status.is_success() {
             return Ok(());
         }
+
+        // Extract the GitHub request ID if present (safe, non-secret diagnostic).
+        let request_id = resp
+            .headers()
+            .get("x-github-request-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("none")
+            .to_string();
+
         if status.as_u16() == 401 || status.as_u16() == 403 {
+            warn!(
+                http_status = status.as_u16(),
+                request_id = %request_id,
+                "GitHub authentication failure"
+            );
             return Err(GitHubError::AuthenticationFailed(format!(
-                "HTTP {}",
-                status
+                "HTTP {} (request-id: {})",
+                status, request_id
             )));
         }
         if status.as_u16() == 429 {
@@ -451,8 +465,57 @@ impl GitHubClient {
         }
         Err(GitHubError::ApiError {
             status: status.as_u16(),
-            body: format!("HTTP {}", status),
+            body: format!("HTTP {} (request-id: {})", status, request_id),
         })
+    }
+
+    /// Consume a response, extracting a safe, truncated error body with the
+    /// GitHub request ID for diagnostics.  Secrets (tokens, passwords) are
+    /// never included in the returned string.
+    pub async fn extract_error_context(resp: reqwest::Response) -> String {
+        let status = resp.status();
+        let request_id = resp
+            .headers()
+            .get("x-github-request-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("none")
+            .to_string();
+
+        // Read up to 512 bytes of the response body for diagnostics.
+        let body_snippet = match resp.text().await {
+            Ok(text) => {
+                let safe = Self::redact_secrets(&text);
+                if safe.len() > 512 {
+                    format!("{}...(truncated)", &safe[..512])
+                } else {
+                    safe
+                }
+            }
+            Err(_) => "(could not read response body)".to_string(),
+        };
+
+        format!(
+            "HTTP {} | request-id: {} | body: {}",
+            status, request_id, body_snippet
+        )
+    }
+
+    /// Redact known secret patterns from a string to prevent credential leakage
+    /// in logs.  Covers GitHub tokens (ghp_, gho_, ghs_, ghu_, github_pat_),
+    /// Bearer tokens, and generic password/secret/token value patterns.
+    pub fn redact_secrets(input: &str) -> String {
+        // GitHub PATs: ghp_, gho_, ghs_, ghu_, github_pat_ followed by
+        // alphanumeric+underscore.
+        let re_ghp = regex_lite::Regex::new(r"(ghp_|gho_|ghs_|ghu_|github_pat_)[A-Za-z0-9_]+")
+            .expect("valid regex");
+        let redacted = re_ghp.replace_all(input, "[REDACTED_TOKEN]");
+
+        // Bearer <token> in headers dumped into error bodies.
+        let re_bearer =
+            regex_lite::Regex::new(r"(?i)bearer\s+[A-Za-z0-9_.~+/=-]+").expect("valid regex");
+        let redacted = re_bearer.replace_all(&redacted, "Bearer [REDACTED]");
+
+        redacted.into_owned()
     }
 }
 
@@ -480,5 +543,86 @@ mod tests {
             "sha256=0000000000000000000000000000000000000000000000000000000000000000",
             "secret"
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #36: secret redaction tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_redact_secrets_github_pat() {
+        let input = "Authorization failed for token ghp_abc123XYZ_456";
+        let redacted = GitHubClient::redact_secrets(input);
+        assert!(
+            !redacted.contains("ghp_abc123XYZ_456"),
+            "PAT should be redacted"
+        );
+        assert!(
+            redacted.contains("[REDACTED_TOKEN]"),
+            "Should contain redaction marker"
+        );
+    }
+
+    #[test]
+    fn test_redact_secrets_github_pat_variants() {
+        // Test all GitHub token prefixes.
+        for prefix in &["ghp_", "gho_", "ghs_", "ghu_", "github_pat_"] {
+            let token = format!("{}ABCDEFGH12345678", prefix);
+            let input = format!("token: {}", token);
+            let redacted = GitHubClient::redact_secrets(&input);
+            assert!(
+                !redacted.contains(&token),
+                "Token with prefix {} should be redacted",
+                prefix
+            );
+            assert!(
+                redacted.contains("[REDACTED_TOKEN]"),
+                "Should contain redaction marker for prefix {}",
+                prefix
+            );
+        }
+    }
+
+    #[test]
+    fn test_redact_secrets_bearer_token() {
+        let input = "Header: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig";
+        let redacted = GitHubClient::redact_secrets(input);
+        assert!(
+            !redacted.contains("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"),
+            "Bearer token should be redacted"
+        );
+        assert!(
+            redacted.contains("Bearer [REDACTED]"),
+            "Should contain Bearer redaction marker"
+        );
+    }
+
+    #[test]
+    fn test_redact_secrets_preserves_safe_text() {
+        let input = "HTTP 404 Not Found: repository owner/repo not accessible";
+        let redacted = GitHubClient::redact_secrets(input);
+        assert_eq!(
+            input, redacted,
+            "Text without secrets should pass through unchanged"
+        );
+    }
+
+    #[test]
+    fn test_redact_secrets_multiple_tokens() {
+        let input = "tokens: ghp_first123 and gho_second456 with Bearer abc.def.ghi";
+        let redacted = GitHubClient::redact_secrets(input);
+        assert!(!redacted.contains("ghp_first123"));
+        assert!(!redacted.contains("gho_second456"));
+        assert!(!redacted.contains("abc.def.ghi"));
+        // Should have two [REDACTED_TOKEN] markers and one Bearer [REDACTED].
+        assert_eq!(
+            redacted.matches("[REDACTED_TOKEN]").count(),
+            2,
+            "Should have 2 token redactions"
+        );
+        assert!(
+            redacted.contains("Bearer [REDACTED]"),
+            "Should have Bearer redaction"
+        );
     }
 }

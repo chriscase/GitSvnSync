@@ -182,6 +182,7 @@ impl<'a> InitialImport<'a> {
                 Some(&sha),
                 Some(&self.config.developer.svn_username),
                 Some(&format!("Snapshot import from SVN r{}", head_rev)),
+                true,
             )
             .ok();
 
@@ -298,6 +299,7 @@ impl<'a> InitialImport<'a> {
                     count,
                     log_entries.len()
                 )),
+                true,
             )
             .ok();
 

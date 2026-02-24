@@ -107,6 +107,7 @@ impl ConflictResolver {
             conflict.git_sha.as_deref(),
             Some(resolved_by),
             Some(&details),
+            true,
         );
 
         info!(conflict_id, resolution, "conflict resolved");

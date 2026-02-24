@@ -19,6 +19,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tracing::info;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
 use gitsvnsync_core::db::Database;
@@ -74,17 +76,18 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
-
     let cli = Cli::parse();
 
     // Resolve config path (expand ~).
     let config_path = expand_tilde(&cli.config);
+
+    // Load config early so we can use log_level and data_dir for tracing init.
+    // If the config file doesn't exist (e.g. stop/status on unconfigured system),
+    // fall back to simple tracing with default "info" level and no file appender.
+    let config_opt = PersonalConfig::load_from_file(&config_path).ok();
+
+    // Initialize tracing with config-aware log level and file appender.
+    init_tracing(config_opt.as_ref());
 
     match cli.command {
         Commands::Start { foreground } => cmd_start(&config_path, foreground).await,
@@ -100,6 +103,61 @@ async fn main() -> Result<()> {
             };
             cmd_import(&config_path, mode).await
         }
+    }
+}
+
+/// Initialize tracing with the personal config's `log_level` and file appender.
+///
+/// - If `RUST_LOG` is set, it overrides `personal.log_level`.
+/// - When a valid config is available, a non-blocking file appender writes to
+///   `{data_dir}/personal.log`. The file appender is NOT rolling — the file is
+///   appended to across daemon restarts.  Operators should use external log
+///   rotation (e.g. `logrotate`) for long-running deployments.
+/// - Console (stderr) output is always enabled.
+fn init_tracing(config: Option<&PersonalConfig>) {
+    let log_level = config
+        .map(|c| c.personal.log_level.as_str())
+        .unwrap_or("info");
+
+    // RUST_LOG takes precedence; otherwise use config log_level.
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(log_level));
+
+    // Console layer (always present).
+    let console_layer = tracing_subscriber::fmt::layer()
+        .with_target(true)
+        .with_thread_ids(false)
+        .with_file(false);
+
+    // Optionally add a file appender layer when config provides a valid data_dir.
+    if let Some(cfg) = config {
+        let data_dir = &cfg.personal.data_dir;
+        // Best-effort: create data_dir if it doesn't exist yet.
+        let _ = std::fs::create_dir_all(data_dir);
+
+        let file_appender = tracing_appender::rolling::never(data_dir, "personal.log");
+        let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+        // Leak the guard so the non-blocking writer lives for the process lifetime.
+        // This is intentional — the daemon runs until exit, and we need the writer
+        // to stay alive.  The OS reclaims the file handle on process exit.
+        std::mem::forget(_guard);
+
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_writer(non_blocking)
+            .with_target(true)
+            .with_ansi(false);
+
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(console_layer)
+            .with(file_layer)
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(console_layer)
+            .init();
     }
 }
 

@@ -68,6 +68,13 @@ General settings for the Personal Branch Mode daemon.
 |-----|------|---------|-------------|
 | `data_dir` | string | `"~/.local/share/gitsvnsync"` | Directory where GitSvnSync stores its SQLite database, cloned repositories, and sync state. Tilde (`~`) is expanded to your home directory. |
 | `poll_interval_secs` | integer | `30` | How often (in seconds) the daemon checks SVN for new revisions and GitHub for merged PRs. Lower values give faster sync but increase load on both servers. |
+| `log_level` | string | `"info"` | Minimum tracing level: `trace`, `debug`, `info`, `warn`, `error`. Applied as the default filter when the `RUST_LOG` environment variable is not set. If `RUST_LOG` is set, it takes precedence. |
+
+#### Log file
+
+The daemon writes structured log output to **`{data_dir}/personal.log`** in addition to stderr.
+The file is appended across daemon restarts (not rolled automatically). For long-running
+deployments, use external log rotation (e.g. `logrotate`).
 
 ### [svn]
 
@@ -359,6 +366,7 @@ For quick reference, here are all fields and their defaults:
 |-------|---------|
 | `personal.data_dir` | `"~/.local/share/gitsvnsync"` |
 | `personal.poll_interval_secs` | `30` |
+| `personal.log_level` | `"info"` |
 | `svn.url` | *(required, no default)* |
 | `svn.username` | *(required, no default)* |
 | `svn.password` | *(none)* |

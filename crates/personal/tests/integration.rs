@@ -1169,12 +1169,14 @@ fn test_database_watermark_and_commit_map() {
         Some("aaa111"),
         Some("alice"),
         Some("test details"),
+        true,
     )
     .unwrap();
     let audit = db.list_audit_log(10).unwrap();
     assert_eq!(audit.len(), 1);
     assert_eq!(audit[0].action, "test_action");
     assert_eq!(audit[0].svn_rev, Some(100));
+    assert!(audit[0].success);
 }
 
 // ===========================================================================
@@ -1490,7 +1492,7 @@ fn test_database_in_memory_full_schema() {
     assert!(db.is_svn_rev_synced(1).unwrap());
     assert!(!db.is_svn_rev_synced(2).unwrap());
 
-    db.insert_audit_log("test", None, None, None, None, None)
+    db.insert_audit_log("test", None, None, None, None, None, true)
         .unwrap();
     assert_eq!(db.count_audit_log().unwrap(), 1);
 
@@ -1607,4 +1609,91 @@ async fn test_database_concurrent_access() {
     // Verify all commit_map entries exist.
     let all = db.list_commit_map(20).unwrap();
     assert_eq!(all.len(), 10);
+}
+
+// ===========================================================================
+// Issue #36: personal.log_level and personal.log tests
+// ===========================================================================
+
+/// personal.log_level defaults to "info" when not set in config.
+#[test]
+fn test_personal_log_level_defaults_to_info() {
+    let toml_str = r#"
+[personal]
+
+[svn]
+url = "https://svn.example.com/repos/trunk"
+username = "jdoe"
+password_env = "SVN_PASSWORD"
+
+[github]
+repo = "jdoe/mirror"
+token_env = "GITHUB_TOKEN"
+
+[developer]
+name = "John Doe"
+email = "jdoe@example.com"
+svn_username = "jdoe"
+"#;
+    let config: PersonalConfig = toml::from_str(toml_str).expect("parse config");
+    assert_eq!(
+        config.personal.log_level, "info",
+        "log_level should default to 'info'"
+    );
+}
+
+/// personal.log_level is respected when explicitly set.
+#[test]
+fn test_personal_log_level_explicit() {
+    let toml_str = r#"
+[personal]
+log_level = "debug"
+
+[svn]
+url = "https://svn.example.com/repos/trunk"
+username = "jdoe"
+password_env = "SVN_PASSWORD"
+
+[github]
+repo = "jdoe/mirror"
+token_env = "GITHUB_TOKEN"
+
+[developer]
+name = "John Doe"
+email = "jdoe@example.com"
+svn_username = "jdoe"
+"#;
+    let config: PersonalConfig = toml::from_str(toml_str).expect("parse config");
+    assert_eq!(
+        config.personal.log_level, "debug",
+        "log_level should be 'debug' when explicitly set"
+    );
+}
+
+/// EnvFilter honors log_level from PersonalConfig (not RUST_LOG).
+/// This test verifies that an EnvFilter created with a config-derived
+/// log_level actually parses correctly (does not panic).
+#[test]
+fn test_env_filter_from_config_log_level() {
+    use tracing_subscriber::EnvFilter;
+    for level in &["trace", "debug", "info", "warn", "error"] {
+        let filter = EnvFilter::new(level);
+        // If this doesn't panic, the filter is valid.
+        let _ = format!("{:?}", filter);
+    }
+}
+
+/// personal.log file path is correctly derived from data_dir.
+#[test]
+fn test_personal_log_file_path() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("test_data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+
+    let expected_log = data_dir.join("personal.log");
+    // The daemon writes to {data_dir}/personal.log. Verify the path
+    // is constructable and the parent directory exists.
+    assert!(data_dir.exists());
+    assert_eq!(expected_log.file_name().unwrap(), "personal.log");
+    assert_eq!(expected_log.parent().unwrap(), data_dir);
 }

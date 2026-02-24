@@ -320,6 +320,7 @@ impl GitToSvnSync {
                             &commit.sha[..8.min(commit.sha.len())],
                             svn_rev
                         )),
+                        true,
                     ) {
                         warn!(error = %e, "failed to insert audit log entry (continuing)");
                     }
@@ -347,6 +348,7 @@ impl GitToSvnSync {
                             &commit.sha[..8.min(commit.sha.len())],
                             e
                         )),
+                        false,
                     );
 
                     return Err(e);

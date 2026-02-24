@@ -38,6 +38,7 @@ tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 
 # HTTP client
 reqwest = { version = "0.12", features = ["json"] }
@@ -74,6 +75,9 @@ comfy-table = "7"
 
 # Platform directories
 dirs = "5"
+
+# Regex (lightweight, no-std-compatible)
+regex-lite = "0.1"
 
 # Testing
 tempfile = "3"

@@ -224,6 +224,7 @@ impl SvnToGitSync {
                     rev,
                     &sha_str[..8.min(sha_str.len())]
                 )),
+                true,
             );
 
             synced_count += 1;

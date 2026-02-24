@@ -115,12 +115,13 @@ impl PersonalSyncEngine {
                 error!(error = %e, "SVN→Git sync failed");
                 self.db
                     .insert_audit_log(
-                        "error",
+                        "svn_to_git",
                         Some("svn_to_git"),
                         None,
                         None,
                         None,
                         Some(&e.to_string()),
+                        false,
                     )
                     .ok();
                 // Don't abort — still try Git→SVN
@@ -145,12 +146,13 @@ impl PersonalSyncEngine {
                 error!(error = %e, "Git→SVN sync failed");
                 self.db
                     .insert_audit_log(
-                        "error",
+                        "git_to_svn",
                         Some("git_to_svn"),
                         None,
                         None,
                         None,
                         Some(&e.to_string()),
+                        false,
                     )
                     .ok();
             }
@@ -165,7 +167,7 @@ impl PersonalSyncEngine {
             stats.svn_to_git_count, stats.git_to_svn_count, stats.prs_processed
         );
         self.db
-            .insert_audit_log("sync_cycle", None, None, None, None, Some(&detail))
+            .insert_audit_log("sync_cycle", None, None, None, None, Some(&detail), true)
             .ok();
 
         Ok(stats)

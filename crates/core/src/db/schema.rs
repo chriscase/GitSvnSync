@@ -121,6 +121,14 @@ static MIGRATIONS: &[(u32, &str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_pr_sync_log_status ON pr_sync_log (status);
         "#,
     ),
+    (
+        3,
+        "add success column to audit_log",
+        r#"
+        ALTER TABLE audit_log ADD COLUMN success INTEGER NOT NULL DEFAULT 1;
+        CREATE INDEX IF NOT EXISTS idx_audit_log_success ON audit_log (success);
+        "#,
+    ),
 ];
 
 /// Run all pending migrations against `conn`.
@@ -169,7 +177,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap();
-        assert_eq!(get_schema_version(&conn).unwrap(), 2);
+        assert_eq!(get_schema_version(&conn).unwrap(), 3);
     }
 
     #[test]

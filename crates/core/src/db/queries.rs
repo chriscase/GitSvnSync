@@ -72,6 +72,7 @@ pub struct AuditLogEntry {
     pub author: Option<String>,
     pub details: Option<String>,
     pub created_at: String,
+    pub success: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -635,7 +636,8 @@ impl Database {
 
     // -- audit_log ----------------------------------------------------------
 
-    /// Insert an audit-log entry.
+    /// Insert an audit-log entry with explicit success/failure.
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_audit_log(
         &self,
         action: &str,
@@ -644,33 +646,43 @@ impl Database {
         git_sha: Option<&str>,
         author: Option<&str>,
         details: Option<&str>,
+        success: bool,
     ) -> Result<i64, DatabaseError> {
         let now = Utc::now().to_rfc3339();
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO audit_log (action, direction, svn_rev, git_sha, author, details, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![action, direction, svn_rev, git_sha, author, details, now],
+            "INSERT INTO audit_log (action, direction, svn_rev, git_sha, author, details, created_at, success)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![action, direction, svn_rev, git_sha, author, details, now, success as i32],
         )?;
         let id = conn.last_insert_rowid();
-        debug!(id, action, "inserted audit_log entry");
+        debug!(id, action, success, "inserted audit_log entry");
         Ok(id)
     }
 
     /// Insert an audit entry from a model struct.
     pub fn insert_audit_entry(&self, entry: &models::AuditEntry) -> Result<i64, DatabaseError> {
-        self.insert_audit_log(&entry.action, None, None, None, None, Some(&entry.details))
+        self.insert_audit_log(
+            &entry.action,
+            None,
+            None,
+            None,
+            None,
+            Some(&entry.details),
+            entry.success,
+        )
     }
 
     /// List recent audit-log entries.
     pub fn list_audit_log(&self, limit: u32) -> Result<Vec<AuditLogEntry>, DatabaseError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, action, direction, svn_rev, git_sha, author, details, created_at
+            "SELECT id, action, direction, svn_rev, git_sha, author, details, created_at, success
              FROM audit_log ORDER BY id DESC LIMIT ?1",
         )?;
         let entries = stmt
             .query_map(params![limit], |row| {
+                let success_int: i32 = row.get(8)?;
                 Ok(AuditLogEntry {
                     id: row.get(0)?,
                     action: row.get(1)?,
@@ -680,6 +692,7 @@ impl Database {
                     author: row.get(5)?,
                     details: row.get(6)?,
                     created_at: row.get(7)?,
+                    success: success_int != 0,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -698,7 +711,7 @@ impl Database {
         let (sql, bound_params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
             match (since, action) {
                 (Some(since_dt), Some(act)) => (
-                    "SELECT id, action, author, details, created_at
+                    "SELECT id, action, author, details, created_at, success
                  FROM audit_log WHERE created_at >= ?1 AND action = ?2 ORDER BY id DESC LIMIT ?3"
                         .to_string(),
                     vec![
@@ -708,7 +721,7 @@ impl Database {
                     ],
                 ),
                 (Some(since_dt), None) => (
-                    "SELECT id, action, author, details, created_at
+                    "SELECT id, action, author, details, created_at, success
                  FROM audit_log WHERE created_at >= ?1 ORDER BY id DESC LIMIT ?2"
                         .to_string(),
                     vec![
@@ -717,7 +730,7 @@ impl Database {
                     ],
                 ),
                 (None, Some(act)) => (
-                    "SELECT id, action, author, details, created_at
+                    "SELECT id, action, author, details, created_at, success
                  FROM audit_log WHERE action = ?1 ORDER BY id DESC LIMIT ?2"
                         .to_string(),
                     vec![
@@ -726,7 +739,7 @@ impl Database {
                     ],
                 ),
                 (None, None) => (
-                    "SELECT id, action, author, details, created_at
+                    "SELECT id, action, author, details, created_at, success
                  FROM audit_log ORDER BY id DESC LIMIT ?1"
                         .to_string(),
                     vec![Box::new(limit as i64) as Box<dyn rusqlite::types::ToSql>],
@@ -743,14 +756,14 @@ impl Database {
                 let author: Option<String> = row.get(2)?;
                 let details: Option<String> = row.get(3)?;
                 let created_at: String = row.get(4)?;
-                let is_error = action.contains("error") || action.contains("fail");
+                let success_int: i32 = row.get(5)?;
                 Ok(models::WebAuditEntry {
                     id: id.to_string(),
                     timestamp: parse_datetime(&created_at),
                     action,
                     details: details.unwrap_or_default(),
                     actor: author,
-                    success: !is_error,
+                    success: success_int != 0,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -772,11 +785,12 @@ impl Database {
     ) -> Result<Vec<AuditLogEntry>, DatabaseError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, action, direction, svn_rev, git_sha, author, details, created_at
+            "SELECT id, action, direction, svn_rev, git_sha, author, details, created_at, success
              FROM audit_log WHERE action = ?1 ORDER BY id DESC LIMIT ?2",
         )?;
         let entries = stmt
             .query_map(params![action, limit], |row| {
+                let success_int: i32 = row.get(8)?;
                 Ok(AuditLogEntry {
                     id: row.get(0)?,
                     action: row.get(1)?,
@@ -786,17 +800,18 @@ impl Database {
                     author: row.get(5)?,
                     details: row.get(6)?,
                     created_at: row.get(7)?,
+                    success: success_int != 0,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(entries)
     }
 
-    /// Count audit entries that represent errors.
+    /// Count audit entries that represent failures (explicit `success = false`).
     pub fn count_errors(&self) -> Result<i64, DatabaseError> {
         let conn = self.conn();
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM audit_log WHERE action LIKE '%error%' OR action LIKE '%fail%'",
+            "SELECT COUNT(*) FROM audit_log WHERE success = 0",
             [],
             |row| row.get(0),
         )?;
@@ -1178,10 +1193,12 @@ mod tests {
             Some("abc"),
             Some("alice"),
             Some("test"),
+            true,
         )
         .unwrap();
         let entries = db.list_audit_log(10).unwrap();
         assert_eq!(entries.len(), 1);
+        assert!(entries[0].success);
         assert_eq!(db.count_audit_log().unwrap(), 1);
     }
 
@@ -1254,5 +1271,172 @@ mod tests {
 
         assert_eq!(db.count_pr_syncs_by_status("completed").unwrap(), 1);
         assert!(db.get_last_pr_sync_time().unwrap().is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #36: forensic logging tests
+    // -----------------------------------------------------------------------
+
+    /// Migration backward compatibility: a database at schema v2 (no success
+    /// column) can be migrated to v3 and existing rows get `success = 1`
+    /// (the DEFAULT).
+    #[test]
+    fn test_migration_backward_compat_audit_success() {
+        use rusqlite::Connection;
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+
+        // Apply only migrations 1 and 2 (pre-#36 schema).
+        crate::db::schema::run_migrations(&conn).unwrap();
+
+        // The column should now exist with the DEFAULT.  Manually insert a
+        // row *without* supplying success (simulating a pre-migration row
+        // written before the column existed).
+        conn.execute(
+            "INSERT INTO audit_log (action, created_at) VALUES ('legacy_action', datetime('now'))",
+            [],
+        )
+        .unwrap();
+
+        // Read back and verify the default is true (1).
+        let success: i32 = conn
+            .query_row(
+                "SELECT success FROM audit_log WHERE action = 'legacy_action'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(success, 1, "legacy rows should default to success = 1");
+    }
+
+    /// Explicit success/failure persistence: `insert_audit_log` with
+    /// `success = false` is queryable and counted by `count_errors`.
+    #[test]
+    fn test_audit_log_explicit_success_failure() {
+        let db = setup_db();
+
+        // Insert a success entry.
+        db.insert_audit_log("sync_ok", None, None, None, None, Some("all good"), true)
+            .unwrap();
+
+        // Insert a failure entry.
+        db.insert_audit_log(
+            "sync_cycle",
+            None,
+            None,
+            None,
+            None,
+            Some("connection refused"),
+            false,
+        )
+        .unwrap();
+
+        // count_errors should return 1 (only the failed one).
+        assert_eq!(db.count_errors().unwrap(), 1);
+
+        // list_audit_log should have correct success flags.
+        let entries = db.list_audit_log(10).unwrap();
+        assert_eq!(entries.len(), 2);
+        // Newest first.
+        assert!(!entries[0].success); // sync_cycle failure
+        assert!(entries[1].success); // sync_ok success
+    }
+
+    /// Error counting uses `success = false`, NOT action-name heuristics.
+    /// An action named "error_recovery" that succeeded should NOT be counted
+    /// as an error.
+    #[test]
+    fn test_count_errors_ignores_action_name() {
+        let db = setup_db();
+
+        // Action name contains "error" but success = true.
+        db.insert_audit_log("error_recovery", None, None, None, None, Some("recovered"), true)
+            .unwrap();
+
+        // Action name is benign but success = false.
+        db.insert_audit_log("sync_cycle", None, None, None, None, Some("timeout"), false)
+            .unwrap();
+
+        // Only the actual failure should be counted.
+        assert_eq!(db.count_errors().unwrap(), 1);
+    }
+
+    /// `insert_audit_entry` uses the model's `success` field, not inferred
+    /// from the action name.
+    #[test]
+    fn test_insert_audit_entry_uses_model_success() {
+        let db = setup_db();
+
+        let success_entry = crate::models::AuditEntry::success("sync_cycle", "ok");
+        let failure_entry = crate::models::AuditEntry::failure("sync_cycle", "failed: timeout");
+
+        db.insert_audit_entry(&success_entry).unwrap();
+        db.insert_audit_entry(&failure_entry).unwrap();
+
+        let entries = db.list_audit_log(10).unwrap();
+        assert_eq!(entries.len(), 2);
+        // Newest first.
+        assert!(!entries[0].success);
+        assert!(entries[1].success);
+        assert_eq!(db.count_errors().unwrap(), 1);
+    }
+
+    /// `list_audit_entries` (web layer) reads persisted success, not
+    /// heuristics.
+    #[test]
+    fn test_list_audit_entries_web_reads_persisted_success() {
+        let db = setup_db();
+
+        // Success entry with "error" in action name — must still show success.
+        db.insert_audit_log("error_recovery", None, None, None, None, Some("ok"), true)
+            .unwrap();
+        // Failure entry with benign action name.
+        db.insert_audit_log("sync_cycle", None, None, None, None, Some("boom"), false)
+            .unwrap();
+
+        let entries = db.list_audit_entries(10, None, None).unwrap();
+        assert_eq!(entries.len(), 2);
+
+        let recovery = entries.iter().find(|e| e.action == "error_recovery").unwrap();
+        assert!(recovery.success, "error_recovery with success=true should show success");
+
+        let cycle = entries.iter().find(|e| e.action == "sync_cycle").unwrap();
+        assert!(!cycle.success, "sync_cycle with success=false should show failure");
+    }
+
+    /// Forced team-mode failure → failed audit entry + error count increments.
+    /// This simulates what the team-mode sync engine does when a sync cycle
+    /// fails: it writes an `AuditEntry::failure(...)` via `insert_audit_entry`.
+    #[test]
+    fn test_team_mode_forced_failure_audit_entry() {
+        let db = setup_db();
+
+        // Simulate successful sync cycle (team mode).
+        let ok = crate::models::AuditEntry::success("sync_cycle", "synced 3 commits");
+        db.insert_audit_entry(&ok).unwrap();
+
+        // Simulate failed sync cycle (team mode).
+        let fail = crate::models::AuditEntry::failure("sync_cycle", "svn connection timeout");
+        db.insert_audit_entry(&fail).unwrap();
+
+        // Another success.
+        let ok2 = crate::models::AuditEntry::success("sync_cycle", "synced 1 commit");
+        db.insert_audit_entry(&ok2).unwrap();
+
+        // count_errors should be exactly 1.
+        assert_eq!(db.count_errors().unwrap(), 1);
+
+        // Total audit entries should be 3.
+        assert_eq!(db.count_audit_log().unwrap(), 3);
+
+        // The failed entry should be retrievable with correct details.
+        let all = db.list_audit_log(10).unwrap();
+        let failures: Vec<_> = all.iter().filter(|e| !e.success).collect();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(
+            failures[0].details.as_deref(),
+            Some("svn connection timeout")
+        );
     }
 }
