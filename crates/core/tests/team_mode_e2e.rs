@@ -778,3 +778,99 @@ async fn test_team_mode_git_to_svn_multi_commit_order() {
         "watermark must point to the latest Git commit"
     );
 }
+
+// ===========================================================================
+// Test 8: Forced failure → persisted failed audit entry + error count
+// ===========================================================================
+
+/// When `SyncEngine::run_sync_cycle()` fails (e.g. invalid SVN URL), the
+/// engine must:
+/// 1. Persist a failed audit entry (`success = false`).
+/// 2. Increment `count_errors()`.
+/// 3. Set sync state to "error".
+///
+/// This test is deterministic: it uses a valid Git repo but an invalid SVN
+/// URL that is guaranteed to fail during `fetch_svn_changes()`.
+#[tokio::test]
+async fn test_team_mode_forced_failure_persists_audit_entry() {
+    if !svn_available() {
+        eprintln!("SKIPPED: svn/svnadmin not found in PATH");
+        return;
+    }
+
+    let tmp = TempDir::new().unwrap();
+
+    // Point at a non-existent SVN repository — deterministic failure.
+    let bad_svn_url = format!(
+        "file://{}/this_repo_does_not_exist_12345",
+        tmp.path().display()
+    );
+
+    // Set up a valid Git repo (the engine needs one to construct).
+    let git_work_dir = tmp.path().join("git_work");
+    let bare_dir = tmp.path().join("origin.git");
+    let git_client = setup_git_with_bare_origin(&git_work_dir, &bare_dir);
+
+    // Seed watermarks so the engine tries to contact SVN.
+    let db = setup_db(&tmp.path().join("sync.db"));
+    let head_sha = get_head_sha(&git_work_dir);
+    let _ = db.set_state("last_git_hash", &head_sha);
+
+    // Verify no errors before the cycle.
+    assert_eq!(
+        db.count_errors().unwrap(),
+        0,
+        "expected 0 errors before sync"
+    );
+
+    let config = make_app_config(&bad_svn_url, tmp.path());
+    let svn_client = SvnClient::new(&bad_svn_url, "", "");
+    let mapper = Arc::new(make_identity_mapper());
+
+    let engine = SyncEngine::new(config, db, svn_client, git_client, mapper);
+
+    // run_sync_cycle should return Err (SVN info fails on bad URL).
+    let result = engine.run_sync_cycle().await;
+    assert!(
+        result.is_err(),
+        "sync cycle should fail with invalid SVN URL"
+    );
+
+    // --- Verify acceptance criteria ---
+
+    // 1. A failed audit entry was persisted.
+    let audit_entries = engine.db().list_audit_log(10).unwrap();
+    assert!(
+        !audit_entries.is_empty(),
+        "expected at least 1 audit entry after failed sync"
+    );
+    let latest = &audit_entries[0]; // newest first
+    assert_eq!(latest.action, "sync_cycle");
+    assert!(
+        !latest.success,
+        "audit entry should have success=false for failed cycle"
+    );
+    assert!(
+        latest.details.as_deref().unwrap_or("").contains("sync failed"),
+        "audit details should describe the failure, got: {:?}",
+        latest.details
+    );
+
+    // 2. count_errors() incremented.
+    let error_count = engine.db().count_errors().unwrap();
+    assert_eq!(
+        error_count, 1,
+        "count_errors should be 1 after one failed sync cycle"
+    );
+
+    // 3. Sync state is "error".
+    let sync_state = engine
+        .db()
+        .get_state("sync_state")
+        .unwrap()
+        .unwrap_or_default();
+    assert_eq!(
+        sync_state, "error",
+        "sync_state should be 'error' after failed cycle"
+    );
+}

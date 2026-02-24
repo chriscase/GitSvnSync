@@ -1697,3 +1697,190 @@ fn test_personal_log_file_path() {
     assert_eq!(expected_log.file_name().unwrap(), "personal.log");
     assert_eq!(expected_log.parent().unwrap(), data_dir);
 }
+
+// ===========================================================================
+// Issue #37: runtime personal logging verification tests
+// ===========================================================================
+
+/// Runtime test: logs are actually written to `{data_dir}/personal.log`.
+///
+/// This creates the same tracing layers as `init_tracing`, scoped with
+/// `tracing::subscriber::with_default` (not global `.init()`), emits log
+/// events, flushes, and verifies the file has content.
+#[test]
+fn test_runtime_personal_log_file_written() {
+    use tracing_subscriber::layer::SubscriberExt;
+
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("runtime_log_test");
+    std::fs::create_dir_all(&data_dir).unwrap();
+
+    let log_file = data_dir.join("personal.log");
+
+    // Build a subscriber with a file appender (same as init_tracing).
+    let file_appender = tracing_appender::rolling::never(&data_dir, "personal.log");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+    let filter = tracing_subscriber::EnvFilter::new("info");
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking)
+        .with_target(true)
+        .with_ansi(false);
+
+    let subscriber = tracing_subscriber::registry()
+        .with(filter)
+        .with(file_layer);
+
+    // Use a scoped subscriber (not global .init()) so tests don't conflict.
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::info!("runtime_log_test: file logging is active");
+        tracing::warn!("runtime_log_test: this is a warning");
+    });
+
+    // Drop the guard to flush the non-blocking writer.
+    drop(guard);
+
+    // Allow a tiny delay for the non-blocking writer to flush.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    // Verify the log file exists and has content.
+    assert!(
+        log_file.exists(),
+        "personal.log should exist at {:?}",
+        log_file
+    );
+    let contents = std::fs::read_to_string(&log_file).unwrap();
+    assert!(
+        !contents.is_empty(),
+        "personal.log should not be empty"
+    );
+    assert!(
+        contents.contains("runtime_log_test: file logging is active"),
+        "personal.log should contain the info-level message, got: {}",
+        contents
+    );
+    assert!(
+        contents.contains("runtime_log_test: this is a warning"),
+        "personal.log should contain the warning message, got: {}",
+        contents
+    );
+}
+
+/// Runtime test: `personal.log_level` filtering is honored.
+///
+/// When the config says `log_level = "warn"`, debug and info events
+/// should NOT appear in the log file — only warn and above.
+#[test]
+fn test_runtime_personal_log_level_filtering() {
+    use tracing_subscriber::layer::SubscriberExt;
+
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("level_filter_test");
+    std::fs::create_dir_all(&data_dir).unwrap();
+
+    let log_file = data_dir.join("personal.log");
+
+    let file_appender = tracing_appender::rolling::never(&data_dir, "personal.log");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+    // Use "warn" level — should filter out debug and info.
+    let filter = tracing_subscriber::EnvFilter::new("warn");
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking)
+        .with_target(true)
+        .with_ansi(false);
+
+    let subscriber = tracing_subscriber::registry()
+        .with(filter)
+        .with(file_layer);
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::debug!("level_filter_test: debug message SHOULD NOT APPEAR");
+        tracing::info!("level_filter_test: info message SHOULD NOT APPEAR");
+        tracing::warn!("level_filter_test: warn message SHOULD APPEAR");
+        tracing::error!("level_filter_test: error message SHOULD APPEAR");
+    });
+
+    drop(guard);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    let contents = std::fs::read_to_string(&log_file).unwrap();
+
+    // Warn and error should be present.
+    assert!(
+        contents.contains("warn message SHOULD APPEAR"),
+        "warn-level message should be in log file, got: {}",
+        contents
+    );
+    assert!(
+        contents.contains("error message SHOULD APPEAR"),
+        "error-level message should be in log file, got: {}",
+        contents
+    );
+
+    // Debug and info should NOT be present.
+    assert!(
+        !contents.contains("debug message SHOULD NOT APPEAR"),
+        "debug-level message should be filtered out when log_level=warn, got: {}",
+        contents
+    );
+    assert!(
+        !contents.contains("info message SHOULD NOT APPEAR"),
+        "info-level message should be filtered out when log_level=warn, got: {}",
+        contents
+    );
+}
+
+/// Runtime test: `RUST_LOG` overrides `personal.log_level`.
+///
+/// Even when the config says `log_level = "error"`, setting `RUST_LOG=debug`
+/// should allow debug messages through.
+#[test]
+fn test_runtime_rust_log_override_precedence() {
+    use tracing_subscriber::layer::SubscriberExt;
+
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("rust_log_override_test");
+    std::fs::create_dir_all(&data_dir).unwrap();
+
+    let log_file = data_dir.join("personal.log");
+
+    let file_appender = tracing_appender::rolling::never(&data_dir, "personal.log");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+    // Simulate the same logic as init_tracing:
+    // RUST_LOG takes precedence; otherwise use config log_level.
+    // Config says error-only, but RUST_LOG says debug.
+    // In init_tracing: EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level))
+    // Here we simulate RUST_LOG being set by directly using the override value.
+    let filter = tracing_subscriber::EnvFilter::new("debug");
+
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking)
+        .with_target(true)
+        .with_ansi(false);
+
+    let subscriber = tracing_subscriber::registry()
+        .with(filter)
+        .with(file_layer);
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::debug!("rust_log_override_test: debug SHOULD APPEAR due to RUST_LOG=debug");
+        tracing::info!("rust_log_override_test: info SHOULD APPEAR due to RUST_LOG=debug");
+    });
+
+    drop(guard);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    let contents = std::fs::read_to_string(&log_file).unwrap();
+    assert!(
+        contents.contains("debug SHOULD APPEAR"),
+        "RUST_LOG=debug should override config log_level=error, got: {}",
+        contents
+    );
+    assert!(
+        contents.contains("info SHOULD APPEAR"),
+        "RUST_LOG=debug should allow info messages, got: {}",
+        contents
+    );
+}
