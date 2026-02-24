@@ -483,8 +483,7 @@ impl AppConfig {
 
         // SVN webhook secret
         if let Some(ref env_name) = self.svn.webhook_secret_env {
-            self.svn.webhook_secret =
-                resolve_optional_env(env_name, "svn.webhook_secret_env");
+            self.svn.webhook_secret = resolve_optional_env(env_name, "svn.webhook_secret_env");
         }
 
         // Web admin password

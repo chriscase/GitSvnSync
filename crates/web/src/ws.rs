@@ -36,9 +36,7 @@ async fn ws_handler(
 ) -> Result<impl IntoResponse, axum::http::StatusCode> {
     // Authenticate the WebSocket upgrade if auth is configured
     if state.config.web.admin_password.is_some() {
-        let token = query
-            .token
-            .ok_or(axum::http::StatusCode::UNAUTHORIZED)?;
+        let token = query.token.ok_or(axum::http::StatusCode::UNAUTHORIZED)?;
 
         let now = Utc::now();
         let sessions = state.sessions.read().await;

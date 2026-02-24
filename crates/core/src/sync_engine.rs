@@ -367,9 +367,8 @@ impl SyncEngine {
 
             if !diff_applied {
                 // Fallback: use svn export to copy changed files.
-                let export_dir = tempfile::tempdir().map_err(|e| {
-                    SyncError::GitError(crate::errors::GitError::IoError(e))
-                })?;
+                let export_dir = tempfile::tempdir()
+                    .map_err(|e| SyncError::GitError(crate::errors::GitError::IoError(e)))?;
                 self.svn_client
                     .export("", change.revision, export_dir.path())
                     .await
@@ -498,9 +497,8 @@ impl SyncEngine {
                 .map_err(SyncError::GitError)?;
 
             // 2. Prepare an SVN working copy. Use a temporary checkout.
-            let svn_wc_dir = tempfile::tempdir().map_err(|e| {
-                SyncError::SvnError(crate::errors::SvnError::IoError(e))
-            })?;
+            let svn_wc_dir = tempfile::tempdir()
+                .map_err(|e| SyncError::SvnError(crate::errors::SvnError::IoError(e)))?;
             self.svn_client
                 .checkout_head(svn_wc_dir.path())
                 .await
@@ -709,9 +707,7 @@ impl SyncEngine {
                 continue;
             }
             // Populate changed_files from the commit's diff.
-            let files = git
-                .get_changed_files(&c.sha)
-                .map_err(SyncError::GitError)?;
+            let files = git.get_changed_files(&c.sha).map_err(SyncError::GitError)?;
             let changed_files: Vec<ChangedFile> = files
                 .into_iter()
                 .map(|(action, path)| ChangedFile {

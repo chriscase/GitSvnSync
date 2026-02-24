@@ -331,9 +331,9 @@ impl GitClient {
             None
         };
 
-        let diff =
-            self.repo
-                .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
+        let diff = self
+            .repo
+            .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
 
         let mut changes = Vec::new();
         diff.foreach(
@@ -584,14 +584,10 @@ mod tests {
         let client = GitClient::new(dir.path()).unwrap();
 
         std::fs::write(dir.path().join("data.txt"), "version 1").unwrap();
-        let oid1 = client
-            .commit("v1", "T", "t@t.com", "T", "t@t.com")
-            .unwrap();
+        let oid1 = client.commit("v1", "T", "t@t.com", "T", "t@t.com").unwrap();
 
         std::fs::write(dir.path().join("data.txt"), "version 2").unwrap();
-        let oid2 = client
-            .commit("v2", "T", "t@t.com", "T", "t@t.com")
-            .unwrap();
+        let oid2 = client.commit("v2", "T", "t@t.com", "T", "t@t.com").unwrap();
 
         // Read content at commit 1
         let content1 = client

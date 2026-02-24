@@ -58,7 +58,7 @@ gitsvnsync personal conflicts resolve <id> --accept svn   # keep SVN version
 gitsvnsync personal conflicts resolve <id> --accept git   # keep Git version
 ```
 
-There is no "manual edit" option for binary conflicts. You can use `max_file_size` in `[options]` to skip files above a certain size, and `ignore_patterns` to exclude specific paths entirely.
+There is no "manual edit" option for binary conflicts. Use `max_file_size` in `[options]` to skip files above a certain size, and `ignore_patterns` to exclude specific paths entirely. Both options are **enforced at runtime** across all sync paths (import, SVN→Git, Git→SVN). Blocked files produce structured log warnings and `file_policy_skip` audit entries — there is no silent pass-through.
 
 ### What happens if I delete a file in Git?
 
@@ -103,7 +103,7 @@ In personal mode, the Git-to-SVN direction is **PR-gated**:
 4. You merge the PR (using any strategy: merge, squash, or rebase)
 5. The daemon detects the merged PR and replays its commits to SVN
 
-Direct pushes to `main` are **not** synced to SVN by default. This is intentional: the PR workflow gives you a review checkpoint before changes go back to SVN. You can change this with `sync_direct_pushes = true` in `[options]`, but it is not recommended.
+Direct pushes to `main` are **not** synced to SVN. The `sync_direct_pushes` option exists in config but is **not yet implemented** — setting it to `true` will cause a validation error at startup. The PR workflow gives you a review checkpoint before changes go back to SVN.
 
 ## Platform Support
 

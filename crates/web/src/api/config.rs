@@ -73,7 +73,11 @@ async fn get_config(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<ConfigResponse>, AppError> {
-    validate_session(&state, headers.get("authorization").and_then(|v| v.to_str().ok())).await?;
+    validate_session(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
 
     let cfg = &state.config;
 

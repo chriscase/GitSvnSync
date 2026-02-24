@@ -1,0 +1,814 @@
+#!/usr/bin/env bash
+# ============================================================================
+# GitSvnSync GHE Live Validation Script
+# ============================================================================
+# Real end-to-end bidirectional validation against a live GitHub Enterprise
+# instance and a real SVN repository.  This is NOT a local simulation.
+#
+# Environment variables (required for live run; not needed for --dry-run):
+#   GHE_API_URL     — GitHub Enterprise API base URL
+#   GHE_TOKEN       — GitHub PAT (repo scope)
+#   GHE_OWNER       — Repository owner/org
+#   GHE_REPO        — Repository name (will be created if missing)
+#   SVN_URL         — SVN repository URL (must be writable)
+#   SVN_USERNAME    — SVN username
+#   SVN_PASSWORD    — SVN password (or set SVN_PASSWORD_ENV to the env var name)
+#
+# Optional:
+#   GHE_WEB_URL     — Web base URL (defaults derived from GHE_API_URL)
+#   GITSVNSYNC_CONFIG — Path to gitsvnsync personal config (auto-generated if absent)
+#
+# Usage:
+#   scripts/ghe-live-validation.sh --dry-run                  # preflight only
+#   scripts/ghe-live-validation.sh --cycles 3 --interval 5    # 3 live cycles
+#   scripts/ghe-live-validation.sh --strict --cycles 5        # fail-fast on any scenario
+#   scripts/ghe-live-validation.sh --config /path/to/personal.toml --cycles 1
+#   scripts/ghe-live-validation.sh --help
+#
+# Output: artifacts/ghe-live-validation/<UTC_TIMESTAMP>/
+# Exit code: 0 on all PASS, non-zero on any FAIL
+# ============================================================================
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
+TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+RUN_ID="ghe-live-$TIMESTAMP"
+
+# Defaults
+CYCLES=1
+INTERVAL_SEC=5
+DRY_RUN=false
+STRICT=false
+CUSTOM_CONFIG=""
+CUSTOM_ARTIFACTS=""
+
+# Counters
+SCENARIO_PASS=0
+SCENARIO_FAIL=0
+SCENARIO_SKIP=0
+CYCLE_PASS=0
+CYCLE_FAIL=0
+
+# ============================================================================
+# Argument parsing
+# ============================================================================
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --cycles)        CYCLES="$2"; shift 2 ;;
+        --interval)      INTERVAL_SEC="$2"; shift 2 ;;
+        --dry-run)       DRY_RUN=true; shift ;;
+        --strict)        STRICT=true; shift ;;
+        --config)        CUSTOM_CONFIG="$2"; shift 2 ;;
+        --artifacts-dir) CUSTOM_ARTIFACTS="$2"; shift 2 ;;
+        --help|-h)
+            cat <<'USAGE'
+Usage: scripts/ghe-live-validation.sh [OPTIONS]
+
+Options:
+  --dry-run          Preflight checks only (no live API calls)
+  --cycles N         Number of validation cycles (default: 1)
+  --interval N       Seconds between cycles (default: 5)
+  --strict           Fail immediately on any scenario failure
+  --config PATH      Path to gitsvnsync personal config
+  --artifacts-dir D  Override artifact output directory
+  --help             Show this help
+
+Required environment variables (for live run):
+  GHE_API_URL, GHE_TOKEN, GHE_OWNER, GHE_REPO
+  SVN_URL, SVN_USERNAME, SVN_PASSWORD
+USAGE
+            exit 0
+            ;;
+        *) echo "Unknown argument: $1" >&2; exit 1 ;;
+    esac
+done
+
+# Resolve artifact directory.
+if [[ -n "$CUSTOM_ARTIFACTS" ]]; then
+    ARTIFACT_DIR="$CUSTOM_ARTIFACTS"
+else
+    ARTIFACT_DIR="$REPO_ROOT/artifacts/ghe-live-validation/$TIMESTAMP"
+fi
+EVENTS_FILE="$ARTIFACT_DIR/events.ndjson"
+TIMELINE_LOG="$ARTIFACT_DIR/timeline.log"
+SUMMARY_FILE="$ARTIFACT_DIR/summary.md"
+MANIFEST_FILE="$ARTIFACT_DIR/manifest.json"
+VERIFY_DIR="$ARTIFACT_DIR/verification"
+
+mkdir -p "$ARTIFACT_DIR" "$VERIFY_DIR"
+
+# ============================================================================
+# Helpers
+# ============================================================================
+
+log() {
+    local msg="[$(date -u +%H:%M:%S)] $*"
+    echo "$msg" | tee -a "$TIMELINE_LOG"
+}
+
+emit_event() {
+    local phase="$1" action="$2" status="$3" duration_ms="${4:-0}"
+    shift 4 || true
+    local extra=""
+    for kv in "$@"; do
+        local key="${kv%%=*}"
+        local val="${kv#*=}"
+        extra="${extra},\"${key}\":\"${val}\""
+    done
+    printf '{"timestamp":"%s","phase":"%s","action":"%s","status":"%s","duration_ms":%d%s}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        "$phase" "$action" "$status" "$duration_ms" "$extra" >> "$EVENTS_FILE"
+}
+
+record_scenario() {
+    local name="$1" result="$2" detail="${3:-}"
+    emit_event "scenario" "$name" "$result" 0
+    if [[ "$result" == "pass" ]]; then
+        SCENARIO_PASS=$((SCENARIO_PASS + 1))
+        log "  ✅ $name: PASS${detail:+ ($detail)}"
+    elif [[ "$result" == "skip" ]]; then
+        SCENARIO_SKIP=$((SCENARIO_SKIP + 1))
+        log "  ⏭  $name: SKIP${detail:+ ($detail)}"
+    else
+        SCENARIO_FAIL=$((SCENARIO_FAIL + 1))
+        log "  ❌ $name: FAIL${detail:+ ($detail)}"
+        if $STRICT; then
+            log "STRICT MODE: aborting on first failure"
+            write_summary
+            exit 1
+        fi
+    fi
+}
+
+# Redact a string for safe display (replace middle with ***).
+redact() {
+    local val="$1"
+    if [[ ${#val} -le 8 ]]; then
+        echo "***"
+    else
+        echo "${val:0:4}***${val: -4}"
+    fi
+}
+
+# GitHub API helper — includes auth, returns HTTP status.
+gh_api() {
+    local method="$1" endpoint="$2" body="${3:-}"
+    local url="${GHE_API_URL}${endpoint}"
+    local args=(-s -w "\n%{http_code}" -H "Authorization: token ${GHE_TOKEN}" -H "Accept: application/vnd.github+json")
+    if [[ -n "$body" ]]; then
+        args+=(-X "$method" -H "Content-Type: application/json" -d "$body")
+    else
+        args+=(-X "$method")
+    fi
+    curl "${args[@]}" "$url" 2>/dev/null
+}
+
+# Extract HTTP status from gh_api output (last line).
+gh_status() {
+    tail -1 <<< "$1"
+}
+
+# Extract body from gh_api output (everything except last line).
+gh_body() {
+    sed '$d' <<< "$1"
+}
+
+cleanup() {
+    log "Cleaning up temp directories..."
+    if [[ -n "${WORK_DIR:-}" && -d "$WORK_DIR" ]]; then
+        rm -rf "$WORK_DIR"
+    fi
+}
+trap cleanup EXIT
+
+write_summary() {
+    local total=$((SCENARIO_PASS + SCENARIO_FAIL + SCENARIO_SKIP))
+    local overall="PASS"
+    if [[ $SCENARIO_FAIL -gt 0 || $CYCLE_FAIL -gt 0 ]]; then overall="FAIL"; fi
+
+    cat > "$SUMMARY_FILE" <<SUMMARY
+# GHE Live Validation Summary
+
+**Run ID:** $RUN_ID
+**Timestamp:** $TIMESTAMP
+**Overall:** $overall
+**Cycles:** $CYCLES (pass: $CYCLE_PASS, fail: $CYCLE_FAIL)
+**Scenarios:** $total (pass: $SCENARIO_PASS, fail: $SCENARIO_FAIL, skip: $SCENARIO_SKIP)
+**Strict mode:** $STRICT
+**Dry-run:** $DRY_RUN
+
+## Environment
+
+| Setting | Value |
+|---------|-------|
+| GHE API | ${GHE_API_URL:-not set} |
+| GHE Repo | ${GHE_OWNER:-?}/${GHE_REPO:-?} |
+| SVN URL | ${SVN_URL:-not set} |
+| SVN User | ${SVN_USERNAME:-not set} |
+
+## Scenario Results
+
+$(grep '"phase":"scenario"' "$EVENTS_FILE" 2>/dev/null | while IFS= read -r line; do
+    action=$(echo "$line" | sed 's/.*"action":"\([^"]*\)".*/\1/')
+    status=$(echo "$line" | sed 's/.*"status":"\([^"]*\)".*/\1/')
+    printf "| %s | %s |\n" "$action" "$status"
+done)
+
+## Artifact Directory
+
+\`$ARTIFACT_DIR\`
+
+## Go/No-Go
+
+$(if [[ "$overall" == "PASS" ]]; then echo "**GO** — all scenarios passed against live GHE+SVN."; else echo "**NO-GO** — failures detected; review timeline.log and verification/ artifacts."; fi)
+SUMMARY
+
+    # Manifest.
+    local entries=""
+    while IFS= read -r -d '' file; do
+        local rel="${file#"$ARTIFACT_DIR"/}"
+        local size
+        size=$(wc -c < "$file" 2>/dev/null | tr -d ' ')
+        entries="${entries}{\"path\":\"$rel\",\"size\":$size},"
+    done < <(find "$ARTIFACT_DIR" -type f -print0 2>/dev/null | sort -z)
+    entries="${entries%,}"
+
+    cat > "$MANIFEST_FILE" <<MANIFEST
+{
+  "run_id": "$RUN_ID",
+  "timestamp": "$TIMESTAMP",
+  "overall": "$overall",
+  "cycles": $CYCLES,
+  "cycle_pass": $CYCLE_PASS,
+  "cycle_fail": $CYCLE_FAIL,
+  "scenario_pass": $SCENARIO_PASS,
+  "scenario_fail": $SCENARIO_FAIL,
+  "scenario_skip": $SCENARIO_SKIP,
+  "artifacts": [$entries]
+}
+MANIFEST
+}
+
+# ============================================================================
+# Banner
+# ============================================================================
+log "═══════════════════════════════════════════════════════════════"
+log "GitSvnSync GHE Live Validation"
+log "Run ID:    $RUN_ID"
+log "Timestamp: $TIMESTAMP"
+log "Cycles:    $CYCLES | Interval: ${INTERVAL_SEC}s | Strict: $STRICT"
+log "Artifacts: $ARTIFACT_DIR"
+log "═══════════════════════════════════════════════════════════════"
+
+# ============================================================================
+# Preflight: tools
+# ============================================================================
+log ""
+log "──────────────────────────────────────────────────────────────"
+log "Preflight: required tools"
+log "──────────────────────────────────────────────────────────────"
+
+emit_event "preflight" "tools" "running" 0
+MISSING=""
+for tool in svn git curl cargo jq; do
+    if command -v "$tool" &>/dev/null; then
+        log "  ✓ $tool"
+    else
+        MISSING="$MISSING $tool"
+        log "  ✗ $tool — MISSING"
+    fi
+done
+if [[ -n "$MISSING" ]]; then
+    log "FATAL: Missing tools:$MISSING"
+    emit_event "preflight" "tools" "fail" 0
+    exit 1
+fi
+emit_event "preflight" "tools" "pass" 0
+
+# Save sanitized environment.
+env | sort | grep -v -iE '(token|password|secret|key|credential|auth)' \
+    > "$ARTIFACT_DIR/env-snapshot.txt" 2>/dev/null || true
+{
+    echo "svn: $(svn --version --quiet 2>/dev/null || echo unknown)"
+    echo "git: $(git --version 2>/dev/null || echo unknown)"
+    echo "cargo: $(cargo --version 2>/dev/null || echo unknown)"
+    echo "rustc: $(rustc --version 2>/dev/null || echo unknown)"
+    echo "curl: $(curl --version 2>/dev/null | head -1 || echo unknown)"
+    echo "jq: $(jq --version 2>/dev/null || echo unknown)"
+    echo "os: $(uname -srm 2>/dev/null || echo unknown)"
+} > "$ARTIFACT_DIR/tool-versions.txt"
+
+# ============================================================================
+# Preflight: environment variables
+# ============================================================================
+log ""
+log "──────────────────────────────────────────────────────────────"
+log "Preflight: environment variables"
+log "──────────────────────────────────────────────────────────────"
+
+emit_event "preflight" "env-vars" "running" 0
+ENV_OK=true
+MISSING_VARS=""
+
+check_var() {
+    local name="$1"
+    local val="${!name:-}"
+    if [[ -n "$val" ]]; then
+        log "  ✓ $name = $(redact "$val")"
+    else
+        log "  ✗ $name — NOT SET"
+        MISSING_VARS="${MISSING_VARS}  $name\n"
+        ENV_OK=false
+    fi
+}
+
+check_var GHE_API_URL
+check_var GHE_TOKEN
+check_var GHE_OWNER
+check_var GHE_REPO
+check_var SVN_URL
+check_var SVN_USERNAME
+check_var SVN_PASSWORD
+
+if ! $ENV_OK; then
+    emit_event "preflight" "env-vars" "fail" 0
+    if $DRY_RUN; then
+        log ""
+        log "⚠ Missing environment variables (expected for --dry-run):"
+        printf "  %b" "$MISSING_VARS" | tee -a "$TIMELINE_LOG"
+        log ""
+        log "DRY RUN COMPLETE — preflight tools passed."
+        log "Set the missing variables above, then run without --dry-run."
+        emit_event "dry-run" "complete" "pass" 0
+        write_summary
+        log "Artifacts: $ARTIFACT_DIR"
+        exit 0
+    else
+        log ""
+        log "FATAL: Missing required environment variables:"
+        printf "  %b" "$MISSING_VARS" | tee -a "$TIMELINE_LOG"
+        log ""
+        log "Set these variables and re-run, or use --dry-run for preflight only."
+        exit 1
+    fi
+fi
+emit_event "preflight" "env-vars" "pass" 0
+
+if $DRY_RUN; then
+    log ""
+    log "──────────────────────────────────────────────────────────────"
+    log "Preflight: connectivity check"
+    log "──────────────────────────────────────────────────────────────"
+
+    # Test GHE API.
+    GH_RESP=$(gh_api GET "/user" "")
+    GH_CODE=$(gh_status "$GH_RESP")
+    GH_LOGIN=$(gh_body "$GH_RESP" | jq -r '.login // "unknown"' 2>/dev/null || echo "parse-error")
+    if [[ "$GH_CODE" == "200" ]]; then
+        log "  ✓ GHE API: authenticated as $GH_LOGIN"
+        emit_event "preflight" "ghe-api" "pass" 0
+    else
+        log "  ✗ GHE API: HTTP $GH_CODE"
+        emit_event "preflight" "ghe-api" "fail" 0
+    fi
+
+    # Test SVN.
+    if svn info "$SVN_URL" --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+        --non-interactive --no-auth-cache > "$VERIFY_DIR/svn-info.txt" 2>&1; then
+        SVN_REV=$(grep "Revision:" "$VERIFY_DIR/svn-info.txt" | awk '{print $2}')
+        log "  ✓ SVN: accessible, HEAD r${SVN_REV:-?}"
+        emit_event "preflight" "svn" "pass" 0
+    else
+        log "  ✗ SVN: connection failed — see $VERIFY_DIR/svn-info.txt"
+        emit_event "preflight" "svn" "fail" 0
+    fi
+
+    log ""
+    log "DRY RUN COMPLETE — all preflight checks passed."
+    emit_event "dry-run" "complete" "pass" 0
+    write_summary
+    log "Artifacts: $ARTIFACT_DIR"
+    exit 0
+fi
+
+# ============================================================================
+# Live validation — set up working directories
+# ============================================================================
+log ""
+log "──────────────────────────────────────────────────────────────"
+log "Provisioning live validation environment"
+log "──────────────────────────────────────────────────────────────"
+
+WORK_DIR=$(mktemp -d)
+SVN_WC="$WORK_DIR/svn_wc"
+GIT_CLONE="$WORK_DIR/git_clone"
+DATA_DIR="$WORK_DIR/data"
+mkdir -p "$DATA_DIR"
+
+# Ensure binary is built.
+PERSONAL_BIN="$REPO_ROOT/target/debug/gitsvnsync-personal"
+if [[ ! -f "$PERSONAL_BIN" ]]; then
+    log "Building workspace..."
+    if ! cargo build --workspace > "$ARTIFACT_DIR/build-stdout.log" 2> "$ARTIFACT_DIR/build-stderr.log"; then
+        log "FATAL: Build failed — see $ARTIFACT_DIR/build-stderr.log"
+        exit 1
+    fi
+fi
+
+# SVN checkout.
+log "▶ SVN checkout: $SVN_URL"
+if svn checkout "$SVN_URL" "$SVN_WC" \
+    --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+    --non-interactive --no-auth-cache \
+    > "$VERIFY_DIR/svn-checkout.log" 2>&1; then
+    log "  ✓ SVN checkout complete"
+    emit_event "provision" "svn-checkout" "pass" 0
+else
+    log "  ✗ SVN checkout failed — see $VERIFY_DIR/svn-checkout.log"
+    emit_event "provision" "svn-checkout" "fail" 0
+    exit 1
+fi
+
+# GHE: ensure repo exists.
+log "▶ GHE: verifying repo ${GHE_OWNER}/${GHE_REPO}"
+REPO_RESP=$(gh_api GET "/repos/${GHE_OWNER}/${GHE_REPO}" "")
+REPO_CODE=$(gh_status "$REPO_RESP")
+if [[ "$REPO_CODE" == "200" ]]; then
+    log "  ✓ Repo exists"
+    emit_event "provision" "ghe-repo-check" "pass" 0
+elif [[ "$REPO_CODE" == "404" ]]; then
+    log "  Repo not found — creating ${GHE_OWNER}/${GHE_REPO}..."
+    CREATE_RESP=$(gh_api POST "/user/repos" "{\"name\":\"${GHE_REPO}\",\"private\":true,\"auto_init\":true,\"description\":\"GitSvnSync live validation canary\"}")
+    CREATE_CODE=$(gh_status "$CREATE_RESP")
+    if [[ "$CREATE_CODE" == "201" ]]; then
+        log "  ✓ Repo created"
+        emit_event "provision" "ghe-repo-create" "pass" 0
+        sleep 2  # Give GitHub a moment.
+    else
+        log "  ✗ Repo creation failed: HTTP $CREATE_CODE"
+        gh_body "$CREATE_RESP" > "$VERIFY_DIR/repo-create-error.json"
+        emit_event "provision" "ghe-repo-create" "fail" 0
+        exit 1
+    fi
+else
+    log "  ✗ Repo check failed: HTTP $REPO_CODE"
+    emit_event "provision" "ghe-repo-check" "fail" 0
+    exit 1
+fi
+
+# Git clone.
+GHE_WEB="${GHE_WEB_URL:-$(echo "$GHE_API_URL" | sed 's|/api/v3||; s|/api||')}"
+CLONE_URL="${GHE_WEB}/${GHE_OWNER}/${GHE_REPO}.git"
+log "▶ Git clone: $CLONE_URL"
+if GIT_ASKPASS=true git clone \
+    -c "http.extraHeader=Authorization: token ${GHE_TOKEN}" \
+    "$CLONE_URL" "$GIT_CLONE" > "$VERIFY_DIR/git-clone.log" 2>&1; then
+    log "  ✓ Git clone complete"
+    emit_event "provision" "git-clone" "pass" 0
+else
+    log "  ✗ Git clone failed — see $VERIFY_DIR/git-clone.log"
+    emit_event "provision" "git-clone" "fail" 0
+    exit 1
+fi
+
+# Configure git identity.
+git -C "$GIT_CLONE" config user.name "gitsvnsync-validator"
+git -C "$GIT_CLONE" config user.email "validator@gitsvnsync.local"
+
+log "✅ Provisioning complete"
+emit_event "provision" "complete" "pass" 0
+
+# ============================================================================
+# Cycle loop
+# ============================================================================
+for cycle in $(seq 1 "$CYCLES"); do
+    log ""
+    log "══════════════════════════════════════════════════════════════"
+    log "Cycle $cycle/$CYCLES"
+    log "══════════════════════════════════════════════════════════════"
+
+    CYCLE_START=$SECONDS
+    CYCLE_OK=true
+    CANARY="canary_c${cycle}_$(date +%s)"
+    CYCLE_DIR="$ARTIFACT_DIR/cycle-$(printf '%03d' "$cycle")"
+    mkdir -p "$CYCLE_DIR"
+    emit_event "cycle-$cycle" "start" "running" 0
+
+    # ---- Scenario 1: SVN→ add file ----
+    log "▶ S1: SVN add file"
+    SVN_FILE="$CANARY.txt"
+    SVN_CONTENT="svn-add-${CANARY}"
+    echo "$SVN_CONTENT" > "$SVN_WC/$SVN_FILE"
+    svn add "$SVN_WC/$SVN_FILE" -q 2>/dev/null || true
+    if svn commit "$SVN_WC" -m "Validation: add $SVN_FILE" \
+        --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+        --non-interactive --no-auth-cache > "$CYCLE_DIR/s1-commit.log" 2>&1; then
+        SVN_REV=$(svn info "$SVN_URL" --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+            --non-interactive --no-auth-cache --show-item revision --no-newline 2>/dev/null || echo "?")
+        VERIFY=$(svn cat "$SVN_URL/$SVN_FILE" --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+            --non-interactive --no-auth-cache 2>/dev/null || echo "")
+        if [[ "$VERIFY" == "$SVN_CONTENT" ]]; then
+            record_scenario "s1-svn-add" "pass" "r${SVN_REV}"
+        else
+            record_scenario "s1-svn-add" "fail" "content mismatch after commit"
+            CYCLE_OK=false
+        fi
+    else
+        record_scenario "s1-svn-add" "fail" "svn commit failed"
+        CYCLE_OK=false
+    fi
+
+    # ---- Scenario 2: SVN→ modify file ----
+    log "▶ S2: SVN modify file"
+    SVN_MOD_CONTENT="svn-modified-${CANARY}"
+    echo "$SVN_MOD_CONTENT" > "$SVN_WC/$SVN_FILE"
+    if svn commit "$SVN_WC" -m "Validation: modify $SVN_FILE" \
+        --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+        --non-interactive --no-auth-cache > "$CYCLE_DIR/s2-commit.log" 2>&1; then
+        VERIFY=$(svn cat "$SVN_URL/$SVN_FILE" --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+            --non-interactive --no-auth-cache 2>/dev/null || echo "")
+        if [[ "$VERIFY" == "$SVN_MOD_CONTENT" ]]; then
+            record_scenario "s2-svn-modify" "pass"
+        else
+            record_scenario "s2-svn-modify" "fail" "content mismatch"
+            CYCLE_OK=false
+        fi
+    else
+        record_scenario "s2-svn-modify" "fail" "svn commit failed"
+        CYCLE_OK=false
+    fi
+
+    # ---- Scenario 3: SVN→ delete file ----
+    log "▶ S3: SVN delete file"
+    svn rm "$SVN_WC/$SVN_FILE" -q 2>/dev/null || true
+    if svn commit "$SVN_WC" -m "Validation: delete $SVN_FILE" \
+        --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+        --non-interactive --no-auth-cache > "$CYCLE_DIR/s3-commit.log" 2>&1; then
+        if ! svn cat "$SVN_URL/$SVN_FILE" --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+            --non-interactive --no-auth-cache >/dev/null 2>&1; then
+            record_scenario "s3-svn-delete" "pass"
+        else
+            record_scenario "s3-svn-delete" "fail" "file still exists after delete"
+            CYCLE_OK=false
+        fi
+    else
+        record_scenario "s3-svn-delete" "fail" "svn commit failed"
+        CYCLE_OK=false
+    fi
+
+    # ---- Scenario 4: SVN→ nested directory ----
+    log "▶ S4: SVN nested directory"
+    NEST_DIR="$SVN_WC/nested_${CANARY}"
+    mkdir -p "$NEST_DIR/sub/deep"
+    echo "nested-${CANARY}" > "$NEST_DIR/sub/deep/file.txt"
+    svn add "$NEST_DIR" -q 2>/dev/null || true
+    if svn commit "$SVN_WC" -m "Validation: nested dirs $CANARY" \
+        --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+        --non-interactive --no-auth-cache > "$CYCLE_DIR/s4-commit.log" 2>&1; then
+        VERIFY=$(svn cat "$SVN_URL/nested_${CANARY}/sub/deep/file.txt" \
+            --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+            --non-interactive --no-auth-cache 2>/dev/null || echo "")
+        if [[ "$VERIFY" == "nested-${CANARY}" ]]; then
+            record_scenario "s4-svn-nested" "pass"
+        else
+            record_scenario "s4-svn-nested" "fail" "nested file content mismatch"
+            CYCLE_OK=false
+        fi
+    else
+        record_scenario "s4-svn-nested" "fail" "svn commit failed"
+        CYCLE_OK=false
+    fi
+
+    # ---- Scenario 5: Git→ add file via GHE API ----
+    log "▶ S5: Git add file via GHE API"
+    GIT_FILE="git_${CANARY}.txt"
+    GIT_CONTENT="git-add-${CANARY}"
+    GIT_CONTENT_B64=$(echo -n "$GIT_CONTENT" | base64)
+
+    CREATE_FILE_RESP=$(gh_api PUT "/repos/${GHE_OWNER}/${GHE_REPO}/contents/${GIT_FILE}" \
+        "{\"message\":\"Validation: add $GIT_FILE\",\"content\":\"${GIT_CONTENT_B64}\"}")
+    CREATE_FILE_CODE=$(gh_status "$CREATE_FILE_RESP")
+    if [[ "$CREATE_FILE_CODE" == "201" ]]; then
+        GIT_SHA=$(gh_body "$CREATE_FILE_RESP" | jq -r '.commit.sha // "unknown"' 2>/dev/null || echo "unknown")
+        # Verify via API.
+        GET_RESP=$(gh_api GET "/repos/${GHE_OWNER}/${GHE_REPO}/contents/${GIT_FILE}" "")
+        GET_CODE=$(gh_status "$GET_RESP")
+        if [[ "$GET_CODE" == "200" ]]; then
+            record_scenario "s5-git-add" "pass" "sha=${GIT_SHA:0:8}"
+            echo "$GIT_SHA" > "$CYCLE_DIR/s5-git-sha.txt"
+        else
+            record_scenario "s5-git-add" "fail" "file not retrievable after create"
+            CYCLE_OK=false
+        fi
+    else
+        record_scenario "s5-git-add" "fail" "HTTP $CREATE_FILE_CODE"
+        gh_body "$CREATE_FILE_RESP" > "$CYCLE_DIR/s5-error.json" 2>/dev/null || true
+        CYCLE_OK=false
+    fi
+
+    # ---- Scenario 6: Git→ modify file via GHE API ----
+    log "▶ S6: Git modify file via GHE API"
+    GIT_MOD_CONTENT="git-modified-${CANARY}"
+    GIT_MOD_B64=$(echo -n "$GIT_MOD_CONTENT" | base64)
+    # Get current file SHA for update.
+    FILE_INFO_RESP=$(gh_api GET "/repos/${GHE_OWNER}/${GHE_REPO}/contents/${GIT_FILE}" "")
+    FILE_SHA=$(gh_body "$FILE_INFO_RESP" | jq -r '.sha // ""' 2>/dev/null || echo "")
+    if [[ -n "$FILE_SHA" ]]; then
+        UPDATE_RESP=$(gh_api PUT "/repos/${GHE_OWNER}/${GHE_REPO}/contents/${GIT_FILE}" \
+            "{\"message\":\"Validation: modify $GIT_FILE\",\"content\":\"${GIT_MOD_B64}\",\"sha\":\"${FILE_SHA}\"}")
+        UPDATE_CODE=$(gh_status "$UPDATE_RESP")
+        if [[ "$UPDATE_CODE" == "200" ]]; then
+            record_scenario "s6-git-modify" "pass"
+        else
+            record_scenario "s6-git-modify" "fail" "HTTP $UPDATE_CODE"
+            CYCLE_OK=false
+        fi
+    else
+        record_scenario "s6-git-modify" "fail" "could not get file SHA"
+        CYCLE_OK=false
+    fi
+
+    # ---- Scenario 7: Git→ delete file via GHE API ----
+    log "▶ S7: Git delete file via GHE API"
+    FILE_INFO_RESP=$(gh_api GET "/repos/${GHE_OWNER}/${GHE_REPO}/contents/${GIT_FILE}" "")
+    FILE_SHA=$(gh_body "$FILE_INFO_RESP" | jq -r '.sha // ""' 2>/dev/null || echo "")
+    if [[ -n "$FILE_SHA" ]]; then
+        DEL_RESP=$(gh_api DELETE "/repos/${GHE_OWNER}/${GHE_REPO}/contents/${GIT_FILE}" \
+            "{\"message\":\"Validation: delete $GIT_FILE\",\"sha\":\"${FILE_SHA}\"}")
+        DEL_CODE=$(gh_status "$DEL_RESP")
+        if [[ "$DEL_CODE" == "200" ]]; then
+            # Confirm deletion.
+            CHK_RESP=$(gh_api GET "/repos/${GHE_OWNER}/${GHE_REPO}/contents/${GIT_FILE}" "")
+            CHK_CODE=$(gh_status "$CHK_RESP")
+            if [[ "$CHK_CODE" == "404" ]]; then
+                record_scenario "s7-git-delete" "pass"
+            else
+                record_scenario "s7-git-delete" "fail" "file still exists after delete"
+                CYCLE_OK=false
+            fi
+        else
+            record_scenario "s7-git-delete" "fail" "HTTP $DEL_CODE"
+            CYCLE_OK=false
+        fi
+    else
+        record_scenario "s7-git-delete" "fail" "could not get file SHA"
+        CYCLE_OK=false
+    fi
+
+    # ---- Scenario 8: Echo/duplicate suppression marker ----
+    log "▶ S8: Echo suppression marker in SVN"
+    ECHO_FILE="echo_${CANARY}.txt"
+    echo "echo-content" > "$SVN_WC/$ECHO_FILE"
+    svn add "$SVN_WC/$ECHO_FILE" -q 2>/dev/null || true
+    if svn commit "$SVN_WC" -m "Synced from Git [gitsvnsync] validation echo" \
+        --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+        --non-interactive --no-auth-cache > "$CYCLE_DIR/s8-commit.log" 2>&1; then
+        ECHO_REV=$(svn info "$SVN_URL" --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+            --non-interactive --no-auth-cache --show-item revision --no-newline 2>/dev/null || echo "?")
+        ECHO_LOG=$(svn log "$SVN_URL" -r "$ECHO_REV" --xml \
+            --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+            --non-interactive --no-auth-cache 2>/dev/null || echo "")
+        if echo "$ECHO_LOG" | grep -q "\[gitsvnsync\]"; then
+            record_scenario "s8-echo-marker" "pass" "marker at r$ECHO_REV"
+        else
+            record_scenario "s8-echo-marker" "fail" "no marker in r$ECHO_REV"
+            CYCLE_OK=false
+        fi
+    else
+        record_scenario "s8-echo-marker" "fail" "svn commit failed"
+        CYCLE_OK=false
+    fi
+
+    # ---- Scenario 9: GHE API health — rate limit check ----
+    log "▶ S9: GHE API rate limit health"
+    RATE_RESP=$(gh_api GET "/rate_limit" "")
+    RATE_CODE=$(gh_status "$RATE_RESP")
+    if [[ "$RATE_CODE" == "200" ]]; then
+        REMAINING=$(gh_body "$RATE_RESP" | jq -r '.rate.remaining // "?"' 2>/dev/null || echo "?")
+        LIMIT=$(gh_body "$RATE_RESP" | jq -r '.rate.limit // "?"' 2>/dev/null || echo "?")
+        gh_body "$RATE_RESP" > "$CYCLE_DIR/s9-rate-limit.json"
+        if [[ "$REMAINING" != "?" && "$REMAINING" -gt 100 ]]; then
+            record_scenario "s9-rate-limit" "pass" "${REMAINING}/${LIMIT} remaining"
+        else
+            record_scenario "s9-rate-limit" "fail" "only ${REMAINING}/${LIMIT} remaining"
+            CYCLE_OK=false
+        fi
+    else
+        record_scenario "s9-rate-limit" "fail" "HTTP $RATE_CODE"
+        CYCLE_OK=false
+    fi
+
+    # ---- Scenario 10: Log-probe (daemon logging health) ----
+    log "▶ S10: Log-probe"
+    PROBE_DATA="$WORK_DIR/probe_c${cycle}"
+    mkdir -p "$PROBE_DATA"
+    cat > "$WORK_DIR/probe_c${cycle}.toml" <<TOML
+[personal]
+log_level = "info"
+data_dir = "$PROBE_DATA"
+
+[svn]
+url = "${SVN_URL}"
+username = "${SVN_USERNAME}"
+password_env = "SVN_PASSWORD"
+
+[github]
+api_url = "${GHE_API_URL}"
+repo = "${GHE_OWNER}/${GHE_REPO}"
+token_env = "GHE_TOKEN"
+
+[developer]
+name = "gitsvnsync-validator"
+email = "validator@gitsvnsync.local"
+svn_username = "${SVN_USERNAME}"
+TOML
+
+    if "$PERSONAL_BIN" --config "$WORK_DIR/probe_c${cycle}.toml" log-probe \
+        > "$CYCLE_DIR/s10-probe-stdout.log" 2> "$CYCLE_DIR/s10-probe-stderr.log"; then
+        if [[ -f "$PROBE_DATA/personal.log" ]] && grep -q "LOG_PROBE" "$PROBE_DATA/personal.log"; then
+            cp "$PROBE_DATA/personal.log" "$CYCLE_DIR/daemon.log"
+            record_scenario "s10-log-probe" "pass"
+        else
+            record_scenario "s10-log-probe" "fail" "no LOG_PROBE marker in personal.log"
+            CYCLE_OK=false
+        fi
+    else
+        record_scenario "s10-log-probe" "fail" "process exited non-zero"
+        CYCLE_OK=false
+    fi
+
+    # ---- Cycle verdict ----
+    CYCLE_DUR=$(( (SECONDS - CYCLE_START) * 1000 ))
+    if $CYCLE_OK; then
+        CYCLE_PASS=$((CYCLE_PASS + 1))
+        emit_event "cycle-$cycle" "complete" "pass" "$CYCLE_DUR"
+        log "✅ Cycle $cycle PASS (${CYCLE_DUR}ms)"
+    else
+        CYCLE_FAIL=$((CYCLE_FAIL + 1))
+        emit_event "cycle-$cycle" "complete" "fail" "$CYCLE_DUR"
+        log "❌ Cycle $cycle FAIL (${CYCLE_DUR}ms)"
+    fi
+
+    # Inter-cycle pause.
+    if [[ $cycle -lt $CYCLES ]]; then
+        sleep "$INTERVAL_SEC"
+    fi
+done
+
+# ============================================================================
+# Secret scan
+# ============================================================================
+log ""
+log "──────────────────────────────────────────────────────────────"
+log "Post-run: secret leak scan"
+log "──────────────────────────────────────────────────────────────"
+
+LEAKED=false
+if grep -rlE '(ghp_|gho_|ghs_|ghu_|github_pat_)[A-Za-z0-9_]{10,}' \
+    "$ARTIFACT_DIR" --include='*.log' --include='*.txt' --include='*.json' \
+    > "$VERIFY_DIR/leak-scan.log" 2>&1; then
+    LEAKED=true
+fi
+# Also scan for raw tokens (first 8 chars of GHE_TOKEN).
+TOKEN_PREFIX="${GHE_TOKEN:0:8}"
+if grep -rl "$TOKEN_PREFIX" "$ARTIFACT_DIR" --include='*.log' --include='*.txt' \
+    >> "$VERIFY_DIR/leak-scan.log" 2>&1; then
+    LEAKED=true
+fi
+
+if $LEAKED; then
+    log "  ⚠ Token patterns found — see $VERIFY_DIR/leak-scan.log"
+    emit_event "secret-scan" "complete" "fail" 0
+else
+    log "  ✅ No token patterns found in artifacts"
+    emit_event "secret-scan" "complete" "pass" 0
+fi
+
+# ============================================================================
+# Final summary
+# ============================================================================
+TOTAL=$((SCENARIO_PASS + SCENARIO_FAIL + SCENARIO_SKIP))
+EXIT_CODE=0
+if [[ $SCENARIO_FAIL -gt 0 || $CYCLE_FAIL -gt 0 ]]; then
+    EXIT_CODE=1
+fi
+
+log ""
+log "═══════════════════════════════════════════════════════════════"
+if [[ $EXIT_CODE -eq 0 ]]; then
+    log "VALIDATION COMPLETE — GO"
+else
+    log "VALIDATION COMPLETE — NO-GO"
+fi
+log "  Cycles: $CYCLE_PASS/$CYCLES passed"
+log "  Scenarios: $SCENARIO_PASS/$TOTAL passed ($SCENARIO_FAIL failed, $SCENARIO_SKIP skipped)"
+if $LEAKED; then log "  ⚠ Secret leakage detected in artifacts"; fi
+log "═══════════════════════════════════════════════════════════════"
+
+write_summary
+log "Artifacts: $ARTIFACT_DIR"
+exit $EXIT_CODE

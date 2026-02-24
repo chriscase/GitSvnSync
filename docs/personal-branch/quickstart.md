@@ -180,7 +180,7 @@ Meanwhile, if someone else commits directly to SVN, those changes appear in your
 - **First sync latency**: new SVN commits and merged PRs sync within your configured poll interval (default 30 seconds).
 - **SVN commit metadata**: when Git commits are synced to SVN, the SVN commit message includes trailers with the Git SHA, PR number, and branch name.
 - **Git commit metadata**: when SVN commits are synced to Git, the Git commit message includes trailers with the SVN revision number, author, and timestamp.
-- **Direct pushes are ignored by default**: only merged PRs are synced to SVN. This prevents work-in-progress pushes from polluting SVN. You can change this with `sync_direct_pushes = true` in the config.
+- **Only merged PRs are synced to SVN**: direct pushes to the default branch are ignored. This prevents work-in-progress pushes from polluting SVN. (The `sync_direct_pushes` option exists in the config schema but is **not yet implemented**; the daemon rejects `sync_direct_pushes = true` at startup.)
 - **No SVN server changes needed**: Personal Branch Mode uses your regular SVN credentials. There are no hooks or admin access required on the SVN side.
 
 ## Next Steps

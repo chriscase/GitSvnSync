@@ -13,6 +13,7 @@ Common issues and solutions for GitSvnSync Personal Branch Mode.
 - [Database is Corrupted](#database-is-corrupted)
 - [Daemon Won't Start](#daemon-wont-start)
 - [PR Not Syncing to SVN](#pr-not-syncing-to-svn)
+- [Files Skipped by Policy](#files-skipped-by-policy)
 - [How to Reset Sync State](#how-to-reset-sync-state)
 - [Log File Location and Verbosity](#log-file-location-and-verbosity)
 - [Getting Help](#getting-help)
@@ -337,6 +338,21 @@ The database uses SQLite with WAL mode for crash resilience, but abrupt terminat
 
 **Symptom**: `gitsvnsync personal start` reports an error or exits immediately.
 
+### Config validation error (`sync_direct_pushes`)
+
+If you see an error like:
+
+```
+Error: invalid config: options.sync_direct_pushes: sync_direct_pushes is not yet implemented in personal mode
+```
+
+This means your config has `sync_direct_pushes = true`, which is not yet supported. Remove the line or set it to `false`:
+
+```toml
+[options]
+sync_direct_pushes = false   # only merged PRs are synced (default)
+```
+
 ### Stale PID file
 
 If the daemon crashed or was killed without cleanup, a stale PID file may block startup:
@@ -463,6 +479,44 @@ gitsvnsync personal start --foreground
 ```
 
 Watch the output for messages about the PR being detected, skipped, or encountering errors.
+
+## Files Skipped by Policy
+
+**Symptom**: Certain files in SVN do not appear in your Git mirror, or files from merged PRs are not committed to SVN. The log contains warnings like `file_policy_skip`.
+
+The daemon enforces two file-level policies from the `[options]` section of your config:
+
+- **`max_file_size`**: Files exceeding this byte limit are skipped. Set to `0` (default) to disable the size limit.
+- **`ignore_patterns`**: Files matching any glob pattern in this list are skipped. Empty list (default) means no patterns.
+
+These policies are enforced across all sync paths: initial import, SVN-to-Git, and Git-to-SVN.
+
+**Step 1**: Check the audit log for skip events:
+
+```bash
+sqlite3 ~/.local/share/gitsvnsync/personal.db \
+  "SELECT timestamp, action, details FROM audit_log WHERE action = 'file_policy_skip' ORDER BY timestamp DESC LIMIT 20;"
+```
+
+Each entry includes the file path, the reason (oversize or ignored pattern), and which sync direction triggered the skip.
+
+**Step 2**: Review your config policy:
+
+```toml
+[options]
+max_file_size = 10485760   # 10 MB -- files larger than this are skipped
+ignore_patterns = ["*.log", "build/**", "*.tmp"]
+```
+
+**Step 3**: To allow a previously blocked file, adjust the policy and re-import:
+
+```bash
+# Edit your config to raise the size limit or remove the pattern
+# Then re-import to pick up the file
+gitsvnsync personal import --snapshot
+```
+
+Files blocked by policy are never silently passed through. Every skip produces a structured log warning and an audit entry.
 
 ## How to Reset Sync State
 

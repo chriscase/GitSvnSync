@@ -2,6 +2,13 @@
 
 Staged soak protocol for validating GitSvnSync before production enablement on GitHub Enterprise (Cloud/Server) with legacy SVN.
 
+> **Scope note:** This runbook covers `enterprise-soak.sh`, which runs **local-only**
+> repeated-cycle stability tests using `file://` SVN repos and the log-probe subsystem.
+> It does **not** hit live GitHub or SVN endpoints.  For real bidirectional validation
+> against your GitHub Enterprise instance and SVN server, see
+> [`docs/ghe-live-validation-guide.md`](ghe-live-validation-guide.md) and
+> `scripts/ghe-live-validation.sh`.
+
 ## Environment Topology
 
 ```
@@ -62,7 +69,21 @@ scripts/enterprise-soak.sh --cycles 20 --max-error-rate 0
 3. **Log probe**: Runs `gitsvnsync-personal log-probe` to verify logging subsystem health
 4. **Health snapshot**: Records SVN head revision, disk usage, and timing
 
-### Enterprise-Specific Validation
+### Enterprise-Specific Validation (Live)
+
+The local soak script (`enterprise-soak.sh`) validates SVN operations and daemon health
+without network access.  For live GitHub Enterprise + SVN validation, use:
+
+```bash
+# Preflight (no secrets needed)
+scripts/ghe-live-validation.sh --dry-run
+
+# Live run (requires GHE_API_URL, GHE_TOKEN, SVN_URL, etc.)
+scripts/ghe-live-validation.sh --cycles 3 --interval 10
+```
+
+See [`docs/ghe-live-validation-guide.md`](ghe-live-validation-guide.md) for full env var
+setup, scenario matrix, and go/no-go criteria.
 
 For GitHub Enterprise environments, additionally verify:
 

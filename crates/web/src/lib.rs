@@ -16,9 +16,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::extract::DefaultBodyLimit;
+use axum::http::{header, Method};
 use axum::Router;
 use tokio::sync::broadcast;
-use axum::http::{header, Method};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info;

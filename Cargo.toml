@@ -79,5 +79,8 @@ dirs = "5"
 # Regex (lightweight, no-std-compatible)
 regex-lite = "0.1"
 
+# Glob pattern matching
+glob-match = "0.2"
+
 # Testing
 tempfile = "3"

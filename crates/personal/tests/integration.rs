@@ -1727,9 +1727,7 @@ fn test_runtime_personal_log_file_written() {
         .with_target(true)
         .with_ansi(false);
 
-    let subscriber = tracing_subscriber::registry()
-        .with(filter)
-        .with(file_layer);
+    let subscriber = tracing_subscriber::registry().with(filter).with(file_layer);
 
     // Use a scoped subscriber (not global .init()) so tests don't conflict.
     tracing::subscriber::with_default(subscriber, || {
@@ -1750,10 +1748,7 @@ fn test_runtime_personal_log_file_written() {
         log_file
     );
     let contents = std::fs::read_to_string(&log_file).unwrap();
-    assert!(
-        !contents.is_empty(),
-        "personal.log should not be empty"
-    );
+    assert!(!contents.is_empty(), "personal.log should not be empty");
     assert!(
         contents.contains("runtime_log_test: file logging is active"),
         "personal.log should contain the info-level message, got: {}",
@@ -1790,9 +1785,7 @@ fn test_runtime_personal_log_level_filtering() {
         .with_target(true)
         .with_ansi(false);
 
-    let subscriber = tracing_subscriber::registry()
-        .with(filter)
-        .with(file_layer);
+    let subscriber = tracing_subscriber::registry().with(filter).with(file_layer);
 
     tracing::subscriber::with_default(subscriber, || {
         tracing::debug!("level_filter_test: debug message SHOULD NOT APPEAR");
@@ -1881,10 +1874,7 @@ svn_username = "testuser"
 fn test_spawn_personal_log_file_written() {
     let bin = personal_binary_path();
     if !bin.exists() {
-        eprintln!(
-            "SKIPPED: gitsvnsync-personal binary not found at {:?}",
-            bin
-        );
+        eprintln!("SKIPPED: gitsvnsync-personal binary not found at {:?}", bin);
         return;
     }
 
@@ -1914,10 +1904,7 @@ fn test_spawn_personal_log_file_written() {
         log_file
     );
     let contents = std::fs::read_to_string(&log_file).unwrap();
-    assert!(
-        !contents.is_empty(),
-        "personal.log should not be empty"
-    );
+    assert!(!contents.is_empty(), "personal.log should not be empty");
     assert!(
         contents.contains("LOG_PROBE"),
         "personal.log should contain LOG_PROBE marker, got: {}",
@@ -1954,8 +1941,7 @@ fn test_spawn_config_only_log_level_filtering() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let contents =
-        std::fs::read_to_string(data_dir.join("personal.log")).unwrap();
+    let contents = std::fs::read_to_string(data_dir.join("personal.log")).unwrap();
 
     // warn and error should be present.
     assert!(
@@ -2009,8 +1995,7 @@ fn test_spawn_rust_log_override_precedence() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let contents =
-        std::fs::read_to_string(data_dir.join("personal.log")).unwrap();
+    let contents = std::fs::read_to_string(data_dir.join("personal.log")).unwrap();
 
     // RUST_LOG=debug should override config error-only level.
     assert!(
@@ -2054,9 +2039,7 @@ fn test_runtime_rust_log_override_precedence() {
         .with_target(true)
         .with_ansi(false);
 
-    let subscriber = tracing_subscriber::registry()
-        .with(filter)
-        .with(file_layer);
+    let subscriber = tracing_subscriber::registry().with(filter).with(file_layer);
 
     tracing::subscriber::with_default(subscriber, || {
         tracing::debug!("rust_log_override_test: debug SHOULD APPEAR due to RUST_LOG=debug");
@@ -2077,4 +2060,332 @@ fn test_runtime_rust_log_override_precedence() {
         "RUST_LOG=debug should allow info messages, got: {}",
         contents
     );
+}
+
+// ===========================================================================
+// File policy tests (#43): max_file_size and ignore_patterns enforcement
+// ===========================================================================
+
+/// Files under the size limit should sync normally (SVN→Git).
+#[tokio::test]
+async fn test_file_policy_under_limit_syncs() {
+    if !svn_available() {
+        eprintln!("SKIP: svn/svnadmin not available");
+        return;
+    }
+
+    let dir = TempDir::new().unwrap();
+    let svn_url = create_svn_repo(dir.path());
+    let svn_wc = dir.path().join("svn_wc");
+    svn_checkout(&svn_url, &svn_wc);
+
+    // Commit a small file (50 bytes, well under any limit).
+    svn_commit_file(
+        &svn_wc,
+        "small.txt",
+        "hello world - small file",
+        "add small file",
+    );
+
+    let git_work = dir.path().join("git_work");
+    let git_bare = dir.path().join("git_bare");
+    let git_client = setup_git_with_bare_origin(&git_work, &git_bare);
+    let git_client = Arc::new(Mutex::new(git_client));
+
+    let data_dir = dir.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let db = Arc::new(setup_db(&data_dir.join("test.db")));
+
+    let mut config = make_test_config(&svn_url, &data_dir);
+    // Set a max_file_size of 1000 bytes — small.txt is well under.
+    config.options.max_file_size = 1000;
+
+    let svn_client = SvnClient::new(&svn_url, "", "");
+    let sync = SvnToGitSync::new(svn_client, git_client, db, config);
+
+    let count = sync.sync().await.unwrap();
+    assert_eq!(count, 1, "one revision should sync");
+
+    // Verify the file made it into the Git working tree.
+    assert!(
+        git_work.join("small.txt").exists(),
+        "small.txt should be in Git tree"
+    );
+}
+
+/// Files exceeding max_file_size should be skipped (SVN→Git).
+#[tokio::test]
+async fn test_file_policy_oversize_skipped() {
+    if !svn_available() {
+        eprintln!("SKIP: svn/svnadmin not available");
+        return;
+    }
+
+    let dir = TempDir::new().unwrap();
+    let svn_url = create_svn_repo(dir.path());
+    let svn_wc = dir.path().join("svn_wc");
+    svn_checkout(&svn_url, &svn_wc);
+
+    // Commit an oversized file (200 bytes, limit will be 100).
+    let big_content: String = "x".repeat(200);
+    svn_commit_file(&svn_wc, "big.bin", &big_content, "add big file");
+
+    // Also add a small file in the same revision range to verify it still syncs.
+    svn_commit_file(&svn_wc, "ok.txt", "fine", "add ok file");
+
+    let git_work = dir.path().join("git_work");
+    let git_bare = dir.path().join("git_bare");
+    let git_client = setup_git_with_bare_origin(&git_work, &git_bare);
+    let git_client = Arc::new(Mutex::new(git_client));
+
+    let data_dir = dir.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let db = Arc::new(setup_db(&data_dir.join("test.db")));
+
+    let mut config = make_test_config(&svn_url, &data_dir);
+    config.options.max_file_size = 100; // 100-byte limit.
+
+    let svn_client = SvnClient::new(&svn_url, "", "");
+    let sync = SvnToGitSync::new(svn_client, git_client, db.clone(), config);
+
+    let count = sync.sync().await.unwrap();
+    assert_eq!(count, 2, "both revisions should attempt sync");
+
+    // big.bin should NOT be in the Git working tree.
+    assert!(
+        !git_work.join("big.bin").exists(),
+        "big.bin should be skipped by policy"
+    );
+    // ok.txt should be there.
+    assert!(
+        git_work.join("ok.txt").exists(),
+        "ok.txt should sync normally"
+    );
+
+    // Verify audit log recorded the skip.
+    let audit_entries = db
+        .list_audit_entries(10, None, Some("file_policy_skip"))
+        .unwrap();
+    assert!(
+        !audit_entries.is_empty(),
+        "audit log should contain file_policy_skip entry"
+    );
+}
+
+/// Files matching ignore_patterns should be skipped (SVN→Git).
+#[tokio::test]
+async fn test_file_policy_ignore_pattern_skipped() {
+    if !svn_available() {
+        eprintln!("SKIP: svn/svnadmin not available");
+        return;
+    }
+
+    let dir = TempDir::new().unwrap();
+    let svn_url = create_svn_repo(dir.path());
+    let svn_wc = dir.path().join("svn_wc");
+    svn_checkout(&svn_url, &svn_wc);
+
+    // Commit a .log file (should be ignored) and a .rs file (should sync).
+    svn_commit_file(&svn_wc, "app.log", "log data", "add log");
+    svn_commit_file(&svn_wc, "main.rs", "fn main() {}", "add rust");
+
+    let git_work = dir.path().join("git_work");
+    let git_bare = dir.path().join("git_bare");
+    let git_client = setup_git_with_bare_origin(&git_work, &git_bare);
+    let git_client = Arc::new(Mutex::new(git_client));
+
+    let data_dir = dir.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let db = Arc::new(setup_db(&data_dir.join("test.db")));
+
+    let mut config = make_test_config(&svn_url, &data_dir);
+    config.options.ignore_patterns = vec!["*.log".into()];
+
+    let svn_client = SvnClient::new(&svn_url, "", "");
+    let sync = SvnToGitSync::new(svn_client, git_client, db, config);
+
+    let count = sync.sync().await.unwrap();
+    assert_eq!(count, 2, "both revisions should process");
+
+    // app.log should NOT be in Git.
+    assert!(
+        !git_work.join("app.log").exists(),
+        "app.log should be skipped by ignore pattern"
+    );
+    // main.rs should be there.
+    assert!(
+        git_work.join("main.rs").exists(),
+        "main.rs should sync normally"
+    );
+}
+
+/// Directory-level ignore patterns (e.g. build/**) should work.
+#[tokio::test]
+async fn test_file_policy_ignore_directory_pattern() {
+    if !svn_available() {
+        eprintln!("SKIP: svn/svnadmin not available");
+        return;
+    }
+
+    let dir = TempDir::new().unwrap();
+    let svn_url = create_svn_repo(dir.path());
+    let svn_wc = dir.path().join("svn_wc");
+    svn_checkout(&svn_url, &svn_wc);
+
+    // Commit files in build/ and src/.
+    svn_commit_file(&svn_wc, "src/main.rs", "fn main() {}", "add src");
+    svn_commit_file(&svn_wc, "build/output.o", "binary data", "add build");
+
+    let git_work = dir.path().join("git_work");
+    let git_bare = dir.path().join("git_bare");
+    let git_client = setup_git_with_bare_origin(&git_work, &git_bare);
+    let git_client = Arc::new(Mutex::new(git_client));
+
+    let data_dir = dir.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let db = Arc::new(setup_db(&data_dir.join("test.db")));
+
+    let mut config = make_test_config(&svn_url, &data_dir);
+    config.options.ignore_patterns = vec!["build/**".into()];
+
+    let svn_client = SvnClient::new(&svn_url, "", "");
+    let sync = SvnToGitSync::new(svn_client, git_client, db, config);
+
+    let count = sync.sync().await.unwrap();
+    assert_eq!(count, 2);
+
+    assert!(
+        git_work.join("src/main.rs").exists(),
+        "src/main.rs should sync"
+    );
+    assert!(
+        !git_work.join("build/output.o").exists(),
+        "build/output.o should be skipped"
+    );
+}
+
+// ===========================================================================
+// LFS integration tests (#44)
+// ===========================================================================
+
+/// When lfs_threshold is set, files above the threshold should trigger
+/// .gitattributes updates during SVN→Git sync.
+#[tokio::test]
+async fn test_lfs_threshold_creates_gitattributes() {
+    if !svn_available() {
+        eprintln!("SKIP: svn/svnadmin not available");
+        return;
+    }
+
+    let dir = TempDir::new().unwrap();
+    let svn_url = create_svn_repo(dir.path());
+    let svn_wc = dir.path().join("svn_wc");
+    svn_checkout(&svn_url, &svn_wc);
+
+    // Commit a large file (200 bytes) and a small file (10 bytes).
+    let large_content = "x".repeat(200);
+    svn_commit_file(&svn_wc, "model.bin", &large_content, "add large binary");
+    svn_commit_file(&svn_wc, "readme.txt", "hello", "add readme");
+
+    let git_work = dir.path().join("git_work");
+    let git_bare = dir.path().join("git_bare");
+    let git_client = setup_git_with_bare_origin(&git_work, &git_bare);
+    let git_client = Arc::new(Mutex::new(git_client));
+
+    let data_dir = dir.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let db = Arc::new(setup_db(&data_dir.join("test.db")));
+
+    let mut config = make_test_config(&svn_url, &data_dir);
+    // Set LFS threshold at 100 bytes — model.bin (200 bytes) exceeds it.
+    config.options.lfs_threshold = 100;
+
+    let svn_client = SvnClient::new(&svn_url, "", "");
+    let sync = SvnToGitSync::new(svn_client, git_client, db, config);
+
+    let count = sync.sync().await.unwrap();
+    assert_eq!(count, 2, "two revisions should sync");
+
+    // Verify model.bin was copied.
+    assert!(
+        git_work.join("model.bin").exists(),
+        "model.bin should be in Git tree"
+    );
+
+    // Verify .gitattributes was created with LFS tracking for *.bin.
+    let gitattr_path = git_work.join(".gitattributes");
+    assert!(
+        gitattr_path.exists(),
+        ".gitattributes should be created for LFS-tracked files"
+    );
+    let gitattr_content = std::fs::read_to_string(&gitattr_path).unwrap();
+    assert!(
+        gitattr_content.contains("*.bin filter=lfs diff=lfs merge=lfs -text"),
+        ".gitattributes should contain LFS tracking for *.bin, got: {}",
+        gitattr_content
+    );
+
+    // Verify readme.txt was copied normally (under threshold).
+    assert!(
+        git_work.join("readme.txt").exists(),
+        "readme.txt should be in Git tree"
+    );
+}
+
+/// LFS pointer detection: is_lfs_pointer and parse_lfs_pointer.
+#[test]
+fn test_lfs_pointer_detection_in_git_to_svn() {
+    // Verify the LFS pointer detection works correctly for content
+    // that would be encountered during Git→SVN sync.
+    let pointer =
+        "version https://git-lfs.github.com/spec/v1\noid sha256:abc123def456789\nsize 1048576\n";
+    assert!(gitsvnsync_core::lfs::is_lfs_pointer(pointer.as_bytes()));
+
+    let parsed = gitsvnsync_core::lfs::parse_lfs_pointer(pointer.as_bytes()).unwrap();
+    assert_eq!(parsed.oid, "abc123def456789");
+    assert_eq!(parsed.size, 1048576);
+
+    // Normal file content should NOT be detected as LFS pointer.
+    let normal = b"fn main() { println!(\"hello\"); }";
+    assert!(!gitsvnsync_core::lfs::is_lfs_pointer(normal));
+
+    // Binary content should NOT be detected as LFS pointer.
+    let binary = vec![0xFF, 0xFE, 0x00, 0x01, 0x02, 0x03];
+    assert!(!gitsvnsync_core::lfs::is_lfs_pointer(&binary));
+}
+
+/// LFS config wiring: lfs_threshold in PersonalOptionsConfig correctly
+/// creates a FilePolicy with LFS enabled.
+#[test]
+fn test_lfs_config_wiring() {
+    use gitsvnsync_core::file_policy::FilePolicy;
+
+    // Default config: no LFS.
+    let opts = PersonalOptionsConfig::default();
+    let policy = FilePolicy::from(&opts);
+    assert!(!policy.lfs_enabled());
+
+    // Config with lfs_threshold: LFS enabled.
+    let opts = PersonalOptionsConfig {
+        lfs_threshold: 5_000_000,
+        ..Default::default()
+    };
+    let policy = FilePolicy::from(&opts);
+    assert!(policy.lfs_enabled());
+    assert_eq!(policy.lfs_threshold(), 5_000_000);
+
+    // A file under the threshold → Allow.
+    let decision = policy.evaluate("small.txt", 100);
+    assert_eq!(
+        decision,
+        gitsvnsync_core::file_policy::FilePolicyDecision::Allow
+    );
+
+    // A file over the threshold → LfsTrack.
+    let decision = policy.evaluate("large.bin", 10_000_000);
+    assert!(matches!(
+        decision,
+        gitsvnsync_core::file_policy::FilePolicyDecision::LfsTrack { .. }
+    ));
+    assert!(decision.should_sync());
 }

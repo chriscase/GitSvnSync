@@ -266,6 +266,18 @@ pub struct PersonalOptionsConfig {
     /// Automatically merge conflicts when a clean 3-way merge is possible.
     #[serde(default = "default_true")]
     pub auto_merge: bool,
+
+    /// Enable Git LFS tracking for files above this byte threshold.
+    /// Files that exceed this threshold (but are within `max_file_size`) are
+    /// stored via Git LFS instead of as regular blobs.
+    /// 0 = LFS disabled (default).
+    #[serde(default)]
+    pub lfs_threshold: u64,
+
+    /// Glob patterns for files that should always be LFS-tracked regardless
+    /// of size. Example: `["*.psd", "*.bin", "*.iso"]`.
+    #[serde(default)]
+    pub lfs_patterns: Vec<String>,
 }
 
 impl Default for PersonalOptionsConfig {
@@ -278,6 +290,8 @@ impl Default for PersonalOptionsConfig {
             sync_externals: false,
             sync_direct_pushes: false,
             auto_merge: true,
+            lfs_threshold: 0,
+            lfs_patterns: Vec::new(),
         }
     }
 }
@@ -363,6 +377,17 @@ impl PersonalConfig {
             return Err(ConfigError::InvalidValue {
                 field: "personal.poll_interval_secs".into(),
                 detail: "poll interval must be > 0".into(),
+            });
+        }
+
+        // Fail-fast: sync_direct_pushes is not yet implemented in personal mode.
+        if self.options.sync_direct_pushes {
+            return Err(ConfigError::InvalidValue {
+                field: "options.sync_direct_pushes".into(),
+                detail: "sync_direct_pushes is not yet implemented in personal mode; \
+                         only merged PRs are synced from Git to SVN. \
+                         Set to false or remove it."
+                    .into(),
             });
         }
 
@@ -544,6 +569,17 @@ ignore_patterns = ["*.tmp", "build/"]
         let mut config: PersonalConfig = toml::from_str(sample_personal_toml()).unwrap();
         config.personal.poll_interval_secs = 0;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_sync_direct_pushes() {
+        let mut config: PersonalConfig = toml::from_str(sample_personal_toml()).unwrap();
+        config.options.sync_direct_pushes = true;
+        let result = config.validate();
+        assert!(matches!(
+            result,
+            Err(ConfigError::InvalidValue { ref field, .. }) if field == "options.sync_direct_pushes"
+        ));
     }
 
     #[test]

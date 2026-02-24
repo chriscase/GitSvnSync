@@ -11,12 +11,14 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use gitsvnsync_core::db::Database;
+use gitsvnsync_core::file_policy::FilePolicy;
 use gitsvnsync_core::git::github::GitHubClient;
 use gitsvnsync_core::git::GitClient;
 use gitsvnsync_core::personal_config::PersonalConfig;
 use gitsvnsync_core::svn::SvnClient;
 
 use crate::commit_format::CommitFormatter;
+use crate::svn_to_git::SvnToGitSync;
 
 /// Import mode selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +44,26 @@ impl<'a> InitialImport<'a> {
     ///
     /// Returns the number of commits created.
     pub async fn import(&self, mode: ImportMode) -> Result<u64> {
+        // LFS preflight: if LFS is configured, verify git-lfs is available.
+        if self.config.options.lfs_threshold > 0 {
+            match gitsvnsync_core::lfs::preflight_check() {
+                Ok(version) => {
+                    info!(
+                        version = %version,
+                        lfs_threshold = self.config.options.lfs_threshold,
+                        "Git LFS preflight passed"
+                    );
+                }
+                Err(e) => {
+                    anyhow::bail!(
+                        "Git LFS is configured (lfs_threshold = {}) but git-lfs is not available: {}",
+                        self.config.options.lfs_threshold,
+                        e
+                    );
+                }
+            }
+        }
+
         // Ensure the GitHub repo exists (auto-create if configured)
         self.ensure_github_repo().await?;
 
@@ -113,15 +135,38 @@ impl<'a> InitialImport<'a> {
         let head_rev = svn_info.latest_rev;
         info!(head_rev, "SVN HEAD revision");
 
-        // Export HEAD to the Git working tree
+        // Build file policy from config.
+        let policy = FilePolicy::from(&self.config.options);
+        if policy.has_constraints() {
+            info!(
+                max_file_size = policy.max_file_size(),
+                ignore_patterns = self.config.options.ignore_patterns.len(),
+                lfs_enabled = policy.lfs_enabled(),
+                lfs_threshold = policy.lfs_threshold(),
+                "file policy active for snapshot import"
+            );
+        }
+
+        // Export HEAD to a temp dir, then copy with policy into Git working tree.
+        let export_dir =
+            tempfile::tempdir().context("failed to create temporary directory for SVN export")?;
+
+        self.svn_client
+            .export("", head_rev, export_dir.path())
+            .await
+            .context("failed to export SVN HEAD")?;
+
         let git_client = self.git_client.lock().await;
         let repo_path = git_client.repo_path().to_path_buf();
         drop(git_client);
 
-        self.svn_client
-            .export("", head_rev, &repo_path)
-            .await
-            .context("failed to export SVN HEAD")?;
+        let skipped =
+            SvnToGitSync::copy_tree_with_policy(export_dir.path(), &repo_path, &policy, self.db)
+                .context("failed to copy exported files to Git")?;
+
+        if skipped > 0 {
+            info!(skipped, "snapshot import: files skipped by policy");
+        }
 
         // Commit
         let message = self.formatter.format_svn_to_git(
@@ -194,6 +239,18 @@ impl<'a> InitialImport<'a> {
     async fn import_full(&self) -> Result<u64> {
         info!("starting full history import");
 
+        // Build file policy from config.
+        let policy = FilePolicy::from(&self.config.options);
+        if policy.has_constraints() {
+            info!(
+                max_file_size = policy.max_file_size(),
+                ignore_patterns = self.config.options.ignore_patterns.len(),
+                lfs_enabled = policy.lfs_enabled(),
+                lfs_threshold = policy.lfs_threshold(),
+                "file policy active for full history import"
+            );
+        }
+
         // Get SVN HEAD info
         let svn_info = self
             .svn_client
@@ -219,10 +276,34 @@ impl<'a> InitialImport<'a> {
         for entry in &log_entries {
             let rev = entry.revision;
 
-            // Export this revision to the git working tree
-            if let Err(e) = self.svn_client.export("", rev, &repo_path).await {
+            // Export this revision to a temp directory, then copy with policy.
+            let export_dir = match tempfile::tempdir() {
+                Ok(d) => d,
+                Err(e) => {
+                    warn!(rev, error = %e, "failed to create temp dir, skipping revision");
+                    continue;
+                }
+            };
+
+            if let Err(e) = self.svn_client.export("", rev, export_dir.path()).await {
                 warn!(rev, error = %e, "failed to export revision, skipping");
                 continue;
+            }
+
+            // Copy with policy enforcement.
+            let skipped = SvnToGitSync::copy_tree_with_policy(
+                export_dir.path(),
+                &repo_path,
+                &policy,
+                self.db,
+            )
+            .unwrap_or_else(|e| {
+                warn!(rev, error = %e, "policy copy failed, continuing");
+                0
+            });
+
+            if skipped > 0 {
+                debug!(rev, skipped, "files skipped by policy during import");
             }
 
             let message =

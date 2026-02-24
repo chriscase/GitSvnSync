@@ -9,9 +9,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use gitsvnsync_core::db::Database;
+use gitsvnsync_core::file_policy::{FilePolicy, FilePolicyDecision};
 use gitsvnsync_core::git::GitClient;
 use gitsvnsync_core::personal_config::PersonalConfig;
 use gitsvnsync_core::svn::SvnClient;
@@ -32,6 +33,7 @@ pub struct SvnToGitSync {
     db: Arc<Database>,
     config: PersonalConfig,
     formatter: CommitFormatter,
+    policy: FilePolicy,
 }
 
 impl SvnToGitSync {
@@ -43,12 +45,23 @@ impl SvnToGitSync {
         config: PersonalConfig,
     ) -> Self {
         let formatter = CommitFormatter::new(&config.commit_format);
+        let policy = FilePolicy::from(&config.options);
+        if policy.has_constraints() {
+            info!(
+                max_file_size = policy.max_file_size(),
+                ignore_patterns = config.options.ignore_patterns.len(),
+                lfs_enabled = policy.lfs_enabled(),
+                lfs_threshold = policy.lfs_threshold(),
+                "file policy active for SVN→Git sync"
+            );
+        }
         Self {
             svn_client,
             git_client,
             db,
             config,
             formatter,
+            policy,
         }
     }
 
@@ -130,13 +143,18 @@ impl SvnToGitSync {
                 .await
                 .with_context(|| format!("failed to export SVN revision r{}", rev))?;
 
-            // 6. Copy exported files into the Git working tree.
+            // 6. Copy exported files into the Git working tree (with policy).
             let git_client = self.git_client.lock().await;
             let repo_path = git_client.repo_path().to_path_buf();
             drop(git_client); // Release lock before blocking I/O.
 
-            Self::copy_tree(export_dir.path(), &repo_path)
-                .with_context(|| format!("failed to copy exported files for r{}", rev))?;
+            let skipped =
+                Self::copy_tree_with_policy(export_dir.path(), &repo_path, &self.policy, &self.db)
+                    .with_context(|| format!("failed to copy exported files for r{}", rev))?;
+
+            if skipped > 0 {
+                info!(rev, skipped, "SVN→Git: files skipped by policy during copy");
+            }
 
             // 6b. Remove files from the Git tree that are no longer in the SVN export.
             Self::remove_stale_files(export_dir.path(), &repo_path)
@@ -245,11 +263,53 @@ impl SvnToGitSync {
     /// files. Directories that exist in `dst` are preserved; new directories
     /// are created. Hidden files and directories (starting with `.`) in the
     /// destination root are skipped to avoid clobbering `.git/`.
+    ///
+    /// This is the policy-unaware version, retained for tests.
+    #[cfg(test)]
     fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
-        Self::copy_tree_inner(src, dst, true)
+        let noop_policy = FilePolicy::new(0, vec![]);
+        Self::copy_tree_policy_inner(src, dst, dst, src, true, &noop_policy, &mut 0)
     }
 
-    fn copy_tree_inner(src: &Path, dst: &Path, is_root: bool) -> Result<()> {
+    /// Recursively copy files from `src` into `dst`, enforcing `FilePolicy`.
+    /// Returns the number of files skipped by policy.
+    pub fn copy_tree_with_policy(
+        src: &Path,
+        dst: &Path,
+        policy: &FilePolicy,
+        db: &Database,
+    ) -> Result<usize> {
+        let mut skipped = 0;
+        Self::copy_tree_policy_inner(src, dst, dst, src, true, policy, &mut skipped)?;
+
+        // Audit skipped count if any.
+        if skipped > 0 {
+            let _ = db.insert_audit_log(
+                "file_policy_skip",
+                Some("svn_to_git"),
+                None,
+                None,
+                None,
+                Some(&format!(
+                    "Skipped {} files by policy during SVN→Git copy",
+                    skipped
+                )),
+                true,
+            );
+        }
+
+        Ok(skipped)
+    }
+
+    fn copy_tree_policy_inner(
+        src: &Path,
+        dst: &Path,
+        dst_root: &Path,
+        export_root: &Path,
+        is_root: bool,
+        policy: &FilePolicy,
+        skipped: &mut usize,
+    ) -> Result<()> {
         let entries = std::fs::read_dir(src)
             .with_context(|| format!("failed to read directory: {}", src.display()))?;
 
@@ -269,20 +329,100 @@ impl SvnToGitSync {
             let dst_path = dst.join(&file_name);
 
             if src_path.is_dir() {
+                // Check if the entire directory matches an ignore pattern.
+                let rel = src_path
+                    .strip_prefix(export_root)
+                    .unwrap_or(&src_path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let dir_pattern_path = format!("{}/", rel);
+                // Quick check: does the dir itself match? Some patterns like
+                // "build/**" should still recurse into `build/` to find matches.
+                // We check individual files below.
                 if !dst_path.exists() {
                     std::fs::create_dir_all(&dst_path).with_context(|| {
                         format!("failed to create directory: {}", dst_path.display())
                     })?;
                 }
-                Self::copy_tree_inner(&src_path, &dst_path, false)?;
+                let _ = dir_pattern_path; // Used for potential future directory-level skipping.
+                Self::copy_tree_policy_inner(
+                    &src_path,
+                    &dst_path,
+                    dst_root,
+                    export_root,
+                    false,
+                    policy,
+                    skipped,
+                )?;
             } else {
-                std::fs::copy(&src_path, &dst_path).with_context(|| {
-                    format!(
-                        "failed to copy {} -> {}",
-                        src_path.display(),
-                        dst_path.display()
-                    )
-                })?;
+                // Compute relative path for policy evaluation.
+                let rel = src_path
+                    .strip_prefix(export_root)
+                    .unwrap_or(&src_path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+
+                let decision = policy.evaluate_path(export_root, &rel);
+                match &decision {
+                    FilePolicyDecision::Allow => {
+                        std::fs::copy(&src_path, &dst_path).with_context(|| {
+                            format!(
+                                "failed to copy {} -> {}",
+                                src_path.display(),
+                                dst_path.display()
+                            )
+                        })?;
+                    }
+                    FilePolicyDecision::LfsTrack { size, threshold } => {
+                        // Copy the actual file content to the Git working tree.
+                        // With `.gitattributes` set up, `git add` will run the
+                        // LFS clean filter and store the blob in LFS storage,
+                        // replacing the file content with a pointer in the index.
+                        std::fs::copy(&src_path, &dst_path).with_context(|| {
+                            format!(
+                                "failed to copy {} -> {}",
+                                src_path.display(),
+                                dst_path.display()
+                            )
+                        })?;
+
+                        // Ensure `.gitattributes` has the appropriate LFS tracking pattern.
+                        // Use dst_root (the Git repo root) for .gitattributes placement.
+                        let pattern = gitsvnsync_core::lfs::pattern_for_path(&rel);
+                        if let Err(e) = gitsvnsync_core::lfs::ensure_lfs_tracked(dst_root, &pattern)
+                        {
+                            warn!(
+                                path = rel.as_str(),
+                                pattern = pattern.as_str(),
+                                error = %e,
+                                "failed to update .gitattributes for LFS tracking"
+                            );
+                        } else {
+                            info!(
+                                path = rel.as_str(),
+                                size,
+                                threshold,
+                                pattern = pattern.as_str(),
+                                "LFS: file copied and .gitattributes updated"
+                            );
+                        }
+                    }
+                    FilePolicyDecision::Ignored { pattern } => {
+                        warn!(
+                            path = rel.as_str(),
+                            pattern = pattern.as_str(),
+                            "file ignored by policy — not copied to Git"
+                        );
+                        *skipped += 1;
+                    }
+                    FilePolicyDecision::Oversize { size, limit } => {
+                        warn!(
+                            path = rel.as_str(),
+                            size, limit, "file exceeds max_file_size — not copied to Git"
+                        );
+                        *skipped += 1;
+                    }
+                }
             }
         }
 

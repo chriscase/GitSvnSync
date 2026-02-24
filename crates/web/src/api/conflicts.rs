@@ -73,7 +73,11 @@ async fn list_conflicts(
     headers: HeaderMap,
     Query(query): Query<ListConflictsQuery>,
 ) -> Result<Json<Vec<ConflictListItem>>, AppError> {
-    validate_session(&state, headers.get("authorization").and_then(|v| v.to_str().ok())).await?;
+    validate_session(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
 
     let limit = query.per_page.unwrap_or(20).min(100);
     let status_filter = query.status.as_deref();
@@ -108,7 +112,11 @@ async fn get_conflict(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<ConflictDetail>, AppError> {
-    validate_session(&state, headers.get("authorization").and_then(|v| v.to_str().ok())).await?;
+    validate_session(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
 
     let db = state
         .db
@@ -142,7 +150,11 @@ async fn resolve_conflict(
     Path(id): Path<String>,
     Json(body): Json<ResolveConflictRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    validate_session(&state, headers.get("authorization").and_then(|v| v.to_str().ok())).await?;
+    validate_session(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
 
     let resolution = match body.resolution.as_str() {
         "accept_svn" | "accept_git" | "custom" => body.resolution.as_str(),
@@ -180,7 +192,11 @@ async fn defer_conflict(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    validate_session(&state, headers.get("authorization").and_then(|v| v.to_str().ok())).await?;
+    validate_session(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
 
     let db = state
         .db

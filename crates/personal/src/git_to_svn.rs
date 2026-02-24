@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use tracing::{debug, error, info, instrument, warn};
 
 use gitsvnsync_core::db::Database;
+use gitsvnsync_core::file_policy::{FilePolicy, FilePolicyDecision};
 use gitsvnsync_core::git::github::{GitHubClient, GitHubCommit, PullRequest};
 use gitsvnsync_core::git::GitClient;
 use gitsvnsync_core::personal_config::PersonalConfig;
@@ -42,6 +43,7 @@ pub struct GitToSvnSync {
     github: GitHubClient,
     db: Arc<Database>,
     formatter: CommitFormatter,
+    policy: FilePolicy,
     svn_wc_path: PathBuf,
     git_repo_path: PathBuf,
     github_repo: String,
@@ -64,11 +66,20 @@ impl GitToSvnSync {
         git_repo_path: PathBuf,
     ) -> Self {
         let formatter = CommitFormatter::new(&config.commit_format);
+        let policy = FilePolicy::from(&config.options);
+        if policy.has_constraints() {
+            info!(
+                max_file_size = policy.max_file_size(),
+                ignore_patterns = config.options.ignore_patterns.len(),
+                "file policy active for Git→SVN sync"
+            );
+        }
         Self {
             svn,
             github,
             db,
             formatter,
+            policy,
             svn_wc_path,
             git_repo_path,
             github_repo: config.github.repo.clone(),
@@ -494,19 +505,147 @@ impl GitToSvnSync {
                             )
                         })?
                     {
-                        if let Some(parent) = dst.parent() {
-                            if !parent.exists() {
-                                std::fs::create_dir_all(parent).with_context(|| {
-                                    format!(
-                                        "failed to create directory: {}",
-                                        parent.display()
-                                    )
+                        // Evaluate file against policy before writing.
+                        let decision = self.policy.evaluate(file_path, content.len() as u64);
+                        match &decision {
+                            FilePolicyDecision::Allow => {
+                                // Check if this is an LFS pointer that needs resolution.
+                                let write_content = if gitsvnsync_core::lfs::is_lfs_pointer(
+                                    &content,
+                                ) {
+                                    // The file in Git is an LFS pointer — resolve
+                                    // it to the actual blob content before writing
+                                    // to SVN (SVN doesn't understand LFS pointers).
+                                    match gitsvnsync_core::lfs::resolve_lfs_pointer(
+                                        &self.git_repo_path,
+                                        &content,
+                                    ) {
+                                        Ok(resolved) => {
+                                            info!(
+                                                path = file_path,
+                                                pointer_size = content.len(),
+                                                resolved_size = resolved.len(),
+                                                "Git→SVN: resolved LFS pointer to actual content"
+                                            );
+                                            resolved
+                                        }
+                                        Err(e) => {
+                                            warn!(
+                                                path = file_path,
+                                                error = %e,
+                                                "Git→SVN: failed to resolve LFS pointer, writing pointer as-is"
+                                            );
+                                            content.clone()
+                                        }
+                                    }
+                                } else {
+                                    content.clone()
+                                };
+
+                                if let Some(parent) = dst.parent() {
+                                    if !parent.exists() {
+                                        std::fs::create_dir_all(parent).with_context(|| {
+                                            format!(
+                                                "failed to create directory: {}",
+                                                parent.display()
+                                            )
+                                        })?;
+                                    }
+                                }
+                                std::fs::write(&dst, &write_content).with_context(|| {
+                                    format!("failed to write file: {}", dst.display())
                                 })?;
                             }
+                            FilePolicyDecision::LfsTrack { .. } => {
+                                // File exceeds LFS threshold — same LFS pointer
+                                // resolution logic applies.
+                                let write_content = if gitsvnsync_core::lfs::is_lfs_pointer(
+                                    &content,
+                                ) {
+                                    match gitsvnsync_core::lfs::resolve_lfs_pointer(
+                                        &self.git_repo_path,
+                                        &content,
+                                    ) {
+                                        Ok(resolved) => {
+                                            info!(
+                                                path = file_path,
+                                                pointer_size = content.len(),
+                                                resolved_size = resolved.len(),
+                                                "Git→SVN: resolved LFS pointer (LfsTrack)"
+                                            );
+                                            resolved
+                                        }
+                                        Err(e) => {
+                                            warn!(
+                                                path = file_path,
+                                                error = %e,
+                                                "Git→SVN: LFS resolution failed, writing pointer"
+                                            );
+                                            content.clone()
+                                        }
+                                    }
+                                } else {
+                                    content.clone()
+                                };
+
+                                if let Some(parent) = dst.parent() {
+                                    if !parent.exists() {
+                                        std::fs::create_dir_all(parent).with_context(|| {
+                                            format!(
+                                                "failed to create directory: {}",
+                                                parent.display()
+                                            )
+                                        })?;
+                                    }
+                                }
+                                std::fs::write(&dst, &write_content).with_context(|| {
+                                    format!("failed to write file: {}", dst.display())
+                                })?;
+                            }
+                            FilePolicyDecision::Ignored { pattern } => {
+                                warn!(
+                                    path = file_path,
+                                    pattern = pattern.as_str(),
+                                    git_sha = %commit.sha,
+                                    "Git→SVN: file ignored by policy — not replayed"
+                                );
+                                let _ = self.db.insert_audit_log(
+                                    "file_policy_skip",
+                                    Some("git_to_svn"),
+                                    None,
+                                    Some(&commit.sha),
+                                    None,
+                                    Some(&format!(
+                                        "Skipped '{}' (matches '{}')",
+                                        file_path, pattern
+                                    )),
+                                    true,
+                                );
+                                continue;
+                            }
+                            FilePolicyDecision::Oversize { size, limit } => {
+                                warn!(
+                                    path = file_path,
+                                    size,
+                                    limit,
+                                    git_sha = %commit.sha,
+                                    "Git→SVN: file exceeds max_file_size — not replayed"
+                                );
+                                let _ = self.db.insert_audit_log(
+                                    "file_policy_skip",
+                                    Some("git_to_svn"),
+                                    None,
+                                    Some(&commit.sha),
+                                    None,
+                                    Some(&format!(
+                                        "Skipped '{}' ({} bytes > {} limit)",
+                                        file_path, size, limit
+                                    )),
+                                    true,
+                                );
+                                continue;
+                            }
                         }
-                        std::fs::write(&dst, &content).with_context(|| {
-                            format!("failed to write file: {}", dst.display())
-                        })?;
                     }
                 }
             }

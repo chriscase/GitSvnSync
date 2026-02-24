@@ -52,7 +52,11 @@ async fn list_audit(
     headers: HeaderMap,
     Query(query): Query<AuditQuery>,
 ) -> Result<Json<AuditListResponse>, AppError> {
-    validate_session(&state, headers.get("authorization").and_then(|v| v.to_str().ok())).await?;
+    validate_session(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
 
     let limit = query.limit.unwrap_or(50).min(500);
 
