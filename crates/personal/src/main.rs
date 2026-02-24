@@ -72,6 +72,12 @@ enum Commands {
         #[arg(long, conflicts_with = "snapshot")]
         full: bool,
     },
+
+    /// Emit log messages at every level and exit.  Used by integration tests
+    /// to verify file sink and level filtering without requiring a running
+    /// SVN/Git environment.
+    #[command(name = "log-probe", hide = true)]
+    LogProbe,
 }
 
 #[tokio::main]
@@ -102,6 +108,10 @@ async fn main() -> Result<()> {
                 ImportMode::Full
             };
             cmd_import(&config_path, mode).await
+        }
+        Commands::LogProbe => {
+            cmd_log_probe();
+            Ok(())
         }
     }
 }
@@ -339,6 +349,19 @@ async fn cmd_import(config_path: &str, mode: ImportMode) -> Result<()> {
     let count = importer.import(mode).await?;
     println!("✓ Import complete! {} commits created.", count);
     Ok(())
+}
+
+/// Emit one log message at each level for integration-test verification.
+/// Includes a brief pause to let the non-blocking file appender flush
+/// (the guard is intentionally leaked in `init_tracing`).
+fn cmd_log_probe() {
+    tracing::error!("LOG_PROBE error-level marker");
+    tracing::warn!("LOG_PROBE warn-level marker");
+    tracing::info!("LOG_PROBE info-level marker");
+    tracing::debug!("LOG_PROBE debug-level marker");
+    tracing::trace!("LOG_PROBE trace-level marker");
+    // Allow the non-blocking writer's background thread to drain.
+    std::thread::sleep(Duration::from_millis(200));
 }
 
 /// Expand `~` to the user's home directory.

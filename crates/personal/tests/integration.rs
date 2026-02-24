@@ -1831,6 +1831,200 @@ fn test_runtime_personal_log_level_filtering() {
     );
 }
 
+// ===========================================================================
+// Issue #38: spawn-based black-box personal logging tests
+// ===========================================================================
+
+/// Return the path to the compiled `gitsvnsync-personal` binary.
+/// Looks in `target/debug` which `cargo test` populates.
+fn personal_binary_path() -> PathBuf {
+    // The binary sits next to the test binary's directory.
+    let mut path = std::env::current_exe().unwrap();
+    path.pop(); // remove test binary name
+    path.pop(); // remove `deps`
+    path.push("gitsvnsync-personal");
+    path
+}
+
+/// Write a minimal TOML config that `PersonalConfig::load_from_file` can parse.
+/// The config points at `data_dir` for log output.  SVN/GitHub values are
+/// syntactically valid but don't need to resolve.
+fn write_test_config(path: &Path, data_dir: &Path, log_level: &str) {
+    let toml = format!(
+        r#"[personal]
+log_level = "{log_level}"
+data_dir = "{data_dir}"
+
+[svn]
+url = "file:///tmp/nonexistent_svn_repo"
+username = "testuser"
+password_env = "GITSVNSYNC_TEST_SVN_PW"
+
+[github]
+repo = "test/test-repo"
+token_env = "GITSVNSYNC_TEST_GH_TOKEN"
+
+[developer]
+name = "Test User"
+email = "test@example.com"
+svn_username = "testuser"
+"#,
+        log_level = log_level,
+        data_dir = data_dir.display(),
+    );
+    std::fs::write(path, toml).unwrap();
+}
+
+/// Spawn-based black-box test: verify that the real process writes to
+/// `{data_dir}/personal.log` and the file is non-empty.
+#[test]
+fn test_spawn_personal_log_file_written() {
+    let bin = personal_binary_path();
+    if !bin.exists() {
+        eprintln!(
+            "SKIPPED: gitsvnsync-personal binary not found at {:?}",
+            bin
+        );
+        return;
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let config_path = tmp.path().join("personal.toml");
+    write_test_config(&config_path, &data_dir, "info");
+
+    let output = Command::new(&bin)
+        .args(["--config", config_path.to_str().unwrap(), "log-probe"])
+        .env_remove("RUST_LOG") // ensure config log_level is used
+        .output()
+        .expect("failed to spawn gitsvnsync-personal");
+
+    // The process should exit successfully (log-probe always succeeds).
+    assert!(
+        output.status.success(),
+        "log-probe should exit 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let log_file = data_dir.join("personal.log");
+    assert!(
+        log_file.exists(),
+        "personal.log should exist at {:?}",
+        log_file
+    );
+    let contents = std::fs::read_to_string(&log_file).unwrap();
+    assert!(
+        !contents.is_empty(),
+        "personal.log should not be empty"
+    );
+    assert!(
+        contents.contains("LOG_PROBE"),
+        "personal.log should contain LOG_PROBE marker, got: {}",
+        contents
+    );
+}
+
+/// Spawn-based black-box test: config-only behavior (`RUST_LOG` unset).
+/// With `personal.log_level = "warn"`, debug/info should NOT appear;
+/// warn/error should appear.
+#[test]
+fn test_spawn_config_only_log_level_filtering() {
+    let bin = personal_binary_path();
+    if !bin.exists() {
+        eprintln!("SKIPPED: binary not found");
+        return;
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let config_path = tmp.path().join("personal.toml");
+    write_test_config(&config_path, &data_dir, "warn");
+
+    let output = Command::new(&bin)
+        .args(["--config", config_path.to_str().unwrap(), "log-probe"])
+        .env_remove("RUST_LOG")
+        .output()
+        .expect("failed to spawn");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let contents =
+        std::fs::read_to_string(data_dir.join("personal.log")).unwrap();
+
+    // warn and error should be present.
+    assert!(
+        contents.contains("LOG_PROBE error-level marker"),
+        "error should appear, got: {}",
+        contents
+    );
+    assert!(
+        contents.contains("LOG_PROBE warn-level marker"),
+        "warn should appear, got: {}",
+        contents
+    );
+    // debug and info should be filtered out.
+    assert!(
+        !contents.contains("LOG_PROBE info-level marker"),
+        "info should be filtered at log_level=warn, got: {}",
+        contents
+    );
+    assert!(
+        !contents.contains("LOG_PROBE debug-level marker"),
+        "debug should be filtered at log_level=warn, got: {}",
+        contents
+    );
+}
+
+/// Spawn-based black-box test: `RUST_LOG=debug` overrides config
+/// `log_level = "error"`. Debug messages should appear.
+#[test]
+fn test_spawn_rust_log_override_precedence() {
+    let bin = personal_binary_path();
+    if !bin.exists() {
+        eprintln!("SKIPPED: binary not found");
+        return;
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let config_path = tmp.path().join("personal.toml");
+    write_test_config(&config_path, &data_dir, "error");
+
+    let output = Command::new(&bin)
+        .args(["--config", config_path.to_str().unwrap(), "log-probe"])
+        .env("RUST_LOG", "debug")
+        .output()
+        .expect("failed to spawn");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let contents =
+        std::fs::read_to_string(data_dir.join("personal.log")).unwrap();
+
+    // RUST_LOG=debug should override config error-only level.
+    assert!(
+        contents.contains("LOG_PROBE debug-level marker"),
+        "debug should appear with RUST_LOG=debug override, got: {}",
+        contents
+    );
+    assert!(
+        contents.contains("LOG_PROBE info-level marker"),
+        "info should appear with RUST_LOG=debug override, got: {}",
+        contents
+    );
+}
+
 /// Runtime test: `RUST_LOG` overrides `personal.log_level`.
 ///
 /// Even when the config says `log_level = "error"`, setting `RUST_LOG=debug`
