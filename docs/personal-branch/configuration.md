@@ -45,15 +45,18 @@ email = "jdoe@company.com"
 svn_username = "jdoe"
 
 [commit_format]
-svn_to_git_template = "{original_message}\n\nSVN-Revision: r{svn_rev}\nSVN-Author: {svn_author}\nSVN-Date: {svn_date}"
-git_to_svn_template = "{original_message}\n\nGit-Commit: {git_sha}\nPR: #{pr_number} ({pr_branch})"
+# svn_to_git = "..."  # uses sensible defaults
+# git_to_svn = "..."  # uses sensible defaults
 
 [options]
-normalize_line_endings = false
+normalize_line_endings = true
 sync_executable_bit = true
-max_file_size = 52428800
-ignore_patterns = []
-sync_direct_pushes = false
+# max_file_size = 0              # 0 = no limit (default)
+# ignore_patterns = []
+# sync_direct_pushes = false     # not yet implemented — leave false
+auto_merge = true
+# lfs_threshold = 0              # 0 = LFS disabled (default)
+# lfs_patterns = []              # e.g. ["*.psd", "*.bin"]
 ```
 
 ---
@@ -118,8 +121,8 @@ Templates that control how commit messages are formatted when crossing between s
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `svn_to_git_template` | string | (see below) | Template for Git commit messages created from SVN revisions. |
-| `git_to_svn_template` | string | (see below) | Template for SVN commit messages created from merged Git PRs. |
+| `svn_to_git` | string | (see below) | Template for Git commit messages created from SVN revisions. |
+| `git_to_svn` | string | (see below) | Template for SVN commit messages created from merged Git PRs. |
 
 #### SVN-to-Git Template Placeholders
 
@@ -162,13 +165,28 @@ PR: #{pr_number} ({pr_branch})
 
 Behavioral options that control how files and changes are synced.
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `normalize_line_endings` | boolean | `false` | When `true`, convert line endings to match the target system's convention (LF for Git, native for SVN). When `false`, line endings are preserved as-is. |
-| `sync_executable_bit` | boolean | `true` | Sync the executable permission bit (`svn:executable` property) between SVN and Git. |
-| `max_file_size` | integer | `52428800` | Maximum file size in bytes (default 50 MB). Files larger than this are skipped during sync with a warning. Set to `0` to disable the limit. |
-| `ignore_patterns` | array of strings | `[]` | List of glob patterns for files to exclude from sync. Patterns are matched against paths relative to the repository root. Example: `["*.log", "build/**", ".idea/**"]` |
-| `sync_direct_pushes` | boolean | `false` | When `false` (the default), only merged PRs are synced from Git to SVN. When `true`, any push to the default branch is synced, including direct pushes without a PR. |
+| Key | Type | Default | Status | Description |
+|-----|------|---------|--------|-------------|
+| `normalize_line_endings` | boolean | `true` | Implemented | Normalize CRLF to LF during sync. |
+| `sync_executable_bit` | boolean | `true` | Implemented | Sync the executable permission bit (`svn:executable` property) between SVN and Git. |
+| `max_file_size` | integer | `0` | **Implemented** | Maximum file size in bytes. Files larger than this are skipped during sync with a warning and an audit log entry. `0` = no limit (default). Example: `52428800` for 50 MB. |
+| `ignore_patterns` | array of strings | `[]` | **Implemented** | Glob patterns for files to exclude from sync. Patterns are matched against paths relative to the repository root. Example: `["*.log", "build/**", ".idea/**"]`. Matching files are skipped with a warning and audit entry. |
+| `auto_merge` | boolean | `true` | Implemented | Automatically merge conflicts when a clean 3-way merge is possible. When disabled, all conflicts require manual resolution. |
+| `sync_externals` | boolean | `false` | Not implemented | Reserved for future SVN externals support. |
+| `sync_direct_pushes` | boolean | `false` | **Not implemented** | Reserved. Setting to `true` will cause validation to fail with an explicit error. Only merged PRs are synced from Git to SVN. |
+| `lfs_threshold` | integer | `0` | **Implemented** | Files above this byte threshold are stored via Git LFS instead of as regular blobs. `0` = LFS disabled (default). Requires `git lfs` to be installed. Example: `5242880` for 5 MB. |
+| `lfs_patterns` | array of strings | `[]` | **Implemented** | Glob patterns for files that should always be LFS-tracked regardless of size. Example: `["*.psd", "*.bin", "*.iso"]`. Reserved for future pattern-based LFS matching. |
+
+> **Important:** `max_file_size` and `ignore_patterns` are enforced at runtime across
+> all sync paths (initial import, SVN→Git, Git→SVN). Blocked files produce structured
+> log warnings and `file_policy_skip` audit entries. There is no silent pass-through.
+>
+> When `lfs_threshold` is set, the daemon runs a preflight check for `git lfs` at
+> startup. If git-lfs is not installed, the import command fails with a clear error.
+> During SVN→Git sync, files above the threshold are copied to the working tree and
+> their extension is added to `.gitattributes` for LFS tracking. During Git→SVN sync,
+> LFS pointer files are automatically resolved to their actual content before being
+> committed to SVN.
 
 ---
 
@@ -310,11 +328,10 @@ email = "jdoe@company.com"
 svn_username = "jdoe"
 
 [commit_format]
-svn_to_git_template = "{original_message}\n\n(svn r{svn_rev})"
-git_to_svn_template = "{original_message}\n\n(from {git_sha})"
+svn_to_git = "{original_message}\n\n(svn r{svn_rev})"
+git_to_svn = "{original_message}\n\n(from {git_sha})"
 
 [options]
-sync_direct_pushes = true
 normalize_line_endings = true
 ```
 
@@ -378,10 +395,14 @@ For quick reference, here are all fields and their defaults:
 | `developer.name` | *(required, no default)* |
 | `developer.email` | *(required, no default)* |
 | `developer.svn_username` | *(required, no default)* |
-| `commit_format.svn_to_git_template` | `"{original_message}\n\nSVN-Revision: r{svn_rev}\nSVN-Author: {svn_author}\nSVN-Date: {svn_date}"` |
-| `commit_format.git_to_svn_template` | `"{original_message}\n\nGit-Commit: {git_sha}\nPR: #{pr_number} ({pr_branch})"` |
-| `options.normalize_line_endings` | `false` |
+| `commit_format.svn_to_git` | *(see template section above)* |
+| `commit_format.git_to_svn` | *(see template section above)* |
+| `options.normalize_line_endings` | `true` |
 | `options.sync_executable_bit` | `true` |
-| `options.max_file_size` | `52428800` (50 MB) |
+| `options.max_file_size` | `0` (no limit) |
 | `options.ignore_patterns` | `[]` |
-| `options.sync_direct_pushes` | `false` |
+| `options.auto_merge` | `true` |
+| `options.sync_externals` | `false` (not implemented) |
+| `options.sync_direct_pushes` | `false` (not implemented — fails if set to true) |
+| `options.lfs_threshold` | `0` (LFS disabled) |
+| `options.lfs_patterns` | `[]` |

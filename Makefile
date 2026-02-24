@@ -1,4 +1,5 @@
-.PHONY: build release test lint clean web-ui test-env-up test-env-down test-all install
+.PHONY: build release test lint clean web-ui test-env-up test-env-down test-all install \
+       validate validate-quick validate-soak validate-ghe-live validate-ghe-live-dry-run
 
 # Development
 build:
@@ -57,6 +58,25 @@ install: release
 	sudo install -m 755 target/release/gitsvnsync-daemon /usr/local/bin/
 	sudo install -m 755 target/release/gitsvnsync /usr/local/bin/
 	@echo "Installed gitsvnsync-daemon and gitsvnsync to /usr/local/bin/"
+
+# Validation scripts
+validate:
+	scripts/controlled-validation.sh
+
+validate-quick:
+	scripts/controlled-validation.sh --quick
+
+validate-soak:
+	scripts/enterprise-soak.sh
+
+validate-soak-dry-run:
+	scripts/enterprise-soak.sh --dry-run
+
+validate-ghe-live:
+	scripts/ghe-live-validation.sh --cycles 1
+
+validate-ghe-live-dry-run:
+	scripts/ghe-live-validation.sh --dry-run
 
 # Docker
 docker-build:

@@ -851,7 +851,11 @@ async fn test_team_mode_forced_failure_persists_audit_entry() {
         "audit entry should have success=false for failed cycle"
     );
     assert!(
-        latest.details.as_deref().unwrap_or("").contains("sync failed"),
+        latest
+            .details
+            .as_deref()
+            .unwrap_or("")
+            .contains("sync failed"),
         "audit details should describe the failure, got: {:?}",
         latest.details
     );

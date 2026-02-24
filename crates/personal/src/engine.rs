@@ -75,6 +75,27 @@ impl PersonalSyncEngine {
         let svn_wc_path = data_dir.join("svn-wc");
         let git_repo_path = git_client.repo_path().to_path_buf();
 
+        // LFS preflight: log warning (non-fatal) if LFS is configured but not available.
+        if config.options.lfs_threshold > 0 {
+            match gitsvnsync_core::lfs::preflight_check() {
+                Ok(version) => {
+                    info!(
+                        version = %version,
+                        lfs_threshold = config.options.lfs_threshold,
+                        "Git LFS is available"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        lfs_threshold = config.options.lfs_threshold,
+                        error = %e,
+                        "Git LFS is configured but not available — \
+                         LFS-threshold files will be synced as regular blobs"
+                    );
+                }
+            }
+        }
+
         Self {
             config,
             db: Arc::new(db),

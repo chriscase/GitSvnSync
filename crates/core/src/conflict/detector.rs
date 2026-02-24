@@ -235,16 +235,18 @@ fn classify_conflict(svn: &FileChange, git: &FileChange) -> Option<ConflictType>
 
         // One side modified/added, other modified/added (cross-combination).
         // e.g. SVN modifies a file that Git independently adds, or vice versa.
-        (ChangeKind::Modified, ChangeKind::Added)
-        | (ChangeKind::Added, ChangeKind::Modified) => Some(ConflictType::Content),
+        (ChangeKind::Modified, ChangeKind::Added) | (ChangeKind::Added, ChangeKind::Modified) => {
+            Some(ConflictType::Content)
+        }
 
         // One side modified, other deleted.
         (ChangeKind::Modified, ChangeKind::Deleted)
         | (ChangeKind::Deleted, ChangeKind::Modified) => Some(ConflictType::EditDelete),
 
         // One side added, other deleted.
-        (ChangeKind::Added, ChangeKind::Deleted)
-        | (ChangeKind::Deleted, ChangeKind::Added) => Some(ConflictType::EditDelete),
+        (ChangeKind::Added, ChangeKind::Deleted) | (ChangeKind::Deleted, ChangeKind::Added) => {
+            Some(ConflictType::EditDelete)
+        }
 
         // Property changes.
         (ChangeKind::PropertyChanged, _) | (_, ChangeKind::PropertyChanged) => {

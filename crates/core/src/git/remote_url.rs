@@ -19,11 +19,7 @@
 ///
 /// The resulting URL is `{base}/{repo}.git` where `repo` is in `owner/name`
 /// format.
-pub fn derive_git_remote_url(
-    api_url: &str,
-    git_base_url: Option<&str>,
-    repo: &str,
-) -> String {
+pub fn derive_git_remote_url(api_url: &str, git_base_url: Option<&str>, repo: &str) -> String {
     let base = derive_git_base_url(api_url, git_base_url);
     format!("{}/{}.git", base, repo)
 }
@@ -174,11 +170,7 @@ mod tests {
     #[test]
     fn test_remote_url_enterprise() {
         assert_eq!(
-            derive_git_remote_url(
-                "https://github.company.com/api/v3",
-                None,
-                "org/repo"
-            ),
+            derive_git_remote_url("https://github.company.com/api/v3", None, "org/repo"),
             "https://github.company.com/org/repo.git"
         );
     }

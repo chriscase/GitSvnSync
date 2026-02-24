@@ -130,8 +130,7 @@ fn init_tracing(config: Option<&PersonalConfig>) {
         .unwrap_or("info");
 
     // RUST_LOG takes precedence; otherwise use config log_level.
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(log_level));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
 
     // Console layer (always present).
     let console_layer = tracing_subscriber::fmt::layer()

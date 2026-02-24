@@ -1351,8 +1351,16 @@ mod tests {
         let db = setup_db();
 
         // Action name contains "error" but success = true.
-        db.insert_audit_log("error_recovery", None, None, None, None, Some("recovered"), true)
-            .unwrap();
+        db.insert_audit_log(
+            "error_recovery",
+            None,
+            None,
+            None,
+            None,
+            Some("recovered"),
+            true,
+        )
+        .unwrap();
 
         // Action name is benign but success = false.
         db.insert_audit_log("sync_cycle", None, None, None, None, Some("timeout"), false)
@@ -1398,11 +1406,20 @@ mod tests {
         let entries = db.list_audit_entries(10, None, None).unwrap();
         assert_eq!(entries.len(), 2);
 
-        let recovery = entries.iter().find(|e| e.action == "error_recovery").unwrap();
-        assert!(recovery.success, "error_recovery with success=true should show success");
+        let recovery = entries
+            .iter()
+            .find(|e| e.action == "error_recovery")
+            .unwrap();
+        assert!(
+            recovery.success,
+            "error_recovery with success=true should show success"
+        );
 
         let cycle = entries.iter().find(|e| e.action == "sync_cycle").unwrap();
-        assert!(!cycle.success, "sync_cycle with success=false should show failure");
+        assert!(
+            !cycle.success,
+            "sync_cycle with success=false should show failure"
+        );
     }
 
     /// Forced team-mode failure → failed audit entry + error count increments.

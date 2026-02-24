@@ -669,10 +669,7 @@ mod tests {
             truncated.ends_with("...(truncated)"),
             "Long bodies should be truncated"
         );
-        assert!(
-            truncated.len() < 600,
-            "Truncated output should be bounded"
-        );
+        assert!(truncated.len() < 600, "Truncated output should be bounded");
     }
 
     /// Error message format includes request-id placeholder and status.
