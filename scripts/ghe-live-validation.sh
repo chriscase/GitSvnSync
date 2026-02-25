@@ -475,9 +475,10 @@ else
     exit 1
 fi
 
-# Configure git identity.
+# Configure git identity and persist auth for subsequent pulls.
 git -C "$GIT_CLONE" config user.name "gitsvnsync-validator"
 git -C "$GIT_CLONE" config user.email "validator@gitsvnsync.local"
+git -C "$GIT_CLONE" config "http.extraHeader" "Authorization: token ${GHE_TOKEN}"
 
 log "✅ Provisioning complete"
 emit_event "provision" "complete" "pass" 0
@@ -618,24 +619,31 @@ TOML
 
     if "$PERSONAL_BIN" --config "$SYNC_CONFIG" sync \
         > "$CYCLE_DIR/s4b-sync-stdout.log" 2> "$CYCLE_DIR/s4b-sync-stderr.log"; then
-        # Pull latest Git state and verify SVN-committed files are present.
-        git -C "$GIT_CLONE" pull --ff-only > "$CYCLE_DIR/s4b-git-pull.log" 2>&1 || true
-
-        # The nested directory from S4 should now exist in Git.
-        if [[ -d "$GIT_CLONE/nested_${CANARY}" ]] && \
-           [[ -f "$GIT_CLONE/nested_${CANARY}/sub/deep/file.txt" ]]; then
-            NESTED_CONTENT=$(cat "$GIT_CLONE/nested_${CANARY}/sub/deep/file.txt" 2>/dev/null || echo "")
-            if [[ "$NESTED_CONTENT" == "nested-${CANARY}" ]]; then
-                record_scenario "s4b-svn-to-git-sync" "pass" "nested files verified in Git"
+        # Pull latest Git state — fail scenario if auth/network prevents pull.
+        if ! GIT_ASKPASS=true git -C "$GIT_CLONE" pull --ff-only \
+            > "$CYCLE_DIR/s4b-git-pull.log" 2>&1; then
+            # Redact any tokens that might appear in the error output.
+            sed -i.bak "s|${GHE_TOKEN}|[REDACTED]|g" "$CYCLE_DIR/s4b-git-pull.log" 2>/dev/null || true
+            rm -f "$CYCLE_DIR/s4b-git-pull.log.bak"
+            record_scenario "s4b-svn-to-git-sync" "fail" "git pull failed — see s4b-git-pull.log"
+            CYCLE_OK=false
+        else
+            # The nested directory from S4 should now exist in Git.
+            if [[ -d "$GIT_CLONE/nested_${CANARY}" ]] && \
+               [[ -f "$GIT_CLONE/nested_${CANARY}/sub/deep/file.txt" ]]; then
+                NESTED_CONTENT=$(cat "$GIT_CLONE/nested_${CANARY}/sub/deep/file.txt" 2>/dev/null || echo "")
+                if [[ "$NESTED_CONTENT" == "nested-${CANARY}" ]]; then
+                    record_scenario "s4b-svn-to-git-sync" "pass" "nested files verified in Git"
+                else
+                    record_scenario "s4b-svn-to-git-sync" "fail" "nested file content mismatch in Git"
+                    CYCLE_OK=false
+                fi
             else
-                record_scenario "s4b-svn-to-git-sync" "fail" "nested file content mismatch in Git"
+                # Files might not appear if sync logic filters them — check logs.
+                SVN_TO_GIT_COUNT=$(grep -oE 'SVN→Git: [0-9]+ commits' "$CYCLE_DIR/s4b-sync-stdout.log" 2>/dev/null || echo "")
+                record_scenario "s4b-svn-to-git-sync" "fail" "nested dir not found in Git (sync output: ${SVN_TO_GIT_COUNT:-none})"
                 CYCLE_OK=false
             fi
-        else
-            # Files might not appear if sync logic filters them — check logs.
-            SVN_TO_GIT_COUNT=$(grep -oE 'SVN→Git: [0-9]+ commits' "$CYCLE_DIR/s4b-sync-stdout.log" 2>/dev/null || echo "")
-            record_scenario "s4b-svn-to-git-sync" "fail" "nested dir not found in Git (sync output: ${SVN_TO_GIT_COUNT:-none})"
-            CYCLE_OK=false
         fi
     else
         record_scenario "s4b-svn-to-git-sync" "fail" "gitsvnsync sync exited non-zero"
@@ -726,7 +734,9 @@ TOML
 
     # ---- Scenario 7: Git→SVN sync via merged PR ----
     # This is the critical Git→SVN proof.  We invoke gitsvnsync-personal sync
-    # after the PR merge, then verify the PR's file appears in SVN.
+    # after the PR merge, then verify:
+    #   (a) the PR's file content appears in SVN
+    #   (b) the SVN log for the replayed commit contains Git-SHA / PR metadata
     log "▶ S7: Git→SVN sync (merged-PR replay)"
 
     if $PR_MERGED; then
@@ -736,20 +746,51 @@ TOML
             svn update "$SVN_WC" --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
                 --non-interactive --no-auth-cache > "$CYCLE_DIR/s7-svn-update.log" 2>&1 || true
 
-            # Verify the PR-committed file now exists in SVN.
+            # (a) Verify the PR-committed file now exists in SVN with correct content.
             VERIFY_SVN=$(svn cat "$SVN_URL/$GIT_FILE" --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
                 --non-interactive --no-auth-cache 2>/dev/null || echo "")
-            if [[ "$VERIFY_SVN" == "$GIT_CONTENT" ]]; then
-                record_scenario "s7-git-to-svn-sync" "pass" "PR file verified in SVN (content match)"
-            else
-                # The file might not have been synced yet if the PR detection
-                # window is too narrow.  Check the sync output for evidence.
+            if [[ "$VERIFY_SVN" != "$GIT_CONTENT" ]]; then
                 SYNC_OUTPUT=$(cat "$CYCLE_DIR/s7-sync-stdout.log" 2>/dev/null || echo "")
                 if echo "$SYNC_OUTPUT" | grep -qE 'Git→SVN: [1-9][0-9]* commits|prs_synced.*[1-9]'; then
                     record_scenario "s7-git-to-svn-sync" "fail" "sync reported commits but file not in SVN"
-                    CYCLE_OK=false
                 else
                     record_scenario "s7-git-to-svn-sync" "fail" "no PR replay occurred — file not in SVN (content: '${VERIFY_SVN:0:40}')"
+                fi
+                CYCLE_OK=false
+            else
+                # (b) Verify the replayed SVN commit carries Git/PR metadata.
+                # GitSvnSync formats commit messages with "Git-Commit:" and "PR:" trailers.
+                SVN_LOG_XML=$(svn log "$SVN_URL/$GIT_FILE" --xml -l 3 \
+                    --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+                    --non-interactive --no-auth-cache 2>/dev/null || echo "")
+                echo "$SVN_LOG_XML" > "$CYCLE_DIR/s7-svn-log.xml"
+
+                S7_PROOF_DETAILS="content=OK"
+                S7_PASS=true
+
+                # Check for Git-Commit trailer in the SVN log message.
+                if echo "$SVN_LOG_XML" | grep -q "Git-Commit:"; then
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, Git-Commit=found"
+                else
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, Git-Commit=MISSING"
+                    S7_PASS=false
+                fi
+
+                # Check for PR number reference in the SVN log message.
+                PR_NUM_FROM_S6=$(cat "$CYCLE_DIR/s6-pr-number.txt" 2>/dev/null || echo "")
+                if [[ -n "$PR_NUM_FROM_S6" ]] && echo "$SVN_LOG_XML" | grep -q "#${PR_NUM_FROM_S6}"; then
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, PR=#${PR_NUM_FROM_S6}=found"
+                elif echo "$SVN_LOG_XML" | grep -qE "PR: #[0-9]+"; then
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, PR=found(different number)"
+                else
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, PR=MISSING"
+                    S7_PASS=false
+                fi
+
+                if $S7_PASS; then
+                    record_scenario "s7-git-to-svn-sync" "pass" "$S7_PROOF_DETAILS"
+                else
+                    record_scenario "s7-git-to-svn-sync" "fail" "content OK but metadata missing ($S7_PROOF_DETAILS)"
                     CYCLE_OK=false
                 fi
             fi

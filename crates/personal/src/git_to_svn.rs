@@ -466,7 +466,10 @@ impl GitToSvnSync {
     /// copy. Uses git2 to read the commit's diff and extract per-file content
     /// at the commit SHA, avoiding full-tree copies that could leak unrelated
     /// workspace state or collapse multi-commit PRs.
-    async fn apply_git_changes_to_svn(&self, commit: &GitHubCommit) -> Result<()> {
+    ///
+    /// Public for integration testing (drives the real LFS-pointer-skip and
+    /// policy-evaluation code paths without needing GitHub API calls).
+    pub async fn apply_git_changes_to_svn(&self, commit: &GitHubCommit) -> Result<()> {
         let git_client = GitClient::new(&self.git_repo_path)
             .context("failed to open local git repo for commit diff")?;
 

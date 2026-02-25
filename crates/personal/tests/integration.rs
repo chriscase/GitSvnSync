@@ -2461,19 +2461,23 @@ fn test_lfs_pointer_detection_precision() {
 }
 
 // ===========================================================================
-// Test: Replay-path safety — unresolved LFS pointer must not reach SVN
+// Test: Replay-path safety — production path via apply_git_changes_to_svn
 // ===========================================================================
 
-/// Simulates the Git→SVN replay path for a commit that contains an LFS pointer.
+/// Production-path test: drives the ACTUAL `GitToSvnSync::apply_git_changes_to_svn`
+/// method with a Git commit containing an unresolved LFS pointer.
 ///
-/// This test exercises the core decision logic that `apply_git_changes_to_svn`
-/// uses: policy evaluation, LFS pointer detection, resolution attempt, and the
-/// skip-with-audit fallback. It uses a real local SVN repo and Git repo to
-/// prove that pointer text never reaches the SVN working copy.
+/// Asserts from real execution:
+///   - Pointer text is NOT written to the SVN working copy.
+///   - `lfs_resolution_failed` audit row is emitted by the production path.
+///   - The method returns Ok (skip, not error) reflecting safe-skip behavior.
 #[tokio::test]
 async fn test_replay_path_lfs_pointer_skipped_not_committed() {
     use gitsvnsync_core::db::queries::AuditLogEntry;
-    use gitsvnsync_core::file_policy::{FilePolicy, FilePolicyDecision};
+    use gitsvnsync_core::git::github::{
+        GitHubCommit, GitHubCommitDetail, GitHubGitActor,
+    };
+    use gitsvnsync_personal::git_to_svn::GitToSvnSync;
 
     if !svn_available() {
         eprintln!("SKIPPED: svn/svnadmin not found in PATH");
@@ -2486,8 +2490,6 @@ async fn test_replay_path_lfs_pointer_skipped_not_committed() {
     let svn_url = create_svn_repo(tmp.path());
     let svn_wc = tmp.path().join("svn_wc");
     svn_checkout(&svn_url, &svn_wc);
-
-    // Seed an initial file so the working copy isn't empty.
     svn_commit_file(&svn_wc, "seed.txt", "seed", "initial seed");
 
     // --- Set up Git repo with a committed LFS pointer ---
@@ -2495,7 +2497,6 @@ async fn test_replay_path_lfs_pointer_skipped_not_committed() {
     let bare_dir = tmp.path().join("origin.git");
     let git_client = setup_git_with_bare_origin(&git_work, &bare_dir);
 
-    // Write an LFS pointer into the Git repo and commit it.
     let pointer_text = "version https://git-lfs.github.com/spec/v1\n\
                         oid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\n\
                         size 99999\n";
@@ -2516,47 +2517,79 @@ async fn test_replay_path_lfs_pointer_skipped_not_committed() {
     let db = setup_db(&db_path);
     let db_arc = Arc::new(db);
 
-    // --- Build a FilePolicy that allows the file (no size limit) ---
-    let policy = FilePolicy::new(0, vec![]);
+    // --- Build PersonalConfig for GitToSvnSync ---
+    let config = PersonalConfig {
+        personal: PersonalSection {
+            poll_interval_secs: 30,
+            data_dir: tmp.path().to_path_buf(),
+            log_level: "info".into(),
+            status_port: None,
+        },
+        svn: PersonalSvnConfig {
+            url: svn_url.clone(),
+            username: "test".into(),
+            password_env: String::new(),
+            password: Some("test".into()),
+        },
+        github: PersonalGitHubConfig {
+            api_url: "https://localhost:0/unused".into(),
+            git_base_url: None,
+            repo: "test/unused".into(),
+            token_env: String::new(),
+            default_branch: "main".into(),
+            auto_create: false,
+            private: false,
+            token: Some("unused".into()),
+        },
+        developer: DeveloperConfig {
+            name: "Test User".into(),
+            email: "test@example.com".into(),
+            svn_username: "test".into(),
+        },
+        commit_format: CommitFormatConfig::default(),
+        options: PersonalOptionsConfig::default(),
+    };
 
-    // --- Simulate the replay logic from apply_git_changes_to_svn ---
-    // Read the file content at the commit SHA (this is what git_to_svn does).
-    let content = git_client
-        .get_file_content_at_commit(&commit_sha, "large-asset.bin")
-        .expect("failed to read file at commit")
-        .expect("file content should exist");
+    let svn_client = SvnClient::new(&svn_url, "test", "test");
+    let github_client =
+        gitsvnsync_core::git::github::GitHubClient::new("https://localhost:0/unused", "unused");
 
-    // Policy evaluation — should be Allow (no size limit, no ignore).
-    let decision = policy.evaluate("large-asset.bin", content.len() as u64);
-    assert_eq!(decision, FilePolicyDecision::Allow);
-
-    // LFS pointer detection — should detect this as a pointer.
-    assert!(
-        gitsvnsync_core::lfs::is_lfs_pointer(&content),
-        "content committed to Git must be detected as an LFS pointer"
+    let sync = GitToSvnSync::new(
+        svn_client,
+        github_client,
+        db_arc.clone(),
+        &config,
+        svn_wc.clone(),
+        git_work.clone(),
     );
 
-    // LFS resolution — must fail since this is not a real LFS-enabled repo.
-    let resolve_result =
-        gitsvnsync_core::lfs::resolve_lfs_pointer(&git_work, &content);
-    assert!(
-        resolve_result.is_err(),
-        "LFS pointer resolution must fail in a non-LFS repo"
-    );
+    // --- Build a GitHubCommit matching the real commit SHA ---
+    let gh_commit = GitHubCommit {
+        sha: commit_sha.clone(),
+        commit: GitHubCommitDetail {
+            message: "add LFS-tracked asset".into(),
+            author: GitHubGitActor {
+                name: "Test User".into(),
+                email: "test@example.com".into(),
+                date: None,
+            },
+            committer: GitHubGitActor {
+                name: "Test User".into(),
+                email: "test@example.com".into(),
+                date: None,
+            },
+        },
+        author: None,
+    };
 
-    // --- Audit the skip (mirrors git_to_svn.rs error path) ---
-    let resolve_err = resolve_result.unwrap_err();
-    let _ = db_arc.insert_audit_log(
-        "lfs_resolution_failed",
-        Some("git_to_svn"),
-        None,
-        Some(&commit_sha),
-        None,
-        Some(&format!(
-            "Skipped 'large-asset.bin': LFS pointer could not be resolved ({})",
-            resolve_err
-        )),
-        false,
+    // --- Call the PRODUCTION apply_git_changes_to_svn ---
+    let result = sync.apply_git_changes_to_svn(&gh_commit).await;
+
+    // The method should succeed (skip is not an error — safe-skip behavior).
+    assert!(
+        result.is_ok(),
+        "apply_git_changes_to_svn must return Ok on LFS pointer skip, got: {:?}",
+        result.err()
     );
 
     // --- Verify: SVN working copy must NOT contain the pointer text ---
@@ -2566,13 +2599,13 @@ async fn test_replay_path_lfs_pointer_skipped_not_committed() {
         "LFS pointer file must NOT be written to SVN working copy"
     );
 
-    // --- Verify: audit log has the lfs_resolution_failed entry ---
+    // --- Verify: audit log has the lfs_resolution_failed entry (from production code) ---
     let audit_entries: Vec<AuditLogEntry> = db_arc
         .list_audit_log_by_action("lfs_resolution_failed", 10)
         .expect("failed to query audit log");
     assert!(
         !audit_entries.is_empty(),
-        "audit log must contain an lfs_resolution_failed entry"
+        "production code must emit an lfs_resolution_failed audit entry"
     );
     let entry = &audit_entries[0];
     assert_eq!(entry.action, "lfs_resolution_failed");
@@ -2589,11 +2622,15 @@ async fn test_replay_path_lfs_pointer_skipped_not_committed() {
     );
 }
 
-/// Companion test: verifies that normal (non-pointer) content IS written
-/// to SVN during replay — ensuring the skip logic doesn't false-positive.
+/// Production-path companion test: drives `apply_git_changes_to_svn` with
+/// normal (non-pointer) content and verifies it IS written to SVN WC.
+/// Guards against false-positive skipping.
 #[tokio::test]
 async fn test_replay_path_normal_content_written_to_svn() {
-    use gitsvnsync_core::file_policy::{FilePolicy, FilePolicyDecision};
+    use gitsvnsync_core::git::github::{
+        GitHubCommit, GitHubCommitDetail, GitHubGitActor,
+    };
+    use gitsvnsync_personal::git_to_svn::GitToSvnSync;
 
     if !svn_available() {
         eprintln!("SKIPPED: svn/svnadmin not found in PATH");
@@ -2613,10 +2650,10 @@ async fn test_replay_path_normal_content_written_to_svn() {
 
     // Commit a normal file (not an LFS pointer).
     let normal_content = "fn main() { println!(\"hello world\"); }";
-    std::fs::write(git_work.join("main.rs"), normal_content).unwrap();
+    std::fs::write(git_work.join("feature.txt"), normal_content).unwrap();
     let oid = git_client
         .commit(
-            "add source file",
+            "add feature file",
             "Test User",
             "test@example.com",
             "Test User",
@@ -2625,25 +2662,87 @@ async fn test_replay_path_normal_content_written_to_svn() {
         .expect("git commit failed");
     let commit_sha = oid.to_string();
 
-    let policy = FilePolicy::new(0, vec![]);
+    let db_path = tmp.path().join("test.db");
+    let db = setup_db(&db_path);
+    let db_arc = Arc::new(db);
 
-    // Read file content at commit.
-    let content = git_client
-        .get_file_content_at_commit(&commit_sha, "main.rs")
-        .expect("failed to read file at commit")
-        .expect("file content should exist");
+    let config = PersonalConfig {
+        personal: PersonalSection {
+            poll_interval_secs: 30,
+            data_dir: tmp.path().to_path_buf(),
+            log_level: "info".into(),
+            status_port: None,
+        },
+        svn: PersonalSvnConfig {
+            url: svn_url.clone(),
+            username: "test".into(),
+            password_env: String::new(),
+            password: Some("test".into()),
+        },
+        github: PersonalGitHubConfig {
+            api_url: "https://localhost:0/unused".into(),
+            git_base_url: None,
+            repo: "test/unused".into(),
+            token_env: String::new(),
+            default_branch: "main".into(),
+            auto_create: false,
+            private: false,
+            token: Some("unused".into()),
+        },
+        developer: DeveloperConfig {
+            name: "Test User".into(),
+            email: "test@example.com".into(),
+            svn_username: "test".into(),
+        },
+        commit_format: CommitFormatConfig::default(),
+        options: PersonalOptionsConfig::default(),
+    };
 
-    let decision = policy.evaluate("main.rs", content.len() as u64);
-    assert_eq!(decision, FilePolicyDecision::Allow);
+    let svn_client = SvnClient::new(&svn_url, "test", "test");
+    let github_client =
+        gitsvnsync_core::git::github::GitHubClient::new("https://localhost:0/unused", "unused");
 
-    // NOT an LFS pointer.
-    assert!(!gitsvnsync_core::lfs::is_lfs_pointer(&content));
+    let sync = GitToSvnSync::new(
+        svn_client,
+        github_client,
+        db_arc,
+        &config,
+        svn_wc.clone(),
+        git_work.clone(),
+    );
 
-    // Simulate the write-to-SVN-WC path (mirrors git_to_svn.rs Allow + not-pointer).
-    let svn_target = svn_wc.join("main.rs");
-    std::fs::write(&svn_target, &content).unwrap();
+    let gh_commit = GitHubCommit {
+        sha: commit_sha,
+        commit: GitHubCommitDetail {
+            message: "add feature file".into(),
+            author: GitHubGitActor {
+                name: "Test User".into(),
+                email: "test@example.com".into(),
+                date: None,
+            },
+            committer: GitHubGitActor {
+                name: "Test User".into(),
+                email: "test@example.com".into(),
+                date: None,
+            },
+        },
+        author: None,
+    };
 
-    // Verify the file was written correctly.
+    // --- Call the PRODUCTION apply_git_changes_to_svn ---
+    let result = sync.apply_git_changes_to_svn(&gh_commit).await;
+    assert!(
+        result.is_ok(),
+        "apply_git_changes_to_svn must succeed for normal content, got: {:?}",
+        result.err()
+    );
+
+    // --- Verify: file IS written to SVN working copy with correct content ---
+    let svn_target = svn_wc.join("feature.txt");
+    assert!(
+        svn_target.exists(),
+        "normal file must be written to SVN working copy"
+    );
     let written = std::fs::read_to_string(&svn_target).unwrap();
-    assert_eq!(written, normal_content);
+    assert_eq!(written, normal_content, "SVN WC file content must match Git content");
 }
