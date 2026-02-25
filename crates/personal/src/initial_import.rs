@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use tokio::sync::Mutex;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use gitsvnsync_core::db::Database;
 use gitsvnsync_core::file_policy::FilePolicy;
@@ -290,17 +290,29 @@ impl<'a> InitialImport<'a> {
                 continue;
             }
 
-            // Copy with policy enforcement.
-            let skipped = SvnToGitSync::copy_tree_with_policy(
+            // Copy with policy enforcement — propagate hard I/O errors
+            // instead of silently swallowing them.
+            let skipped = match SvnToGitSync::copy_tree_with_policy(
                 export_dir.path(),
                 &repo_path,
                 &policy,
                 self.db,
-            )
-            .unwrap_or_else(|e| {
-                warn!(rev, error = %e, "policy copy failed, continuing");
-                0
-            });
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    error!(rev, error = %e, "policy copy failed for revision");
+                    let _ = self.db.insert_audit_log(
+                        "import_copy_failed",
+                        Some("svn_to_git"),
+                        Some(rev),
+                        None,
+                        Some(&self.config.developer.svn_username),
+                        Some(&format!("copy_tree_with_policy failed at r{}: {}", rev, e)),
+                        false,
+                    );
+                    anyhow::bail!("copy_tree_with_policy failed for revision r{}: {}", rev, e);
+                }
+            };
 
             if skipped > 0 {
                 debug!(rev, skipped, "files skipped by policy during import");

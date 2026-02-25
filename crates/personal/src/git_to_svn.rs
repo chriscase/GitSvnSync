@@ -530,12 +530,27 @@ impl GitToSvnSync {
                                             resolved
                                         }
                                         Err(e) => {
-                                            warn!(
+                                            // DO NOT write raw pointer text to SVN —
+                                            // that would corrupt the SVN copy. Skip
+                                            // this file safely and audit the skip.
+                                            error!(
                                                 path = file_path,
                                                 error = %e,
-                                                "Git→SVN: failed to resolve LFS pointer, writing pointer as-is"
+                                                "Git→SVN: LFS pointer resolution failed — skipping file to prevent pointer text in SVN"
                                             );
-                                            content.clone()
+                                            let _ = self.db.insert_audit_log(
+                                                "lfs_resolution_failed",
+                                                Some("git_to_svn"),
+                                                None,
+                                                Some(&commit.sha),
+                                                None,
+                                                Some(&format!(
+                                                    "Skipped '{}': LFS pointer could not be resolved ({})",
+                                                    file_path, e
+                                                )),
+                                                false,
+                                            );
+                                            continue;
                                         }
                                     }
                                 } else {
@@ -576,12 +591,26 @@ impl GitToSvnSync {
                                             resolved
                                         }
                                         Err(e) => {
-                                            warn!(
+                                            // DO NOT write raw pointer text to SVN —
+                                            // skip safely and audit.
+                                            error!(
                                                 path = file_path,
                                                 error = %e,
-                                                "Git→SVN: LFS resolution failed, writing pointer"
+                                                "Git→SVN: LFS pointer resolution failed (LfsTrack) — skipping file"
                                             );
-                                            content.clone()
+                                            let _ = self.db.insert_audit_log(
+                                                "lfs_resolution_failed",
+                                                Some("git_to_svn"),
+                                                None,
+                                                Some(&commit.sha),
+                                                None,
+                                                Some(&format!(
+                                                    "Skipped '{}': LFS pointer could not be resolved [LfsTrack] ({})",
+                                                    file_path, e
+                                                )),
+                                                false,
+                                            );
+                                            continue;
                                         }
                                     }
                                 } else {

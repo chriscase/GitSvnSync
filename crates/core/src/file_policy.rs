@@ -76,8 +76,10 @@ pub struct FilePolicy {
     ignore_patterns: Vec<String>,
     /// LFS size threshold in bytes. 0 = LFS disabled.
     lfs_threshold: u64,
-    /// Whether LFS is enabled.
+    /// Whether LFS is enabled (threshold > 0 or patterns non-empty).
     lfs_enabled: bool,
+    /// Glob patterns for files that should always be LFS-tracked regardless of size.
+    lfs_patterns: Vec<String>,
 }
 
 impl FilePolicy {
@@ -88,24 +90,27 @@ impl FilePolicy {
             ignore_patterns,
             lfs_threshold: 0,
             lfs_enabled: false,
+            lfs_patterns: Vec::new(),
         }
     }
 
     /// Create a `FilePolicy` with LFS support.
+    ///
+    /// `lfs_patterns` are glob patterns for files that should always be
+    /// LFS-tracked regardless of size (e.g., `["*.psd", "*.bin"]`).
     pub fn with_lfs(
         max_file_size: u64,
         ignore_patterns: Vec<String>,
         lfs_threshold: u64,
         lfs_patterns: &[String],
     ) -> Self {
-        // Merge LFS patterns into ignore patterns? No — LFS patterns are
-        // for *tracking*, not ignoring.  We keep them separate conceptually.
-        let _ = lfs_patterns; // Reserved for future pattern-based LFS matching.
+        let has_patterns = !lfs_patterns.is_empty();
         Self {
             max_file_size,
             ignore_patterns,
             lfs_threshold,
-            lfs_enabled: lfs_threshold > 0,
+            lfs_enabled: lfs_threshold > 0 || has_patterns,
+            lfs_patterns: lfs_patterns.to_vec(),
         }
     }
 
@@ -142,13 +147,29 @@ impl FilePolicy {
             };
         }
 
-        // 3. Check LFS threshold.
-        if self.lfs_enabled && size > self.lfs_threshold {
+        // 3. Check LFS patterns (pattern-based LFS, regardless of size).
+        for pattern in &self.lfs_patterns {
+            if self.matches_pattern(rel_path, pattern) {
+                info!(
+                    path = rel_path,
+                    pattern = pattern.as_str(),
+                    size,
+                    "file matches lfs_pattern — LFS tracking"
+                );
+                return FilePolicyDecision::LfsTrack {
+                    size,
+                    threshold: 0, // pattern-based, not threshold-based
+                };
+            }
+        }
+
+        // 4. Check LFS threshold.
+        if self.lfs_threshold > 0 && size > self.lfs_threshold {
             info!(
                 path = rel_path,
                 size,
                 threshold = self.lfs_threshold,
-                "file qualifies for LFS tracking"
+                "file qualifies for LFS tracking (size threshold)"
             );
             return FilePolicyDecision::LfsTrack {
                 size,
@@ -175,7 +196,10 @@ impl FilePolicy {
 
     /// Whether the policy has any constraints at all.
     pub fn has_constraints(&self) -> bool {
-        self.max_file_size > 0 || !self.ignore_patterns.is_empty() || self.lfs_enabled
+        self.max_file_size > 0
+            || !self.ignore_patterns.is_empty()
+            || self.lfs_enabled
+            || !self.lfs_patterns.is_empty()
     }
 
     /// Max file size (for display/logging).
@@ -405,5 +429,102 @@ mod tests {
         // 6000 is above both. max_file_size blocks it.
         let d2 = policy.evaluate("huge.bin", 6000);
         assert!(matches!(d2, FilePolicyDecision::Oversize { .. }));
+    }
+
+    #[test]
+    fn test_lfs_patterns_match_regardless_of_size() {
+        // lfs_patterns should trigger LfsTrack even for tiny files.
+        let policy = FilePolicy::with_lfs(0, vec![], 0, &["*.psd".into(), "*.bin".into()]);
+        assert!(policy.lfs_enabled());
+
+        // A tiny .psd file → LfsTrack (pattern-based, not size-based).
+        let d1 = policy.evaluate("design.psd", 100);
+        assert!(matches!(
+            d1,
+            FilePolicyDecision::LfsTrack {
+                size: 100,
+                threshold: 0
+            }
+        ));
+        assert!(d1.should_sync());
+        assert_eq!(d1.label(), "lfs-track");
+
+        // A .bin file → LfsTrack (root-level; *.bin matches single path segment).
+        let d2 = policy.evaluate("model.bin", 50);
+        assert!(matches!(d2, FilePolicyDecision::LfsTrack { .. }));
+
+        // A .txt file → Allow (no pattern match, no threshold).
+        let d3 = policy.evaluate("readme.txt", 100);
+        assert_eq!(d3, FilePolicyDecision::Allow);
+    }
+
+    #[test]
+    fn test_lfs_patterns_nested_path() {
+        let policy = FilePolicy::with_lfs(0, vec![], 0, &["assets/**/*.bin".into()]);
+
+        // Match nested path.
+        let d1 = policy.evaluate("assets/models/large.bin", 10);
+        assert!(matches!(d1, FilePolicyDecision::LfsTrack { .. }));
+
+        // No match outside the assets/ tree.
+        let d2 = policy.evaluate("src/data.bin", 10);
+        assert_eq!(d2, FilePolicyDecision::Allow);
+    }
+
+    #[test]
+    fn test_lfs_patterns_combined_with_threshold() {
+        // Both patterns and threshold active.
+        let policy = FilePolicy::with_lfs(0, vec![], 1000, &["*.psd".into()]);
+        assert!(policy.lfs_enabled());
+
+        // Small .psd → LfsTrack via pattern (even though under threshold).
+        let d1 = policy.evaluate("art.psd", 500);
+        assert!(matches!(d1, FilePolicyDecision::LfsTrack { .. }));
+
+        // Large .txt → LfsTrack via threshold.
+        let d2 = policy.evaluate("data.txt", 2000);
+        assert!(matches!(
+            d2,
+            FilePolicyDecision::LfsTrack {
+                size: 2000,
+                threshold: 1000
+            }
+        ));
+
+        // Small .txt → Allow.
+        let d3 = policy.evaluate("small.txt", 100);
+        assert_eq!(d3, FilePolicyDecision::Allow);
+    }
+
+    #[test]
+    fn test_ignore_pattern_takes_precedence_over_lfs_pattern() {
+        // If a file is both ignored and LFS-patterned, ignore wins.
+        let policy = FilePolicy::with_lfs(0, vec!["*.psd".into()], 0, &["*.psd".into()]);
+
+        let d = policy.evaluate("huge.psd", 100);
+        assert!(matches!(d, FilePolicyDecision::Ignored { .. }));
+    }
+
+    #[test]
+    fn test_oversize_takes_precedence_over_lfs_pattern() {
+        // If max_file_size blocks a file, it should be Oversize even if lfs_patterns match.
+        let policy = FilePolicy::with_lfs(500, vec![], 0, &["*.bin".into()]);
+
+        // Under size limit → LfsTrack via pattern.
+        let d1 = policy.evaluate("small.bin", 100);
+        assert!(matches!(d1, FilePolicyDecision::LfsTrack { .. }));
+
+        // Over size limit → Oversize (blocks).
+        let d2 = policy.evaluate("huge.bin", 1000);
+        assert!(matches!(d2, FilePolicyDecision::Oversize { .. }));
+    }
+
+    #[test]
+    fn test_lfs_patterns_enable_lfs_without_threshold() {
+        // lfs_patterns alone (without threshold) should enable LFS.
+        let policy = FilePolicy::with_lfs(0, vec![], 0, &["*.iso".into()]);
+        assert!(policy.lfs_enabled());
+        assert!(policy.has_constraints());
+        assert_eq!(policy.lfs_threshold(), 0);
     }
 }
