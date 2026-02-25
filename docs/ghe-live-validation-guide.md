@@ -78,10 +78,10 @@ Each cycle executes these scenarios in order:
 | S2 | SVN modify file | SVN→ | Modify an existing file, verify updated content |
 | S3 | SVN delete file | SVN→ | Delete a file via `svn rm`, verify it's gone |
 | S4 | SVN nested dirs | SVN→ | Create deeply nested directory structure, verify leaf file |
-| S4b | **SVN→Git sync** | SVN→Git | **Invoke `gitsvnsync-personal sync`, pull Git repo, verify SVN files appear in Git** |
+| S4b | **SVN→Git sync** | SVN→Git | **Invoke `gitsvnsync-personal sync`, pull Git repo (with auth), verify SVN files appear in Git. Fails on pull auth error.** |
 | S5 | Git branch + commit | →Git | Create feature branch via refs API, commit file on branch |
 | S6 | Open + merge PR | →Git | Open PR from feature branch, squash-merge via API |
-| S7 | **Git→SVN sync** | Git→SVN | **Invoke `gitsvnsync-personal sync`, verify PR file content appears in SVN via `svn cat`** |
+| S7 | **Git→SVN sync** | Git→SVN | **Invoke `gitsvnsync-personal sync`, verify (a) PR file content in SVN via `svn cat`, (b) SVN log contains `Git-Commit:` and `PR:` metadata trailers** |
 | S8 | Echo marker | SVN→ | Commit with `[gitsvnsync]` marker, verify in `svn log --xml` |
 | S9 | API rate limit | →Git | Check `/rate_limit` endpoint, verify >100 requests remaining |
 | S10 | Log-probe | Local | Spawn `gitsvnsync-personal log-probe`, verify `personal.log` written |
@@ -93,8 +93,9 @@ Each cycle executes these scenarios in order:
 > **S5→S6→S7 form a PR-based Git→SVN proof.** GitSvnSync only replays *merged PR* commits from
 > Git to SVN (direct pushes to main are not synced). These three scenarios exercise the real
 > production workflow: create a feature branch, commit via the Contents API, open and squash-merge
-> a PR, then run sync and verify the file content lands in SVN. S7 fails if no qualifying PR
-> replay occurred or if the content does not match.
+> a PR, then run sync and verify the file content lands in SVN. S7 fails if (a) no qualifying PR
+> replay occurred, (b) file content does not match, or (c) the replayed SVN commit is missing
+> `Git-Commit:` or `PR:` metadata trailers.
 >
 > Sync engine logs are captured in `cycle-NNN/sync-engine-data/`.
 
@@ -141,6 +142,7 @@ artifacts/ghe-live-validation/<UTC_TIMESTAMP>/
     ├── s7-sync-stdout.log  # Git→SVN sync engine stdout
     ├── s7-sync-stderr.log  # Git→SVN sync engine stderr
     ├── s7-svn-update.log   # SVN update after sync
+    ├── s7-svn-log.xml      # SVN log XML for metadata verification
     ├── s9-rate-limit.json  # GHE rate limit response
     ├── s10-probe-stdout.log
     ├── s10-probe-stderr.log
@@ -182,8 +184,9 @@ Before declaring production readiness, verify:
 | Scenario | Common Causes | What to Check |
 |----------|---------------|---------------|
 | S1-S4 (SVN) | Auth failure, read-only repo, network | `cycle-NNN/sN-commit.log`, SVN access |
+| S4b (SVN→Git sync) | Git pull auth, token scope, empty sync | `cycle-NNN/s4b-git-pull.log`, `s4b-sync-*.log` |
 | S5-S6 (Git PR) | Token scope, repo permissions, merge conflict | `cycle-NNN/s5-error.json`, `s6-*-error.json`, token scopes |
-| S7 (Git→SVN sync) | PR not detected, sync config, SVN auth | `cycle-NNN/s7-sync-*.log`, `s7-svn-update.log` |
+| S7 (Git→SVN sync) | PR not detected, missing metadata trailers, SVN auth | `cycle-NNN/s7-sync-*.log`, `s7-svn-log.xml`, `s7-svn-update.log` |
 | S8 (echo) | SVN log format differs | `svn log --xml` output manually |
 | S9 (rate limit) | Token exhausted | `cycle-NNN/s9-rate-limit.json` |
 | S10 (log-probe) | Binary not built, config error | `cycle-NNN/s10-probe-stderr.log` |
