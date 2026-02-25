@@ -244,7 +244,7 @@ impl FilePolicy {
 
 impl From<&crate::personal_config::PersonalOptionsConfig> for FilePolicy {
     fn from(opts: &crate::personal_config::PersonalOptionsConfig) -> Self {
-        if opts.lfs_threshold > 0 {
+        if opts.lfs_threshold > 0 || !opts.lfs_patterns.is_empty() {
             Self::with_lfs(
                 opts.max_file_size,
                 opts.ignore_patterns.clone(),
@@ -526,5 +526,57 @@ mod tests {
         assert!(policy.lfs_enabled());
         assert!(policy.has_constraints());
         assert_eq!(policy.lfs_threshold(), 0);
+    }
+
+    #[test]
+    fn test_from_options_config_patterns_only() {
+        // Regression: From<&PersonalOptionsConfig> must call with_lfs when
+        // lfs_patterns is non-empty even when lfs_threshold is 0.
+        let opts = crate::personal_config::PersonalOptionsConfig {
+            lfs_patterns: vec!["*.bin".into(), "*.psd".into()],
+            ..Default::default()
+        };
+        assert_eq!(opts.lfs_threshold, 0, "precondition: threshold is zero");
+
+        let policy = FilePolicy::from(&opts);
+        assert!(
+            policy.lfs_enabled(),
+            "LFS must be enabled via patterns alone"
+        );
+        assert!(policy.has_constraints());
+
+        // A .bin file should get LfsTrack.
+        let d = policy.evaluate("model.bin", 42);
+        assert!(
+            matches!(d, FilePolicyDecision::LfsTrack { size: 42, threshold: 0 }),
+            "expected LfsTrack from pattern-only config, got {:?}",
+            d
+        );
+
+        // A .txt file should be Allow (no pattern match, no threshold).
+        assert_eq!(policy.evaluate("readme.txt", 42), FilePolicyDecision::Allow);
+    }
+
+    #[test]
+    fn test_from_options_config_patterns_and_threshold() {
+        // Both lfs_patterns and lfs_threshold set via config.
+        let opts = crate::personal_config::PersonalOptionsConfig {
+            lfs_threshold: 1000,
+            lfs_patterns: vec!["*.psd".into()],
+            ..Default::default()
+        };
+        let policy = FilePolicy::from(&opts);
+        assert!(policy.lfs_enabled());
+
+        // Small .psd → LfsTrack via pattern (under threshold).
+        let d1 = policy.evaluate("art.psd", 100);
+        assert!(matches!(d1, FilePolicyDecision::LfsTrack { .. }));
+
+        // Large .txt → LfsTrack via threshold.
+        let d2 = policy.evaluate("data.txt", 2000);
+        assert!(matches!(d2, FilePolicyDecision::LfsTrack { size: 2000, threshold: 1000 }));
+
+        // Small .txt → Allow.
+        assert_eq!(policy.evaluate("small.txt", 100), FilePolicyDecision::Allow);
     }
 }

@@ -642,106 +642,124 @@ TOML
         CYCLE_OK=false
     fi
 
-    # ---- Scenario 5: Git→ add file via GHE API ----
-    log "▶ S5: Git add file via GHE API"
+    # ---- Scenario 5: Git→ create branch + commit via GHE API ----
+    # GitSvnSync only syncs *merged PR* commits from Git→SVN. Direct pushes to
+    # main are NOT replayed. So we must: create branch → commit → open PR →
+    # merge PR → sync → verify in SVN.
+    log "▶ S5: Git create branch + commit file via PR"
+    PR_BRANCH="validation/${CANARY}"
     GIT_FILE="git_${CANARY}.txt"
-    GIT_CONTENT="git-add-${CANARY}"
+    GIT_CONTENT="git-pr-add-${CANARY}"
     GIT_CONTENT_B64=$(echo -n "$GIT_CONTENT" | base64)
 
-    CREATE_FILE_RESP=$(gh_api PUT "/repos/${GHE_OWNER}/${GHE_REPO}/contents/${GIT_FILE}" \
-        "{\"message\":\"Validation: add $GIT_FILE\",\"content\":\"${GIT_CONTENT_B64}\"}")
-    CREATE_FILE_CODE=$(gh_status "$CREATE_FILE_RESP")
-    if [[ "$CREATE_FILE_CODE" == "201" ]]; then
-        GIT_SHA=$(gh_body "$CREATE_FILE_RESP" | jq -r '.commit.sha // "unknown"' 2>/dev/null || echo "unknown")
-        # Verify via API.
-        GET_RESP=$(gh_api GET "/repos/${GHE_OWNER}/${GHE_REPO}/contents/${GIT_FILE}" "")
-        GET_CODE=$(gh_status "$GET_RESP")
-        if [[ "$GET_CODE" == "200" ]]; then
-            record_scenario "s5-git-add" "pass" "sha=${GIT_SHA:0:8}"
-            echo "$GIT_SHA" > "$CYCLE_DIR/s5-git-sha.txt"
-        else
-            record_scenario "s5-git-add" "fail" "file not retrievable after create"
-            CYCLE_OK=false
-        fi
-    else
-        record_scenario "s5-git-add" "fail" "HTTP $CREATE_FILE_CODE"
-        gh_body "$CREATE_FILE_RESP" > "$CYCLE_DIR/s5-error.json" 2>/dev/null || true
-        CYCLE_OK=false
-    fi
+    # Get main branch SHA for creating the new branch.
+    MAIN_REF_RESP=$(gh_api GET "/repos/${GHE_OWNER}/${GHE_REPO}/git/ref/heads/main" "")
+    MAIN_REF_CODE=$(gh_status "$MAIN_REF_RESP")
+    MAIN_SHA=$(gh_body "$MAIN_REF_RESP" | jq -r '.object.sha // ""' 2>/dev/null || echo "")
 
-    # ---- Scenario 6: Git→ modify file via GHE API ----
-    log "▶ S6: Git modify file via GHE API"
-    GIT_MOD_CONTENT="git-modified-${CANARY}"
-    GIT_MOD_B64=$(echo -n "$GIT_MOD_CONTENT" | base64)
-    # Get current file SHA for update.
-    FILE_INFO_RESP=$(gh_api GET "/repos/${GHE_OWNER}/${GHE_REPO}/contents/${GIT_FILE}" "")
-    FILE_SHA=$(gh_body "$FILE_INFO_RESP" | jq -r '.sha // ""' 2>/dev/null || echo "")
-    if [[ -n "$FILE_SHA" ]]; then
-        UPDATE_RESP=$(gh_api PUT "/repos/${GHE_OWNER}/${GHE_REPO}/contents/${GIT_FILE}" \
-            "{\"message\":\"Validation: modify $GIT_FILE\",\"content\":\"${GIT_MOD_B64}\",\"sha\":\"${FILE_SHA}\"}")
-        UPDATE_CODE=$(gh_status "$UPDATE_RESP")
-        if [[ "$UPDATE_CODE" == "200" ]]; then
-            record_scenario "s6-git-modify" "pass"
-        else
-            record_scenario "s6-git-modify" "fail" "HTTP $UPDATE_CODE"
-            CYCLE_OK=false
-        fi
-    else
-        record_scenario "s6-git-modify" "fail" "could not get file SHA"
-        CYCLE_OK=false
-    fi
-
-    # ---- Scenario 7: Git→ delete file via GHE API ----
-    log "▶ S7: Git delete file via GHE API"
-    FILE_INFO_RESP=$(gh_api GET "/repos/${GHE_OWNER}/${GHE_REPO}/contents/${GIT_FILE}" "")
-    FILE_SHA=$(gh_body "$FILE_INFO_RESP" | jq -r '.sha // ""' 2>/dev/null || echo "")
-    if [[ -n "$FILE_SHA" ]]; then
-        DEL_RESP=$(gh_api DELETE "/repos/${GHE_OWNER}/${GHE_REPO}/contents/${GIT_FILE}" \
-            "{\"message\":\"Validation: delete $GIT_FILE\",\"sha\":\"${FILE_SHA}\"}")
-        DEL_CODE=$(gh_status "$DEL_RESP")
-        if [[ "$DEL_CODE" == "200" ]]; then
-            # Confirm deletion.
-            CHK_RESP=$(gh_api GET "/repos/${GHE_OWNER}/${GHE_REPO}/contents/${GIT_FILE}" "")
-            CHK_CODE=$(gh_status "$CHK_RESP")
-            if [[ "$CHK_CODE" == "404" ]]; then
-                record_scenario "s7-git-delete" "pass"
+    if [[ "$MAIN_REF_CODE" == "200" && -n "$MAIN_SHA" ]]; then
+        # Create feature branch.
+        CREATE_REF_RESP=$(gh_api POST "/repos/${GHE_OWNER}/${GHE_REPO}/git/refs" \
+            "{\"ref\":\"refs/heads/${PR_BRANCH}\",\"sha\":\"${MAIN_SHA}\"}")
+        CREATE_REF_CODE=$(gh_status "$CREATE_REF_RESP")
+        if [[ "$CREATE_REF_CODE" == "201" ]]; then
+            # Commit file on the feature branch.
+            COMMIT_RESP=$(gh_api PUT "/repos/${GHE_OWNER}/${GHE_REPO}/contents/${GIT_FILE}" \
+                "{\"message\":\"Validation: add $GIT_FILE via PR\",\"content\":\"${GIT_CONTENT_B64}\",\"branch\":\"${PR_BRANCH}\"}")
+            COMMIT_CODE=$(gh_status "$COMMIT_RESP")
+            if [[ "$COMMIT_CODE" == "201" ]]; then
+                GIT_SHA=$(gh_body "$COMMIT_RESP" | jq -r '.commit.sha // "unknown"' 2>/dev/null || echo "unknown")
+                echo "$GIT_SHA" > "$CYCLE_DIR/s5-git-sha.txt"
+                record_scenario "s5-git-branch-commit" "pass" "sha=${GIT_SHA:0:8} on ${PR_BRANCH}"
             else
-                record_scenario "s7-git-delete" "fail" "file still exists after delete"
+                record_scenario "s5-git-branch-commit" "fail" "commit HTTP $COMMIT_CODE"
+                gh_body "$COMMIT_RESP" > "$CYCLE_DIR/s5-error.json" 2>/dev/null || true
                 CYCLE_OK=false
             fi
         else
-            record_scenario "s7-git-delete" "fail" "HTTP $DEL_CODE"
+            record_scenario "s5-git-branch-commit" "fail" "create-ref HTTP $CREATE_REF_CODE"
             CYCLE_OK=false
         fi
     else
-        record_scenario "s7-git-delete" "fail" "could not get file SHA"
+        record_scenario "s5-git-branch-commit" "fail" "could not get main SHA (HTTP $MAIN_REF_CODE)"
         CYCLE_OK=false
     fi
 
-    # ---- Scenario 7b: Git→SVN sync verification ----
-    # After Git mutations, invoke gitsvnsync to sync Git→SVN and verify files
-    # appear in the SVN working copy.  This tests the PR-to-SVN replay path.
-    log "▶ S7b: Git→SVN sync (invoke gitsvnsync-personal sync)"
-
-    if "$PERSONAL_BIN" --config "$SYNC_CONFIG" sync \
-        > "$CYCLE_DIR/s7b-sync-stdout.log" 2> "$CYCLE_DIR/s7b-sync-stderr.log"; then
-        # Update SVN working copy.
-        svn update "$SVN_WC" --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
-            --non-interactive --no-auth-cache > "$CYCLE_DIR/s7b-svn-update.log" 2>&1 || true
-
-        # The Git-committed file was deleted in S7, so it should be gone.
-        # The sync output should mention processed PRs or commits.
-        GIT_TO_SVN_OUTPUT=$(cat "$CYCLE_DIR/s7b-sync-stdout.log" 2>/dev/null || echo "")
-        if echo "$GIT_TO_SVN_OUTPUT" | grep -q "Sync complete"; then
-            record_scenario "s7b-git-to-svn-sync" "pass" "sync cycle completed"
+    # ---- Scenario 6: Open + merge PR via GHE API ----
+    log "▶ S6: Open and merge PR"
+    PR_MERGED=false
+    PR_MERGE_SHA=""
+    if [[ -f "$CYCLE_DIR/s5-git-sha.txt" ]]; then
+        # Open PR.
+        PR_CREATE_RESP=$(gh_api POST "/repos/${GHE_OWNER}/${GHE_REPO}/pulls" \
+            "{\"title\":\"Validation: ${CANARY}\",\"head\":\"${PR_BRANCH}\",\"base\":\"main\",\"body\":\"Automated GitSvnSync validation PR\"}")
+        PR_CREATE_CODE=$(gh_status "$PR_CREATE_RESP")
+        PR_NUMBER=$(gh_body "$PR_CREATE_RESP" | jq -r '.number // ""' 2>/dev/null || echo "")
+        if [[ "$PR_CREATE_CODE" == "201" && -n "$PR_NUMBER" ]]; then
+            # Merge the PR (squash merge to keep it clean).
+            sleep 1  # Give GitHub a moment for merge-ability check.
+            MERGE_RESP=$(gh_api PUT "/repos/${GHE_OWNER}/${GHE_REPO}/pulls/${PR_NUMBER}/merge" \
+                "{\"merge_method\":\"squash\",\"commit_title\":\"Validation: merge ${CANARY}\"}")
+            MERGE_CODE=$(gh_status "$MERGE_RESP")
+            if [[ "$MERGE_CODE" == "200" ]]; then
+                PR_MERGE_SHA=$(gh_body "$MERGE_RESP" | jq -r '.sha // ""' 2>/dev/null || echo "")
+                PR_MERGED=true
+                echo "$PR_NUMBER" > "$CYCLE_DIR/s6-pr-number.txt"
+                echo "$PR_MERGE_SHA" > "$CYCLE_DIR/s6-merge-sha.txt"
+                record_scenario "s6-git-pr-merge" "pass" "PR #${PR_NUMBER} merged (sha=${PR_MERGE_SHA:0:8})"
+            else
+                record_scenario "s6-git-pr-merge" "fail" "merge HTTP $MERGE_CODE"
+                gh_body "$MERGE_RESP" > "$CYCLE_DIR/s6-merge-error.json" 2>/dev/null || true
+                CYCLE_OK=false
+            fi
         else
-            # Even if no PRs needed syncing, the sync command ran successfully.
-            record_scenario "s7b-git-to-svn-sync" "pass" "sync cycle ran (no new PRs)"
+            record_scenario "s6-git-pr-merge" "fail" "create-PR HTTP $PR_CREATE_CODE"
+            gh_body "$PR_CREATE_RESP" > "$CYCLE_DIR/s6-pr-error.json" 2>/dev/null || true
+            CYCLE_OK=false
         fi
     else
-        SYNC_EXIT=$?
-        record_scenario "s7b-git-to-svn-sync" "fail" "gitsvnsync sync exited with code $SYNC_EXIT"
-        CYCLE_OK=false
+        record_scenario "s6-git-pr-merge" "skip" "S5 did not produce a commit"
+    fi
+
+    # Clean up the feature branch (best-effort).
+    gh_api DELETE "/repos/${GHE_OWNER}/${GHE_REPO}/git/refs/heads/${PR_BRANCH}" "" > /dev/null 2>&1 || true
+
+    # ---- Scenario 7: Git→SVN sync via merged PR ----
+    # This is the critical Git→SVN proof.  We invoke gitsvnsync-personal sync
+    # after the PR merge, then verify the PR's file appears in SVN.
+    log "▶ S7: Git→SVN sync (merged-PR replay)"
+
+    if $PR_MERGED; then
+        if "$PERSONAL_BIN" --config "$SYNC_CONFIG" sync \
+            > "$CYCLE_DIR/s7-sync-stdout.log" 2> "$CYCLE_DIR/s7-sync-stderr.log"; then
+            # Update SVN working copy to pick up any replayed commits.
+            svn update "$SVN_WC" --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+                --non-interactive --no-auth-cache > "$CYCLE_DIR/s7-svn-update.log" 2>&1 || true
+
+            # Verify the PR-committed file now exists in SVN.
+            VERIFY_SVN=$(svn cat "$SVN_URL/$GIT_FILE" --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
+                --non-interactive --no-auth-cache 2>/dev/null || echo "")
+            if [[ "$VERIFY_SVN" == "$GIT_CONTENT" ]]; then
+                record_scenario "s7-git-to-svn-sync" "pass" "PR file verified in SVN (content match)"
+            else
+                # The file might not have been synced yet if the PR detection
+                # window is too narrow.  Check the sync output for evidence.
+                SYNC_OUTPUT=$(cat "$CYCLE_DIR/s7-sync-stdout.log" 2>/dev/null || echo "")
+                if echo "$SYNC_OUTPUT" | grep -qE 'Git→SVN: [1-9][0-9]* commits|prs_synced.*[1-9]'; then
+                    record_scenario "s7-git-to-svn-sync" "fail" "sync reported commits but file not in SVN"
+                    CYCLE_OK=false
+                else
+                    record_scenario "s7-git-to-svn-sync" "fail" "no PR replay occurred — file not in SVN (content: '${VERIFY_SVN:0:40}')"
+                    CYCLE_OK=false
+                fi
+            fi
+        else
+            SYNC_EXIT=$?
+            record_scenario "s7-git-to-svn-sync" "fail" "gitsvnsync sync exited with code $SYNC_EXIT"
+            CYCLE_OK=false
+        fi
+    else
+        record_scenario "s7-git-to-svn-sync" "skip" "PR was not merged (S6 failed/skipped)"
     fi
 
     # Capture sync engine logs as artifacts.
