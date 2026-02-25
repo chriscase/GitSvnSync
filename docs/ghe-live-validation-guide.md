@@ -81,7 +81,7 @@ Each cycle executes these scenarios in order:
 | S4b | **SVN→Git sync** | SVN→Git | **Invoke `gitsvnsync-personal sync`, pull Git repo (with auth), verify SVN files appear in Git. Fails on pull auth error.** |
 | S5 | Git branch + commit | →Git | Create feature branch via refs API, commit file on branch |
 | S6 | Open + merge PR | →Git | Open PR from feature branch, squash-merge via API |
-| S7 | **Git→SVN sync** | Git→SVN | **Invoke `gitsvnsync-personal sync`, verify (a) PR file content in SVN via `svn cat`, (b) SVN log contains `Git-Commit:` and `PR:` metadata trailers** |
+| S7 | **Git→SVN sync** | Git→SVN | **Invoke `gitsvnsync-personal sync`, verify (a) PR file content in SVN via `svn cat`, (b) SVN log `Git-Commit:` matches exact merge SHA from S6, (c) SVN log `PR:` matches exact PR number from S6** |
 | S8 | Echo marker | SVN→ | Commit with `[gitsvnsync]` marker, verify in `svn log --xml` |
 | S9 | API rate limit | →Git | Check `/rate_limit` endpoint, verify >100 requests remaining |
 | S10 | Log-probe | Local | Spawn `gitsvnsync-personal log-probe`, verify `personal.log` written |
@@ -93,9 +93,18 @@ Each cycle executes these scenarios in order:
 > **S5→S6→S7 form a PR-based Git→SVN proof.** GitSvnSync only replays *merged PR* commits from
 > Git to SVN (direct pushes to main are not synced). These three scenarios exercise the real
 > production workflow: create a feature branch, commit via the Contents API, open and squash-merge
-> a PR, then run sync and verify the file content lands in SVN. S7 fails if (a) no qualifying PR
-> replay occurred, (b) file content does not match, or (c) the replayed SVN commit is missing
-> `Git-Commit:` or `PR:` metadata trailers.
+> a PR, then run sync and verify the file content lands in SVN.
+>
+> **S7 exact provenance matching:** S7 requires an **exact** match between the replayed SVN
+> commit metadata and the values recorded in S6. Specifically, the `Git-Commit:` trailer must
+> contain the exact merge SHA from `s6-merge-sha.txt`, and the `PR:` trailer must reference the
+> exact PR number from `s6-pr-number.txt`. A generic "some trailer exists" is insufficient —
+> only an exact match to *this cycle's* PR proves the replay actually occurred. S7 fails if
+> (a) file content doesn't match, (b) expected SHA or PR# is missing from S6 artifacts, or
+> (c) the trailer values don't exactly match.
+>
+> **Provenance self-test:** Run `scripts/test-s7-provenance.sh` offline to verify the metadata
+> matching logic. This test is also executed in CI (both `ci.yml` and `e2e.yml`).
 >
 > Sync engine logs are captured in `cycle-NNN/sync-engine-data/`.
 
@@ -228,6 +237,21 @@ If issues are found post-enablement:
    gitsvnsync-personal --config <path> start --foreground
    ```
 
+## CI Integration
+
+Both `ci.yml` and `e2e.yml` workflows run:
+
+1. **S7 provenance self-test** (`scripts/test-s7-provenance.sh`) — verifies the exact-match
+   metadata logic offline. Fails the PR if any of the 8 test cases regress.
+
+2. **Large-file & LFS validation** (`scripts/large-file-validation.sh --quick`) — exercises
+   file-policy enforcement and LFS utilities. CI installs `git-lfs` so the LFS preflight
+   scenario is **executed, not skipped**. The workflow fails if LFS preflight is skipped
+   (indicating `git-lfs` was not installed).
+
+3. **GHE live validation dry-run** (`scripts/ghe-live-validation.sh --dry-run`) — preflight
+   tool verification (no network credentials needed).
+
 ## Relationship to Other Validation Scripts
 
 | Script | Scope | Network Required | Use Case |
@@ -235,5 +259,7 @@ If issues are found post-enablement:
 | `controlled-validation.sh` | Local only | No | CI gating, pre-merge checks |
 | `enterprise-soak.sh` | Local only | No | Repeated-cycle stability testing |
 | `ghe-live-validation.sh` | Live GHE+SVN | **Yes** | Pre-production readiness gate |
+| `test-s7-provenance.sh` | Offline | No | S7 metadata matching regression test |
+| `large-file-validation.sh` | Local only | No | File-policy + LFS validation |
 
 Run them in order: controlled → soak → GHE live.
