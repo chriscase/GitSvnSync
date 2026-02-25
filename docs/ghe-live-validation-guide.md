@@ -68,7 +68,7 @@ make validate-ghe-live-dry-run          # preflight
 make validate-ghe-live                  # 1-cycle live run
 ```
 
-## Scenario Matrix (12 Scenarios per Cycle)
+## Scenario Matrix (11 Scenarios per Cycle)
 
 Each cycle executes these scenarios in order:
 
@@ -79,18 +79,24 @@ Each cycle executes these scenarios in order:
 | S3 | SVN delete file | SVN→ | Delete a file via `svn rm`, verify it's gone |
 | S4 | SVN nested dirs | SVN→ | Create deeply nested directory structure, verify leaf file |
 | S4b | **SVN→Git sync** | SVN→Git | **Invoke `gitsvnsync-personal sync`, pull Git repo, verify SVN files appear in Git** |
-| S5 | Git add file | →Git | Create a file via GHE Contents API, verify via GET |
-| S6 | Git modify file | →Git | Update a file via GHE Contents API (with SHA), verify |
-| S7 | Git delete file | →Git | Delete a file via GHE Contents API, verify 404 |
-| S7b | **Git→SVN sync** | Git→SVN | **Invoke `gitsvnsync-personal sync`, update SVN WC, verify sync completed** |
+| S5 | Git branch + commit | →Git | Create feature branch via refs API, commit file on branch |
+| S6 | Open + merge PR | →Git | Open PR from feature branch, squash-merge via API |
+| S7 | **Git→SVN sync** | Git→SVN | **Invoke `gitsvnsync-personal sync`, verify PR file content appears in SVN via `svn cat`** |
 | S8 | Echo marker | SVN→ | Commit with `[gitsvnsync]` marker, verify in `svn log --xml` |
 | S9 | API rate limit | →Git | Check `/rate_limit` endpoint, verify >100 requests remaining |
 | S10 | Log-probe | Local | Spawn `gitsvnsync-personal log-probe`, verify `personal.log` written |
 
-> **S4b and S7b are the critical cross-system sync scenarios.** They invoke the actual GitSvnSync
+> **S4b and S7 are the critical cross-system sync scenarios.** They invoke the actual GitSvnSync
 > sync engine (`gitsvnsync-personal sync`) and verify that changes made on one side arrive on the
-> other side. Without these, the script would only be validating raw SVN/Git CLI operations, not
-> the sync logic itself. Sync engine logs are captured in `cycle-NNN/sync-engine-data/`.
+> other side.
+>
+> **S5→S6→S7 form a PR-based Git→SVN proof.** GitSvnSync only replays *merged PR* commits from
+> Git to SVN (direct pushes to main are not synced). These three scenarios exercise the real
+> production workflow: create a feature branch, commit via the Contents API, open and squash-merge
+> a PR, then run sync and verify the file content lands in SVN. S7 fails if no qualifying PR
+> replay occurred or if the content does not match.
+>
+> Sync engine logs are captured in `cycle-NNN/sync-engine-data/`.
 
 ## CLI Options
 
@@ -129,10 +135,12 @@ artifacts/ghe-live-validation/<UTC_TIMESTAMP>/
     ├── s4b-sync-stdout.log # SVN→Git sync engine stdout
     ├── s4b-sync-stderr.log # SVN→Git sync engine stderr
     ├── s4b-git-pull.log    # Git pull after sync
-    ├── s5-git-sha.txt      # Git commit SHA
-    ├── s7b-sync-stdout.log # Git→SVN sync engine stdout
-    ├── s7b-sync-stderr.log # Git→SVN sync engine stderr
-    ├── s7b-svn-update.log  # SVN update after sync
+    ├── s5-git-sha.txt      # Git commit SHA (feature branch)
+    ├── s6-pr-number.txt    # PR number
+    ├── s6-merge-sha.txt    # PR merge commit SHA
+    ├── s7-sync-stdout.log  # Git→SVN sync engine stdout
+    ├── s7-sync-stderr.log  # Git→SVN sync engine stderr
+    ├── s7-svn-update.log   # SVN update after sync
     ├── s9-rate-limit.json  # GHE rate limit response
     ├── s10-probe-stdout.log
     ├── s10-probe-stderr.log
@@ -161,7 +169,7 @@ artifacts/ghe-live-validation/<UTC_TIMESTAMP>/
 
 Before declaring production readiness, verify:
 
-- [ ] All 10 scenarios PASS for every cycle
+- [ ] All 11 scenarios PASS for every cycle
 - [ ] No secret patterns in artifact files
 - [ ] Rate limit headroom is sufficient (>100 remaining)
 - [ ] SVN commit latency is acceptable
@@ -174,7 +182,8 @@ Before declaring production readiness, verify:
 | Scenario | Common Causes | What to Check |
 |----------|---------------|---------------|
 | S1-S4 (SVN) | Auth failure, read-only repo, network | `cycle-NNN/sN-commit.log`, SVN access |
-| S5-S7 (Git) | Token scope, repo permissions, 404 | `cycle-NNN/sN-error.json`, token scopes |
+| S5-S6 (Git PR) | Token scope, repo permissions, merge conflict | `cycle-NNN/s5-error.json`, `s6-*-error.json`, token scopes |
+| S7 (Git→SVN sync) | PR not detected, sync config, SVN auth | `cycle-NNN/s7-sync-*.log`, `s7-svn-update.log` |
 | S8 (echo) | SVN log format differs | `svn log --xml` output manually |
 | S9 (rate limit) | Token exhausted | `cycle-NNN/s9-rate-limit.json` |
 | S10 (log-probe) | Binary not built, config error | `cycle-NNN/s10-probe-stderr.log` |
