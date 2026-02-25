@@ -108,9 +108,16 @@ fi
 # ============================================================================
 log "=== Phase 2: Unit Tests (file_policy + lfs) ==="
 
-if cargo test -p gitsvnsync-core -- file_policy lfs 2>&1 | tee "$ARTIFACT_DIR/unit-tests.log" | tail -5; then
-    log "  file_policy + lfs unit tests: PASS"
+cargo test -p gitsvnsync-core -- file_policy lfs 2>&1 | tee "$ARTIFACT_DIR/unit-tests.log" | tail -5
+PHASE2_EXIT=${PIPESTATUS[0]}
+# Extract the number of tests that ran (e.g. "test result: ok. 28 passed")
+PHASE2_TEST_COUNT=$(grep -oE '[0-9]+ passed' "$ARTIFACT_DIR/unit-tests.log" | head -1 | grep -oE '[0-9]+' || echo "0")
+if [ "$PHASE2_EXIT" -eq 0 ] && [ "$PHASE2_TEST_COUNT" -gt 0 ]; then
+    log "  file_policy + lfs unit tests: PASS ($PHASE2_TEST_COUNT tests ran)"
     SCENARIO_PASS=$((SCENARIO_PASS + 1))
+elif [ "$PHASE2_TEST_COUNT" -eq 0 ]; then
+    log "  file_policy + lfs unit tests: FAIL (zero tests executed — filter matched nothing)"
+    SCENARIO_FAIL=$((SCENARIO_FAIL + 1))
 else
     log "  file_policy + lfs unit tests: FAIL"
     SCENARIO_FAIL=$((SCENARIO_FAIL + 1))
@@ -122,9 +129,16 @@ TOTAL_SCENARIOS=$((TOTAL_SCENARIOS + 1))
 # ============================================================================
 log "=== Phase 3: Integration Tests (file_policy + lfs) ==="
 
-if cargo test -p gitsvnsync-personal --test integration -- file_policy lfs 2>&1 | tee "$ARTIFACT_DIR/integration-tests.log" | tail -5; then
-    log "  file_policy + lfs integration tests: PASS"
+cargo test -p gitsvnsync-personal --test integration -- file_policy lfs 2>&1 | tee "$ARTIFACT_DIR/integration-tests.log" | tail -5
+PHASE3_EXIT=${PIPESTATUS[0]}
+# Extract the number of tests that ran (e.g. "test result: ok. 3 passed")
+PHASE3_TEST_COUNT=$(grep -oE '[0-9]+ passed' "$ARTIFACT_DIR/integration-tests.log" | head -1 | grep -oE '[0-9]+' || echo "0")
+if [ "$PHASE3_EXIT" -eq 0 ] && [ "$PHASE3_TEST_COUNT" -gt 0 ]; then
+    log "  file_policy + lfs integration tests: PASS ($PHASE3_TEST_COUNT tests ran)"
     SCENARIO_PASS=$((SCENARIO_PASS + 1))
+elif [ "$PHASE3_TEST_COUNT" -eq 0 ]; then
+    log "  file_policy + lfs integration tests: FAIL (zero tests executed — filter matched nothing)"
+    SCENARIO_FAIL=$((SCENARIO_FAIL + 1))
 else
     log "  file_policy + lfs integration tests: FAIL"
     SCENARIO_FAIL=$((SCENARIO_FAIL + 1))

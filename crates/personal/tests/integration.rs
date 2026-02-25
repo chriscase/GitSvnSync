@@ -2389,3 +2389,73 @@ fn test_lfs_config_wiring() {
     ));
     assert!(decision.should_sync());
 }
+
+// ===========================================================================
+// Test: LFS pointer text must never be written as regular content
+// ===========================================================================
+
+/// Validates that LFS pointer content is detectable and that attempting to
+/// resolve a pointer outside of a real LFS repo fails (which triggers the
+/// skip-and-audit path in git_to_svn instead of writing pointer text).
+#[test]
+fn test_lfs_pointer_text_never_reaches_svn() {
+    // A valid LFS pointer — this is what Git stores for LFS-tracked files.
+    let pointer_text = b"version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\nsize 12345\n";
+
+    // Verify we can detect it as an LFS pointer.
+    assert!(
+        gitsvnsync_core::lfs::is_lfs_pointer(pointer_text),
+        "valid LFS pointer must be detected"
+    );
+
+    // Verify parsing extracts the correct OID and size.
+    let parsed =
+        gitsvnsync_core::lfs::parse_lfs_pointer(pointer_text).expect("valid pointer should parse");
+    assert_eq!(
+        parsed.oid,
+        "4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393"
+    );
+    assert_eq!(parsed.size, 12345);
+
+    // Attempting to resolve the pointer in a non-LFS directory should fail.
+    // This is exactly what triggers the skip-and-audit path in git_to_svn
+    // (the fix ensures this failure skips the file instead of writing pointer
+    // text as-is).
+    let tmp = TempDir::new().unwrap();
+    let result = gitsvnsync_core::lfs::resolve_lfs_pointer(tmp.path(), pointer_text);
+    assert!(
+        result.is_err(),
+        "LFS pointer resolution must fail without a real LFS repo — \
+         if this passed, the safety net in git_to_svn would not trigger"
+    );
+
+    // Regular file content must NOT be detected as an LFS pointer.
+    let normal_content = b"fn main() { println!(\"hello world\"); }";
+    assert!(
+        !gitsvnsync_core::lfs::is_lfs_pointer(normal_content),
+        "regular source code must not be detected as LFS pointer"
+    );
+}
+
+/// Validates that a roundtrip create→detect→parse works correctly and that
+/// the pointer detection is precise enough to avoid false positives.
+#[test]
+fn test_lfs_pointer_detection_precision() {
+    // Create an LFS pointer from known content.
+    let original = b"some binary data \x00\x01\x02\x03";
+    let pointer = gitsvnsync_core::lfs::create_lfs_pointer(original);
+
+    // The pointer itself must be detected.
+    assert!(gitsvnsync_core::lfs::is_lfs_pointer(pointer.as_bytes()));
+
+    // The pointer must parse back to the correct size.
+    let parsed = gitsvnsync_core::lfs::parse_lfs_pointer(pointer.as_bytes()).unwrap();
+    assert_eq!(parsed.size, original.len() as u64);
+
+    // Content that merely *mentions* LFS but isn't a pointer must NOT match.
+    let fake = b"This file talks about https://git-lfs.github.com/spec/v1 but is not a pointer";
+    assert!(
+        !gitsvnsync_core::lfs::is_lfs_pointer(fake),
+        "text mentioning LFS URL but not starting with the magic prefix must not be detected"
+    );
+}

@@ -175,7 +175,7 @@ Behavioral options that control how files and changes are synced.
 | `sync_externals` | boolean | `false` | Not implemented | Reserved for future SVN externals support. |
 | `sync_direct_pushes` | boolean | `false` | **Not implemented** | Reserved. Setting to `true` will cause validation to fail with an explicit error. Only merged PRs are synced from Git to SVN. |
 | `lfs_threshold` | integer | `0` | **Implemented** | Files above this byte threshold are stored via Git LFS instead of as regular blobs. `0` = LFS disabled (default). Requires `git lfs` to be installed. Example: `5242880` for 5 MB. |
-| `lfs_patterns` | array of strings | `[]` | **Implemented** | Glob patterns for files that should always be LFS-tracked regardless of size. Example: `["*.psd", "*.bin", "*.iso"]`. Reserved for future pattern-based LFS matching. |
+| `lfs_patterns` | array of strings | `[]` | **Implemented** | Glob patterns for files that should always be LFS-tracked regardless of size. Example: `["*.psd", "*.bin", "*.iso"]`. Files matching any pattern get `LfsTrack` treatment (added to `.gitattributes`, resolved from pointers during Git→SVN sync). Works independently of `lfs_threshold` — patterns alone enable LFS behavior. |
 
 > **Important:** `max_file_size` and `ignore_patterns` are enforced at runtime across
 > all sync paths (initial import, SVN→Git, Git→SVN). Blocked files produce structured

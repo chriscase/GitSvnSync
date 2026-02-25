@@ -68,7 +68,7 @@ make validate-ghe-live-dry-run          # preflight
 make validate-ghe-live                  # 1-cycle live run
 ```
 
-## Scenario Matrix (10 Scenarios per Cycle)
+## Scenario Matrix (12 Scenarios per Cycle)
 
 Each cycle executes these scenarios in order:
 
@@ -78,12 +78,19 @@ Each cycle executes these scenarios in order:
 | S2 | SVN modify file | SVN→ | Modify an existing file, verify updated content |
 | S3 | SVN delete file | SVN→ | Delete a file via `svn rm`, verify it's gone |
 | S4 | SVN nested dirs | SVN→ | Create deeply nested directory structure, verify leaf file |
+| S4b | **SVN→Git sync** | SVN→Git | **Invoke `gitsvnsync-personal sync`, pull Git repo, verify SVN files appear in Git** |
 | S5 | Git add file | →Git | Create a file via GHE Contents API, verify via GET |
 | S6 | Git modify file | →Git | Update a file via GHE Contents API (with SHA), verify |
 | S7 | Git delete file | →Git | Delete a file via GHE Contents API, verify 404 |
+| S7b | **Git→SVN sync** | Git→SVN | **Invoke `gitsvnsync-personal sync`, update SVN WC, verify sync completed** |
 | S8 | Echo marker | SVN→ | Commit with `[gitsvnsync]` marker, verify in `svn log --xml` |
 | S9 | API rate limit | →Git | Check `/rate_limit` endpoint, verify >100 requests remaining |
 | S10 | Log-probe | Local | Spawn `gitsvnsync-personal log-probe`, verify `personal.log` written |
+
+> **S4b and S7b are the critical cross-system sync scenarios.** They invoke the actual GitSvnSync
+> sync engine (`gitsvnsync-personal sync`) and verify that changes made on one side arrive on the
+> other side. Without these, the script would only be validating raw SVN/Git CLI operations, not
+> the sync logic itself. Sync engine logs are captured in `cycle-NNN/sync-engine-data/`.
 
 ## CLI Options
 
@@ -119,11 +126,18 @@ artifacts/ghe-live-validation/<UTC_TIMESTAMP>/
 │   └── leak-scan.log       # Secret scan results
 └── cycle-001/              # Per-cycle artifacts
     ├── s1-commit.log       # SVN commit output per scenario
+    ├── s4b-sync-stdout.log # SVN→Git sync engine stdout
+    ├── s4b-sync-stderr.log # SVN→Git sync engine stderr
+    ├── s4b-git-pull.log    # Git pull after sync
     ├── s5-git-sha.txt      # Git commit SHA
+    ├── s7b-sync-stdout.log # Git→SVN sync engine stdout
+    ├── s7b-sync-stderr.log # Git→SVN sync engine stderr
+    ├── s7b-svn-update.log  # SVN update after sync
     ├── s9-rate-limit.json  # GHE rate limit response
     ├── s10-probe-stdout.log
     ├── s10-probe-stderr.log
-    └── daemon.log          # Captured personal.log
+    ├── daemon.log          # Captured personal.log
+    └── sync-engine-data/   # GitSvnSync data dir (DB, logs)
 ```
 
 ### events.ndjson Format
