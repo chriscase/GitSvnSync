@@ -2552,7 +2552,7 @@ async fn test_replay_path_lfs_pointer_skipped_not_committed() {
 
     let svn_client = SvnClient::new(&svn_url, "test", "test");
     let github_client =
-        gitsvnsync_core::git::github::GitHubClient::new("https://localhost:0/unused", "unused");
+        gitsvnsync_core::git::github::GitHubClient::new("https://localhost:0/unused", "unused", gitsvnsync_core::config::GitProvider::default());
 
     let sync = GitToSvnSync::new(
         svn_client,
@@ -2700,7 +2700,7 @@ async fn test_replay_path_normal_content_written_to_svn() {
 
     let svn_client = SvnClient::new(&svn_url, "test", "test");
     let github_client =
-        gitsvnsync_core::git::github::GitHubClient::new("https://localhost:0/unused", "unused");
+        gitsvnsync_core::git::github::GitHubClient::new("https://localhost:0/unused", "unused", gitsvnsync_core::config::GitProvider::default());
 
     let sync = GitToSvnSync::new(
         svn_client,

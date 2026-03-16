@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 
 use gitsvnsync_core::db::Database;
+use gitsvnsync_core::config::GitProvider;
 use gitsvnsync_core::git::github::GitHubClient;
 use gitsvnsync_core::git::GitClient;
 use gitsvnsync_core::personal_config::PersonalConfig;
@@ -44,7 +45,7 @@ pub async fn run_start(config: &PersonalConfig, foreground: bool) -> Result<()> 
     let git_client = GitClient::new(&git_repo_path).context("failed to open git repository")?;
 
     let github_token = config.github.token.as_deref().unwrap_or("");
-    let github_client = GitHubClient::new(&config.github.api_url, github_token);
+    let github_client = GitHubClient::new(&config.github.api_url, github_token, GitProvider::default());
 
     let engine = gitsvnsync_personal::engine::PersonalSyncEngine::new(
         config.clone(),

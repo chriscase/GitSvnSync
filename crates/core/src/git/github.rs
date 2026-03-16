@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tracing::{debug, info, instrument, warn};
 
+use crate::config::GitProvider;
 use crate::errors::GitHubError;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -108,32 +109,43 @@ pub struct GitHubClient {
     http: reqwest::Client,
     api_url: String,
     token: String,
+    provider: GitProvider,
 }
 
 impl GitHubClient {
-    pub fn new(api_url: impl Into<String>, token: impl Into<String>) -> Self {
+    pub fn new(api_url: impl Into<String>, token: impl Into<String>, provider: GitProvider) -> Self {
         let api_url = api_url.into().trim_end_matches('/').to_string();
         let token = token.into();
         let mut headers = HeaderMap::new();
-        headers.insert(
-            ACCEPT,
-            HeaderValue::from_static("application/vnd.github+json"),
-        );
         headers.insert(USER_AGENT, HeaderValue::from_static("gitsvnsync/0.1"));
-        headers.insert(
-            "X-GitHub-Api-Version",
-            HeaderValue::from_static("2022-11-28"),
-        );
+        match provider {
+            GitProvider::GitHub => {
+                headers.insert(ACCEPT, HeaderValue::from_static("application/vnd.github+json"));
+                headers.insert("X-GitHub-Api-Version", HeaderValue::from_static("2022-11-28"));
+            }
+            GitProvider::Gitea => {
+                headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+            }
+        }
         let http = reqwest::Client::builder()
             .default_headers(headers)
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("failed to build reqwest client");
-        info!(api_url = %api_url, "created GitHubClient");
+        info!(api_url = %api_url, ?provider, "created GitHubClient");
         Self {
             http,
             api_url,
             token,
+            provider,
+        }
+    }
+
+    /// Apply provider-appropriate authentication to a request.
+    fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self.provider {
+            GitProvider::Gitea => req.header("Authorization", format!("token {}", self.token)),
+            GitProvider::GitHub => req.bearer_auth(&self.token),
         }
     }
 
@@ -144,7 +156,7 @@ impl GitHubClient {
         since_sha: Option<&str>,
     ) -> Result<Vec<GitHubCommit>, GitHubError> {
         let url = format!("{}/repos/{}/commits", self.api_url, repo);
-        let mut req = self.http.get(&url).bearer_auth(&self.token);
+        let mut req = self.auth(self.http.get(&url));
         if let Some(sha) = since_sha {
             req = req.query(&[("sha", sha)]);
         }
@@ -168,10 +180,9 @@ impl GitHubClient {
             "name": "web", "active": true, "events": ["push", "pull_request"],
             "config": { "url": callback_url, "content_type": "json", "secret": secret, "insecure_ssl": "0" }
         });
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.token)
+        let resp = self.auth(self
+                .http
+                .post(&url))
             .json(&body)
             .send()
             .await?;
@@ -181,14 +192,19 @@ impl GitHubClient {
         Ok(hook)
     }
 
-    /// Verify a GitHub webhook signature.
-    pub fn verify_webhook_signature(payload: &[u8], signature: &str, secret: &str) -> bool {
-        let hex_sig = match signature.strip_prefix("sha256=") {
-            Some(s) => s,
-            None => {
-                warn!("webhook signature missing sha256= prefix");
-                return false;
+    /// Verify a GitHub/Gitea webhook signature.
+    pub fn verify_webhook_signature(payload: &[u8], signature: &str, secret: &str, provider: &GitProvider) -> bool {
+        let hex_sig = match provider {
+            GitProvider::GitHub => {
+                match signature.strip_prefix("sha256=") {
+                    Some(s) => s,
+                    None => {
+                        warn!("webhook signature missing sha256= prefix");
+                        return false;
+                    }
+                }
             }
+            GitProvider::Gitea => signature, // Gitea sends raw hex, no prefix
         };
         let expected_bytes = match hex::decode(hex_sig) {
             Ok(b) => b,
@@ -220,10 +236,9 @@ impl GitHubClient {
         let url = format!("{}/repos/{}/pulls", self.api_url, repo);
         let payload =
             serde_json::json!({ "title": title, "body": body, "head": head, "base": base });
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.token)
+        let resp = self.auth(self
+                .http
+                .post(&url))
             .json(&payload)
             .send()
             .await?;
@@ -237,10 +252,9 @@ impl GitHubClient {
     pub async fn merge_pull_request(&self, repo: &str, pr_number: u64) -> Result<(), GitHubError> {
         let url = format!("{}/repos/{}/pulls/{}/merge", self.api_url, repo, pr_number);
         let payload = serde_json::json!({ "merge_method": "merge" });
-        let resp = self
-            .http
-            .put(&url)
-            .bearer_auth(&self.token)
+        let resp = self.auth(self
+                .http
+                .put(&url))
             .json(&payload)
             .send()
             .await?;
@@ -252,7 +266,7 @@ impl GitHubClient {
     #[instrument(skip(self))]
     pub async fn get_user(&self, username: &str) -> Result<GitHubUser, GitHubError> {
         let url = format!("{}/users/{}", self.api_url, username);
-        let resp = self.http.get(&url).bearer_auth(&self.token).send().await?;
+        let resp = self.auth(self.http.get(&url)).send().await?;
         let resp = self.check_response(resp).await?;
         let user: GitHubUser = resp.json().await?;
         debug!(login = %user.login, "fetched user");
@@ -269,10 +283,9 @@ impl GitHubClient {
     ) -> Result<(), GitHubError> {
         let url = format!("{}/repos/{}/statuses/{}", self.api_url, repo, sha);
         let payload = serde_json::json!({ "state": state.to_string(), "description": description, "context": "gitsvnsync" });
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.token)
+        let resp = self.auth(self
+                .http
+                .post(&url))
             .json(&payload)
             .send()
             .await?;
@@ -292,7 +305,7 @@ impl GitHubClient {
         since: Option<&str>,
     ) -> Result<Vec<PullRequest>, GitHubError> {
         let url = format!("{}/repos/{}/pulls", self.api_url, repo);
-        let mut req = self.http.get(&url).bearer_auth(&self.token).query(&[
+        let mut req = self.auth(self.http.get(&url)).query(&[
             ("state", "closed"),
             ("base", base),
             ("per_page", "50"),
@@ -335,10 +348,9 @@ impl GitHubClient {
             "{}/repos/{}/pulls/{}/commits",
             self.api_url, repo, pr_number
         );
-        let resp = self
-            .http
-            .get(&url)
-            .bearer_auth(&self.token)
+        let resp = self.auth(self
+                .http
+                .get(&url))
             .query(&[("per_page", "100")])
             .send()
             .await?;
@@ -356,7 +368,7 @@ impl GitHubClient {
         pr_number: u64,
     ) -> Result<PullRequest, GitHubError> {
         let url = format!("{}/repos/{}/pulls/{}", self.api_url, repo, pr_number);
-        let resp = self.http.get(&url).bearer_auth(&self.token).send().await?;
+        let resp = self.auth(self.http.get(&url)).send().await?;
         let resp = self.check_response(resp).await?;
         let pr: PullRequest = resp.json().await?;
         debug!(number = pr.number, state = %pr.state, "fetched pull request");
@@ -371,7 +383,7 @@ impl GitHubClient {
         sha: &str,
     ) -> Result<GitHubCommitDetail2, GitHubError> {
         let url = format!("{}/repos/{}/commits/{}", self.api_url, repo, sha);
-        let resp = self.http.get(&url).bearer_auth(&self.token).send().await?;
+        let resp = self.auth(self.http.get(&url)).send().await?;
         let resp = self.check_response(resp).await?;
         let commit: GitHubCommitDetail2 = resp.json().await?;
         debug!(
@@ -386,7 +398,7 @@ impl GitHubClient {
     #[instrument(skip(self))]
     pub async fn repo_exists(&self, repo: &str) -> Result<bool, GitHubError> {
         let url = format!("{}/repos/{}", self.api_url, repo);
-        let resp = self.http.head(&url).bearer_auth(&self.token).send().await?;
+        let resp = self.auth(self.http.head(&url)).send().await?;
         Ok(resp.status().is_success())
     }
 
@@ -405,10 +417,9 @@ impl GitHubClient {
             "description": description,
             "auto_init": false,
         });
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.token)
+        let resp = self.auth(self
+                .http
+                .post(&url))
             .json(&payload)
             .send()
             .await?;
@@ -422,7 +433,7 @@ impl GitHubClient {
     #[instrument(skip(self))]
     pub async fn get_authenticated_user(&self) -> Result<GitHubUser, GitHubError> {
         let url = format!("{}/user", self.api_url);
-        let resp = self.http.get(&url).bearer_auth(&self.token).send().await?;
+        let resp = self.auth(self.http.get(&url)).send().await?;
         let resp = self.check_response(resp).await?;
         let user: GitHubUser = resp.json().await?;
         debug!(login = %user.login, "fetched authenticated user");
@@ -449,6 +460,7 @@ impl GitHubClient {
         let request_id = resp
             .headers()
             .get("x-github-request-id")
+            .or_else(|| resp.headers().get("x-request-id"))
             .and_then(|v| v.to_str().ok())
             .unwrap_or("none")
             .to_string();
@@ -517,6 +529,11 @@ impl GitHubClient {
             .expect("valid regex");
         let redacted = re_ghp.replace_all(input, "[REDACTED_TOKEN]");
 
+        // Gitea tokens: 40-character hex strings (standalone, not part of a longer word).
+        let re_hex_token =
+            regex_lite::Regex::new(r"\b[0-9a-f]{40}\b").expect("valid regex");
+        let redacted = re_hex_token.replace_all(&redacted, "[REDACTED_HEX_TOKEN]");
+
         // Bearer <token> in headers dumped into error bodies.
         let re_bearer =
             regex_lite::Regex::new(r"(?i)bearer\s+[A-Za-z0-9_.~+/=-]+").expect("valid regex");
@@ -539,7 +556,7 @@ mod tests {
         let hex_sig = hex::encode(mac.finalize().into_bytes());
         let signature = format!("sha256={}", hex_sig);
         assert!(GitHubClient::verify_webhook_signature(
-            payload, &signature, secret
+            payload, &signature, secret, &GitProvider::GitHub
         ));
     }
 
@@ -548,7 +565,8 @@ mod tests {
         assert!(!GitHubClient::verify_webhook_signature(
             b"payload",
             "sha256=0000000000000000000000000000000000000000000000000000000000000000",
-            "secret"
+            "secret",
+            &GitProvider::GitHub
         ));
     }
 

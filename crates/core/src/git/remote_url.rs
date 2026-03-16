@@ -49,6 +49,11 @@ pub fn derive_git_base_url(api_url: &str, git_base_url: Option<&str>) -> String 
         return base.to_string();
     }
 
+    // Gitea: "https://<host>/api/v1" → "https://<host>"
+    if let Some(base) = url.strip_suffix("/api/v1") {
+        return base.to_string();
+    }
+
     // Fallback: use the API URL itself (already stripped of trailing slash).
     url.to_string()
 }

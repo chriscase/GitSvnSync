@@ -159,6 +159,15 @@ fn default_tags() -> String {
 // GitHub
 // ---------------------------------------------------------------------------
 
+/// Git hosting provider type.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GitProvider {
+    #[default]
+    GitHub,
+    Gitea,
+}
+
 /// GitHub repository and API configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitHubConfig {
@@ -186,6 +195,10 @@ pub struct GitHubConfig {
     /// Default branch name (e.g. `main`).
     #[serde(default = "default_branch")]
     pub default_branch: String,
+
+    /// Git hosting provider (github or gitea). Default: github.
+    #[serde(default)]
+    pub provider: GitProvider,
 
     /// Resolved token (populated by `resolve_env_vars`).
     #[serde(skip)]
