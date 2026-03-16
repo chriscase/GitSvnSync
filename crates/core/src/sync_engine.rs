@@ -18,7 +18,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, SvnLayout};
 use crate::conflict::detector::{ChangeKind, ConflictDetector, FileChange};
 use crate::conflict::merger::Merger;
 use crate::conflict::Conflict;
@@ -359,8 +359,26 @@ impl SyncEngine {
             // Try git apply first; fall back to export-based copy if the diff
             // is empty or in a format git cannot parse (e.g. SVN property-only
             // changes or initial adds).
-            let diff_applied = if !diff.trim().is_empty() {
-                apply_diff_to_path(&repo_path, &diff).await.is_ok()
+            // When using standard layout, strip the trunk prefix from diff paths
+            // so they match the git repository structure.
+            let processed_diff = if self.config.svn.layout == SvnLayout::Standard {
+                let tp = self.config.svn.trunk_path.trim_matches('/');
+                if !tp.is_empty() {
+                    diff.replace(
+                        &format!("a/{}/", tp),
+                        "a/",
+                    ).replace(
+                        &format!("b/{}/", tp),
+                        "b/",
+                    )
+                } else {
+                    diff
+                }
+            } else {
+                diff
+            };
+            let diff_applied = if !processed_diff.trim().is_empty() {
+                apply_diff_to_path(&repo_path, &processed_diff).await.is_ok()
             } else {
                 false
             };
@@ -369,8 +387,14 @@ impl SyncEngine {
                 // Fallback: use svn export to copy changed files.
                 let export_dir = tempfile::tempdir()
                     .map_err(|e| SyncError::GitError(crate::errors::GitError::IoError(e)))?;
+                // When using standard layout, export only the trunk subtree.
+                let export_path = if self.config.svn.layout == SvnLayout::Standard {
+                    self.config.svn.trunk_path.trim_matches('/').to_string()
+                } else {
+                    String::new()
+                };
                 self.svn_client
-                    .export("", change.revision, export_dir.path())
+                    .export(&export_path, change.revision, export_dir.path())
                     .await
                     .map_err(SyncError::SvnError)?;
 
@@ -392,7 +416,7 @@ impl SyncEngine {
                                     SyncError::GitError(crate::errors::GitError::IoError(e))
                                 })?;
                             }
-                            if src.exists() {
+                            if src.exists() && src.is_file() {
                                 std::fs::copy(&src, &dst).map_err(|e| {
                                     SyncError::GitError(crate::errors::GitError::IoError(e))
                                 })?;
@@ -647,6 +671,18 @@ impl SyncEngine {
             .await
             .map_err(SyncError::SvnError)?;
 
+        // Determine the trunk prefix to filter/strip when using standard layout.
+        let trunk_prefix = if self.config.svn.layout == SvnLayout::Standard {
+            let tp = self.config.svn.trunk_path.trim_matches('/');
+            if tp.is_empty() {
+                None
+            } else {
+                Some(format!("{}/", tp))
+            }
+        } else {
+            None
+        };
+
         let change_sets: Vec<SvnChangeSet> = entries
             .into_iter()
             .filter(|e| !self.is_echo_commit(&e.message))
@@ -658,12 +694,28 @@ impl SyncEngine {
                 changed_files: e
                     .changed_paths
                     .iter()
-                    .map(|p| ChangedFile {
-                        // SVN paths have leading '/' — strip it for filesystem joins.
-                        path: p.path.strip_prefix('/').unwrap_or(&p.path).to_string(),
-                        action: p.action.clone(),
-                        content: None,
-                        is_binary: false,
+                    .filter_map(|p| {
+                        let raw = p.path.strip_prefix('/').unwrap_or(&p.path);
+                        // When using standard layout, only sync files under trunk/
+                        // and strip the trunk prefix so git paths are repo-relative.
+                        let mapped_path = if let Some(ref prefix) = trunk_prefix {
+                            if let Some(rest) = raw.strip_prefix(prefix.as_str()) {
+                                if rest.is_empty() {
+                                    return None; // skip bare trunk/ directory entry
+                                }
+                                rest.to_string()
+                            } else {
+                                return None; // skip non-trunk paths (branches/, tags/)
+                            }
+                        } else {
+                            raw.to_string()
+                        };
+                        Some(ChangedFile {
+                            path: mapped_path,
+                            action: p.action.clone(),
+                            content: None,
+                            is_binary: false,
+                        })
                     })
                     .collect(),
                 diff_content: None,
