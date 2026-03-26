@@ -6,7 +6,7 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::routing::get;
 use axum::{Json, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::api::auth::validate_session;
 use crate::api::status::AppError;
@@ -65,8 +65,31 @@ struct SyncConfigView {
 // Routes
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Identity mapping types
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Clone)]
+struct AuthorMapping {
+    svn_username: String,
+    name: String,
+    email: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    github: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateMappingsRequest {
+    mappings: Vec<AuthorMapping>,
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
-    Router::new().route("/api/config", get(get_config))
+    Router::new()
+        .route("/api/config", get(get_config))
+        .route(
+            "/api/config/identity",
+            get(get_identity_mappings).put(update_identity_mappings),
+        )
 }
 
 async fn get_config(
@@ -109,4 +132,61 @@ async fn get_config(
             sync_tags: cfg.sync.sync_tags,
         },
     }))
+}
+
+async fn get_identity_mappings(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<AuthorMapping>>, AppError> {
+    validate_session(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
+
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+
+    let value: Option<String> = db
+        .get_state("identity_mappings")
+        .map_err(|e| AppError::Internal(format!("db error: {}", e)))?;
+
+    match value {
+        Some(json_str) => {
+            let mappings: Vec<AuthorMapping> = serde_json::from_str(&json_str)
+                .map_err(|e| AppError::Internal(format!("parse identity mappings: {}", e)))?;
+            Ok(Json(mappings))
+        }
+        None => Ok(Json(vec![])),
+    }
+}
+
+async fn update_identity_mappings(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<UpdateMappingsRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    validate_session(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
+
+    let json_str = serde_json::to_string(&body.mappings)
+        .map_err(|e| AppError::Internal(format!("serialize mappings: {}", e)))?;
+
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+
+    db.set_state("identity_mappings", &json_str)
+        .map_err(|e| AppError::Internal(format!("db error: {}", e)))?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "count": body.mappings.len(),
+    })))
 }
