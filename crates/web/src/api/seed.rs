@@ -54,7 +54,7 @@ async fn seed_data(
     let conn = db.conn();
 
     // -----------------------------------------------------------------------
-    // 1. Identity Mappings (author_mappings table)
+    // 1. Identity Mappings (stored in kv_state as JSON for the frontend)
     // -----------------------------------------------------------------------
     let identity_mappings = vec![
         ("jdoe", "John Doe", "john.doe@mentorg.com"),
@@ -68,13 +68,24 @@ async fn seed_data(
     ];
 
     let now = chrono::Utc::now();
-    for (svn, name, email) in &identity_mappings {
-        conn.execute(
-            "INSERT OR REPLACE INTO author_mappings (svn_username, git_name, git_email, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![svn, name, email, now.to_rfc3339(), now.to_rfc3339()],
-        ).map_err(|e| AppError::Internal(format!("insert identity: {}", e)))?;
-    }
+
+    // Store identity mappings as JSON in kv_state for dashboard display
+    let mappings_json: Vec<serde_json::Value> = identity_mappings
+        .iter()
+        .map(|(svn, name, email)| {
+            serde_json::json!({
+                "svn_username": svn,
+                "name": name,
+                "email": email
+            })
+        })
+        .collect();
+    let mappings_str = serde_json::to_string(&mappings_json)
+        .map_err(|e| AppError::Internal(format!("json: {}", e)))?;
+    conn.execute(
+        "INSERT OR REPLACE INTO kv_state (key, value, updated_at) VALUES ('identity_mappings', ?1, ?2)",
+        rusqlite::params![mappings_str, now.to_rfc3339()],
+    ).map_err(|e| AppError::Internal(format!("insert identity kv: {}", e)))?;
 
     // -----------------------------------------------------------------------
     // 2. Watermarks
