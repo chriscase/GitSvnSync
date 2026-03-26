@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api, type AuditEntry } from '../api';
+import { api, type AuditEntry, type SyncRecord, type CommitMapEntry } from '../api';
 
 export default function Dashboard() {
   const { data: status, isLoading: statusLoading, isError, error } = useQuery({
@@ -12,13 +13,23 @@ export default function Dashboard() {
     queryFn: () => api.getAuditLog(20),
   });
 
+  const { data: syncRecords } = useQuery({
+    queryKey: ['sync-records'],
+    queryFn: () => api.getSyncRecords(20),
+  });
+
+  const { data: commitMap } = useQuery({
+    queryKey: ['commit-map'],
+    queryFn: () => api.getCommitMap(15),
+  });
+
   if (statusLoading) {
-    return <div className="text-center py-8 text-gray-500">Loading...</div>;
+    return <div className="text-center py-8 text-gray-400">Loading...</div>;
   }
 
   if (isError) {
     return (
-      <div className="text-center py-8 text-red-500">
+      <div className="text-center py-8 text-red-400">
         Error loading status: {error?.message ?? 'Unknown error'}
       </div>
     );
@@ -28,19 +39,21 @@ export default function Dashboard() {
     const days = Math.floor(secs / 86400);
     const hours = Math.floor((secs % 86400) / 3600);
     const mins = Math.floor((secs % 3600) / 60);
-    if (days > 0) return `${days}d ${hours}h`;
+    if (days > 0) return `${days}d ${hours}h ${mins}m`;
     if (hours > 0) return `${hours}h ${mins}m`;
     return `${mins}m`;
   };
 
   const entries = recentActivity?.entries ?? [];
+  const records = syncRecords?.entries ?? [];
+  const cmEntries = commitMap?.entries ?? [];
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+      <h1 className="text-2xl font-bold text-gray-100">Dashboard</h1>
 
       {/* Status Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <StatusCard
           title="Sync State"
           value={status?.state ?? 'unknown'}
@@ -63,40 +76,128 @@ export default function Dashboard() {
           color={status?.active_conflicts ? 'red' : 'green'}
         />
         <StatusCard
+          title="Total Errors"
+          value={String(status?.total_errors ?? 0)}
+          color={status?.total_errors ? 'red' : 'gray'}
+        />
+        <StatusCard
           title="Uptime"
           value={status ? formatUptime(status.uptime_secs) : '-'}
           color="gray"
         />
       </div>
 
-      {/* Watermarks */}
-      <div className="bg-white shadow rounded-lg p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">
+      {/* Sync Position */}
+      <div className="bg-gray-800 shadow rounded-lg p-6 border border-gray-700">
+        <h2 className="text-lg font-semibold text-gray-100 mb-4">
           Sync Position
         </h2>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div>
-            <span className="text-sm text-gray-500">Last SVN Revision</span>
-            <p className="text-lg font-mono">
+            <span className="text-sm text-gray-400">Last SVN Revision</span>
+            <p className="text-lg font-mono text-gray-100">
               {status?.last_svn_revision != null
                 ? `r${status.last_svn_revision}`
                 : 'Not synced'}
             </p>
           </div>
           <div>
-            <span className="text-sm text-gray-500">Last Git Hash</span>
-            <p className="text-lg font-mono truncate">
+            <span className="text-sm text-gray-400">Last Git Hash</span>
+            <p className="text-lg font-mono truncate text-gray-100">
               {status?.last_git_hash
                 ? status.last_git_hash.substring(0, 12)
                 : 'Not synced'}
             </p>
           </div>
+          <div>
+            <span className="text-sm text-gray-400">Last Sync</span>
+            <p className="text-lg text-gray-100">
+              {status?.last_sync_at
+                ? new Date(status.last_sync_at).toLocaleString()
+                : 'Never'}
+            </p>
+          </div>
+          <div>
+            <span className="text-sm text-gray-400">Total Conflicts</span>
+            <p className="text-lg text-gray-100">
+              {status?.total_conflicts ?? 0}
+            </p>
+          </div>
         </div>
       </div>
 
+      {/* Sync Records with expandable diffs */}
+      <div className="bg-gray-800 shadow rounded-lg border border-gray-700">
+        <div className="p-6 pb-3">
+          <h2 className="text-lg font-semibold text-gray-100">
+            Recent Sync Records
+          </h2>
+          <p className="text-sm text-gray-400 mt-1">
+            Individual commits synced between SVN and Git (click to expand)
+          </p>
+        </div>
+        {records.length > 0 ? (
+          <div className="divide-y divide-gray-700">
+            {records.map((record) => (
+              <SyncRecordRow key={record.id} record={record} />
+            ))}
+          </div>
+        ) : (
+          <p className="text-gray-400 text-sm px-6 pb-6">No sync records yet</p>
+        )}
+      </div>
+
+      {/* Commit Map */}
+      <div className="bg-gray-800 shadow rounded-lg border border-gray-700">
+        <div className="p-6 pb-3">
+          <h2 className="text-lg font-semibold text-gray-100">
+            Commit Map (SVN &harr; Git)
+          </h2>
+          <p className="text-sm text-gray-400 mt-1">
+            Bidirectional mapping between SVN revisions and Git commits
+          </p>
+        </div>
+        {cmEntries.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-700">
+              <thead>
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">SVN Rev</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Git SHA</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Direction</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">SVN Author</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Git Author</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Synced At</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-700">
+                {cmEntries.map((cm: CommitMapEntry) => (
+                  <tr key={cm.id} className="hover:bg-gray-700/50">
+                    <td className="px-6 py-3 text-sm font-mono text-blue-400">r{cm.svn_rev}</td>
+                    <td className="px-6 py-3 text-sm font-mono text-purple-400 truncate max-w-[140px]">
+                      {cm.git_sha.substring(0, 12)}
+                    </td>
+                    <td className="px-6 py-3">
+                      <DirectionBadge direction={cm.direction} />
+                    </td>
+                    <td className="px-6 py-3 text-sm text-gray-300">{cm.svn_author}</td>
+                    <td className="px-6 py-3 text-sm text-gray-300 truncate max-w-[200px]">{cm.git_author}</td>
+                    <td className="px-6 py-3 text-sm text-gray-400">
+                      {new Date(cm.synced_at).toLocaleString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-gray-400 text-sm px-6 pb-6">No commit mappings yet</p>
+        )}
+      </div>
+
       {/* Recent Activity */}
-      <div className="bg-white shadow rounded-lg p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">
+      <div className="bg-gray-800 shadow rounded-lg p-6 border border-gray-700">
+        <h2 className="text-lg font-semibold text-gray-100 mb-4">
           Recent Activity
         </h2>
         {entries.length > 0 ? (
@@ -104,27 +205,135 @@ export default function Dashboard() {
             {entries.map((entry: AuditEntry) => (
               <div
                 key={entry.id}
-                className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0"
+                className="flex items-center justify-between py-2 border-b border-gray-700 last:border-0"
               >
                 <div className="flex items-center space-x-3">
+                  <SuccessIndicator success={entry.success} />
                   {entry.direction && (
                     <DirectionBadge direction={entry.direction} />
                   )}
-                  <span className="text-sm text-gray-900">{entry.action}</span>
+                  <ActionBadge action={entry.action} />
+                  <span className="text-sm text-gray-200 truncate max-w-md">
+                    {entry.details || entry.action}
+                  </span>
                   {entry.author && (
-                    <span className="text-sm text-gray-500">{entry.author}</span>
+                    <span className="text-sm text-gray-400">by {entry.author}</span>
                   )}
                 </div>
-                <span className="text-xs text-gray-400">
-                  {new Date(entry.created_at).toLocaleString()}
-                </span>
+                <div className="flex items-center space-x-3 flex-shrink-0">
+                  {entry.svn_rev && (
+                    <span className="text-xs font-mono text-blue-400">r{entry.svn_rev}</span>
+                  )}
+                  {entry.git_sha && (
+                    <span className="text-xs font-mono text-purple-400">
+                      {entry.git_sha.substring(0, 8)}
+                    </span>
+                  )}
+                  <span className="text-xs text-gray-500">
+                    {new Date(entry.created_at).toLocaleString()}
+                  </span>
+                </div>
               </div>
             ))}
           </div>
         ) : (
-          <p className="text-gray-500 text-sm">No activity yet</p>
+          <p className="text-gray-400 text-sm">No activity yet</p>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function SyncRecordRow({ record }: { record: SyncRecord }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const statusColor =
+    record.status === 'applied'
+      ? 'text-green-400'
+      : record.status === 'failed'
+        ? 'text-red-400'
+        : 'text-yellow-400';
+
+  return (
+    <div>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full px-6 py-3 flex items-center justify-between hover:bg-gray-700/50 text-left transition-colors"
+      >
+        <div className="flex items-center space-x-3 min-w-0">
+          <span className={`text-xs font-bold uppercase ${statusColor}`}>
+            {record.status === 'applied' ? '\u2713' : record.status === 'failed' ? '\u2717' : '\u25CB'}
+          </span>
+          <DirectionBadge direction={record.direction} />
+          <span className="text-sm text-gray-200 truncate">{record.message}</span>
+        </div>
+        <div className="flex items-center space-x-3 flex-shrink-0 ml-4">
+          <span className="text-sm text-gray-400">{record.author}</span>
+          {record.svn_rev && (
+            <span className="text-xs font-mono text-blue-400">r{record.svn_rev}</span>
+          )}
+          {record.git_sha && (
+            <span className="text-xs font-mono text-purple-400">{record.git_sha.substring(0, 8)}</span>
+          )}
+          <span className="text-xs text-gray-500">
+            {new Date(record.synced_at).toLocaleString()}
+          </span>
+          <svg
+            className={`w-4 h-4 text-gray-400 transition-transform ${expanded ? 'rotate-180' : ''}`}
+            fill="none" viewBox="0 0 24 24" stroke="currentColor"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </div>
+      </button>
+      {expanded && (
+        <div className="px-6 pb-4 bg-gray-850">
+          <div className="bg-gray-900 rounded-lg p-4 border border-gray-700">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4 text-sm">
+              <div>
+                <span className="text-gray-500 text-xs uppercase">Record ID</span>
+                <p className="font-mono text-gray-300 truncate">{record.id}</p>
+              </div>
+              <div>
+                <span className="text-gray-500 text-xs uppercase">SVN Revision</span>
+                <p className="font-mono text-blue-400">{record.svn_rev ? `r${record.svn_rev}` : 'N/A'}</p>
+              </div>
+              <div>
+                <span className="text-gray-500 text-xs uppercase">Git SHA</span>
+                <p className="font-mono text-purple-400">{record.git_sha || 'N/A'}</p>
+              </div>
+              <div>
+                <span className="text-gray-500 text-xs uppercase">Status</span>
+                <p className={statusColor + ' font-medium capitalize'}>{record.status}</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+              <div>
+                <span className="text-gray-500 text-xs uppercase">Author</span>
+                <p className="text-gray-300">{record.author}</p>
+              </div>
+              <div>
+                <span className="text-gray-500 text-xs uppercase">Committed</span>
+                <p className="text-gray-300">{new Date(record.timestamp).toLocaleString()}</p>
+              </div>
+              <div>
+                <span className="text-gray-500 text-xs uppercase">Synced At</span>
+                <p className="text-gray-300">{new Date(record.synced_at).toLocaleString()}</p>
+              </div>
+            </div>
+            <div className="mt-4">
+              <span className="text-gray-500 text-xs uppercase">Commit Message</span>
+              <div className="mt-1 bg-gray-800 rounded p-3 border border-gray-700">
+                <pre className="text-sm text-gray-200 whitespace-pre-wrap font-mono">{record.message}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -139,17 +348,17 @@ function StatusCard({
   color: string;
 }) {
   const colorClasses: Record<string, string> = {
-    green: 'bg-green-50 border-green-200',
-    red: 'bg-red-50 border-red-200',
-    yellow: 'bg-yellow-50 border-yellow-200',
-    blue: 'bg-blue-50 border-blue-200',
-    gray: 'bg-gray-50 border-gray-200',
+    green: 'bg-green-900/30 border-green-700',
+    red: 'bg-red-900/30 border-red-700',
+    yellow: 'bg-yellow-900/30 border-yellow-700',
+    blue: 'bg-blue-900/30 border-blue-700',
+    gray: 'bg-gray-800 border-gray-700',
   };
 
   return (
     <div className={`rounded-lg border p-4 ${colorClasses[color] ?? colorClasses.gray}`}>
-      <p className="text-sm text-gray-600">{title}</p>
-      <p className="text-2xl font-bold capitalize">{value}</p>
+      <p className="text-sm text-gray-400">{title}</p>
+      <p className="text-2xl font-bold capitalize text-gray-100">{value}</p>
     </div>
   );
 }
@@ -160,11 +369,47 @@ function DirectionBadge({ direction }: { direction: string }) {
     <span
       className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
         isToGit
-          ? 'bg-blue-100 text-blue-800'
-          : 'bg-purple-100 text-purple-800'
+          ? 'bg-blue-900/50 text-blue-300'
+          : 'bg-purple-900/50 text-purple-300'
       }`}
     >
-      {isToGit ? 'SVN → Git' : 'Git → SVN'}
+      {isToGit ? 'SVN \u2192 Git' : 'Git \u2192 SVN'}
     </span>
+  );
+}
+
+function ActionBadge({ action }: { action: string }) {
+  const colors: Record<string, string> = {
+    sync_cycle: 'bg-cyan-900/50 text-cyan-300',
+    conflict_detected: 'bg-red-900/50 text-red-300',
+    conflict_resolved: 'bg-green-900/50 text-green-300',
+    sync_error: 'bg-red-900/50 text-red-300',
+    webhook_received: 'bg-yellow-900/50 text-yellow-300',
+    daemon_started: 'bg-emerald-900/50 text-emerald-300',
+    auth_login: 'bg-indigo-900/50 text-indigo-300',
+    config_updated: 'bg-orange-900/50 text-orange-300',
+  };
+
+  const label = action.replace(/_/g, ' ');
+
+  return (
+    <span
+      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+        colors[action] ?? 'bg-gray-700 text-gray-300'
+      }`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function SuccessIndicator({ success }: { success: boolean }) {
+  return (
+    <span
+      className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${
+        success ? 'bg-green-400' : 'bg-red-400'
+      }`}
+      title={success ? 'Success' : 'Failed'}
+    />
   );
 }

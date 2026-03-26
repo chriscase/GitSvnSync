@@ -31,6 +31,7 @@ struct AuditEntryView {
     direction: Option<String>,
     svn_rev: Option<i64>,
     git_sha: Option<String>,
+    success: bool,
 }
 
 #[derive(Serialize)]
@@ -80,6 +81,7 @@ async fn list_audit(
             direction: e.direction,
             svn_rev: e.svn_rev,
             git_sha: e.git_sha,
+            success: e.success,
         })
         .collect();
 

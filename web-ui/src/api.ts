@@ -37,6 +37,7 @@ export interface AuditEntry {
   author: string | null;
   details: string | null;
   created_at: string;
+  success: boolean;
 }
 
 export interface AuditListResponse {
@@ -49,6 +50,46 @@ export interface AuthorMapping {
   name: string;
   email: string;
   github?: string;
+}
+
+export interface CommitMapEntry {
+  id: number;
+  svn_rev: number;
+  git_sha: string;
+  direction: string;
+  synced_at: string;
+  svn_author: string;
+  git_author: string;
+}
+
+export interface CommitMapResponse {
+  entries: CommitMapEntry[];
+  total: number;
+}
+
+export interface SyncRecord {
+  id: string;
+  svn_rev: number | null;
+  git_sha: string | null;
+  direction: string;
+  author: string;
+  message: string;
+  timestamp: string;
+  synced_at: string;
+  status: string;
+}
+
+export interface SyncRecordResponse {
+  entries: SyncRecord[];
+  total: number;
+}
+
+export interface ConfigResponse {
+  daemon: { poll_interval_secs: number; log_level: string; data_dir: string };
+  svn: { url: string; username: string; password: string; trunk_path: string };
+  github: { api_url: string; repo: string; token: string; default_branch: string };
+  web: { listen: string; auth_mode: string };
+  sync: { mode: string; auto_merge: boolean; sync_tags: boolean };
 }
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
@@ -104,6 +145,17 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ mappings }),
     }),
+
+  getConfig: () => fetchJson<ConfigResponse>('/config'),
+
+  getCommitMap: (limit = 100) =>
+    fetchJson<CommitMapResponse>(`/commit-map?limit=${limit}`),
+
+  getSyncRecords: (limit = 100) =>
+    fetchJson<SyncRecordResponse>(`/sync-records?limit=${limit}`),
+
+  seedData: () =>
+    fetchJson<{ ok: boolean; message: string }>('/seed', { method: 'POST' }),
 
   login: (password: string) =>
     fetchJson<{ token: string }>('/auth/login', {

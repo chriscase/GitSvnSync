@@ -22,13 +22,13 @@ export default function Layout() {
   const navLinkClass = ({ isActive }: { isActive: boolean }) =>
     `px-3 py-2 rounded-md text-sm font-medium transition-colors ${
       isActive
-        ? 'bg-gray-900 text-white'
-        : 'text-gray-300 hover:bg-gray-700 hover:text-white'
+        ? 'bg-blue-600 text-white'
+        : 'text-gray-400 hover:bg-gray-700 hover:text-white'
     }`;
 
   return (
-    <div className="min-h-screen bg-gray-100">
-      <nav className="bg-gray-800">
+    <div className="min-h-screen bg-gray-900">
+      <nav className="bg-gray-950 border-b border-gray-800">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center">
@@ -57,7 +57,7 @@ export default function Layout() {
               {status && <SyncStatus status={status} />}
               <button
                 onClick={handleLogout}
-                className="text-gray-300 hover:text-white text-sm"
+                className="text-gray-400 hover:text-white text-sm"
               >
                 Logout
               </button>

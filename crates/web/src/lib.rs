@@ -20,6 +20,7 @@ use axum::http::{header, Method};
 use axum::Router;
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
@@ -82,6 +83,15 @@ impl WebServer {
             .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
             .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
 
+        // Serve the React SPA from the "static" directory next to the binary.
+        // All unknown routes fall back to index.html for client-side routing.
+        let static_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.join("static")))
+            .unwrap_or_else(|| std::path::PathBuf::from("static"));
+        let serve_spa = ServeDir::new(&static_dir)
+            .not_found_service(ServeFile::new(static_dir.join("index.html")));
+
         let app = Router::new()
             // API routes
             .merge(api::status::routes())
@@ -89,9 +99,13 @@ impl WebServer {
             .merge(api::config::routes())
             .merge(api::auth::routes())
             .merge(api::audit::routes())
+            .merge(api::sync_history::routes())
+            .merge(api::seed::routes())
             .merge(api::webhooks::routes())
             // WebSocket
             .merge(ws::routes())
+            // React SPA (fallback for everything else)
+            .fallback_service(serve_spa)
             // Middleware
             .layer(DefaultBodyLimit::max(2 * 1024 * 1024)) // 2 MB max request body
             .layer(TraceLayer::new_for_http())
