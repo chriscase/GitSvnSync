@@ -53,7 +53,7 @@ export default function Dashboard() {
       <h1 className="text-2xl font-bold text-gray-100">Dashboard</h1>
 
       {/* Status Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         <StatusCard
           title="Sync State"
           value={status?.state ?? 'unknown'}
@@ -174,7 +174,7 @@ export default function Dashboard() {
                 {cmEntries.map((cm: CommitMapEntry) => (
                   <tr key={cm.id} className="hover:bg-gray-700/50">
                     <td className="px-6 py-3 text-sm font-mono text-blue-400">r{cm.svn_rev}</td>
-                    <td className="px-6 py-3 text-sm font-mono text-purple-400 truncate max-w-[140px]">
+                    <td className="px-6 py-3 text-sm font-mono text-purple-400 truncate max-w-[200px]">
                       {cm.git_sha.substring(0, 12)}
                     </td>
                     <td className="px-6 py-3">
@@ -213,7 +213,7 @@ export default function Dashboard() {
                     <DirectionBadge direction={entry.direction} />
                   )}
                   <ActionBadge action={entry.action} />
-                  <span className="text-sm text-gray-200 truncate max-w-md">
+                  <span className="text-sm text-gray-200 truncate max-w-xl lg:max-w-2xl">
                     {entry.details || entry.action}
                   </span>
                   {entry.author && (

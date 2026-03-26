@@ -29,7 +29,7 @@ export default function Layout() {
   return (
     <div className="min-h-screen bg-gray-900">
       <nav className="bg-gray-950 border-b border-gray-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="px-6 sm:px-8 lg:px-12">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center">
               <span className="text-white font-bold text-lg">GitSvnSync</span>
@@ -66,7 +66,7 @@ export default function Layout() {
         </div>
       </nav>
 
-      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+      <main className="py-6 px-6 sm:px-8 lg:px-12">
         <Outlet />
       </main>
     </div>
