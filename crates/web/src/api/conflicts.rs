@@ -63,9 +63,9 @@ pub struct ResolveConflictRequest {
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/conflicts", get(list_conflicts))
-        .route("/api/conflicts/{id}", get(get_conflict))
-        .route("/api/conflicts/{id}/resolve", post(resolve_conflict))
-        .route("/api/conflicts/{id}/defer", post(defer_conflict))
+        .route("/api/conflicts/:id", get(get_conflict))
+        .route("/api/conflicts/:id/resolve", post(resolve_conflict))
+        .route("/api/conflicts/:id/defer", post(defer_conflict))
 }
 
 async fn list_conflicts(
