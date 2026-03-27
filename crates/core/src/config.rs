@@ -114,6 +114,7 @@ pub struct SvnConfig {
     pub username: String,
 
     /// Environment variable holding the SVN password.
+    #[serde(default)]
     pub password_env: String,
 
     /// Repository layout.
@@ -186,6 +187,7 @@ pub struct GitHubConfig {
     pub repo: String,
 
     /// Environment variable holding the GitHub personal access token.
+    #[serde(default)]
     pub token_env: String,
 
     /// Environment variable holding the webhook secret.
