@@ -34,7 +34,7 @@ export default function Config() {
   const generateFullToml = () => {
     if (!config) return;
     const lines: string[] = [];
-    lines.push('# GitSvnSync Configuration');
+    lines.push('# RepoSync Configuration');
     lines.push('# Exported from dashboard');
     lines.push('');
     lines.push('[daemon]');
@@ -89,7 +89,7 @@ export default function Config() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-100">Configuration</h1>
-          <p className="text-sm text-gray-400 mt-1">View and manage your GitSvnSync settings</p>
+          <p className="text-sm text-gray-400 mt-1">View and manage your RepoSync settings</p>
         </div>
         <div className="flex items-center space-x-3">
           <Link
