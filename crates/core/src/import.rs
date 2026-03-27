@@ -1,0 +1,676 @@
+//! Shared full-history import module.
+//!
+//! Provides [`run_full_import`] which replays every SVN revision as an
+//! individual Git commit, with identity mapping, file-policy enforcement
+//! (including LFS), and real-time progress reporting via [`ImportProgress`].
+//!
+//! Also re-exports [`copy_tree_with_policy`] so both personal-mode and
+//! team-mode code can share the file-copy logic.
+
+use std::collections::VecDeque;
+use std::path::Path;
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use serde::Serialize;
+use tokio::sync::{broadcast, RwLock};
+use tracing::{debug, info, warn};
+
+use crate::db::Database;
+use crate::file_policy::{FilePolicy, FilePolicyDecision};
+use crate::git::GitClient;
+use crate::identity::mapper::{GitIdentity, IdentityMapper};
+use crate::svn::SvnClient;
+
+// ---------------------------------------------------------------------------
+// Progress tracking
+// ---------------------------------------------------------------------------
+
+/// Maximum number of log lines kept in the ring buffer.
+const MAX_LOG_LINES: usize = 1000;
+
+/// Current state of an import operation.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportState {
+    Idle,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/// Progress information for a running (or completed) import.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportProgress {
+    pub state: ImportState,
+    pub current_rev: i64,
+    pub total_revs: i64,
+    pub commits_created: u64,
+    pub files_imported: u64,
+    pub lfs_files_tracked: u64,
+    pub files_skipped: u64,
+    pub errors: Vec<String>,
+    pub log_lines: VecDeque<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    /// Set to true to request cancellation.
+    #[serde(skip)]
+    pub cancel_requested: bool,
+}
+
+impl Default for ImportProgress {
+    fn default() -> Self {
+        Self {
+            state: ImportState::Idle,
+            current_rev: 0,
+            total_revs: 0,
+            commits_created: 0,
+            files_imported: 0,
+            lfs_files_tracked: 0,
+            files_skipped: 0,
+            errors: Vec::new(),
+            log_lines: VecDeque::new(),
+            started_at: None,
+            completed_at: None,
+            cancel_requested: false,
+        }
+    }
+}
+
+impl ImportProgress {
+    /// Push a log line, keeping the ring buffer bounded.
+    pub fn push_log(&mut self, line: String) {
+        if self.log_lines.len() >= MAX_LOG_LINES {
+            self.log_lines.pop_front();
+        }
+        self.log_lines.push_back(line);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// copy_tree_with_policy (moved from personal::svn_to_git)
+// ---------------------------------------------------------------------------
+
+/// Recursively copy files from SVN export `src` into Git working tree `dst`,
+/// enforcing the given [`FilePolicy`].  Returns the number of files skipped,
+/// the number of LFS-tracked files, and total files copied.
+pub fn copy_tree_with_policy(
+    src: &Path,
+    dst: &Path,
+    policy: &FilePolicy,
+    db: &Database,
+) -> Result<CopyStats> {
+    let mut stats = CopyStats::default();
+    copy_tree_policy_inner(src, dst, dst, src, true, policy, &mut stats)?;
+
+    // Audit skipped count if any.
+    if stats.skipped > 0 {
+        let _ = db.insert_audit_log(
+            "file_policy_skip",
+            Some("svn_to_git"),
+            None,
+            None,
+            None,
+            Some(&format!(
+                "Skipped {} files by policy during SVN→Git copy",
+                stats.skipped
+            )),
+            true,
+        );
+    }
+
+    Ok(stats)
+}
+
+/// Statistics from a copy operation.
+#[derive(Debug, Default, Clone)]
+pub struct CopyStats {
+    pub copied: usize,
+    pub skipped: usize,
+    pub lfs_tracked: usize,
+}
+
+fn copy_tree_policy_inner(
+    src: &Path,
+    dst: &Path,
+    dst_root: &Path,
+    export_root: &Path,
+    is_root: bool,
+    policy: &FilePolicy,
+    stats: &mut CopyStats,
+) -> Result<()> {
+    let entries = std::fs::read_dir(src)
+        .with_context(|| format!("failed to read directory: {}", src.display()))?;
+
+    for entry in entries {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let name_str = file_name.to_string_lossy();
+
+        // At the root level of the destination, skip dotfiles/dotdirs to
+        // avoid overwriting `.git/` and similar metadata.
+        if is_root && name_str.starts_with('.') {
+            debug!(name = %name_str, "skipping dotfile/dotdir in export root");
+            continue;
+        }
+
+        let src_path = entry.path();
+        let dst_path = dst.join(&file_name);
+
+        if src_path.is_dir() {
+            if !dst_path.exists() {
+                std::fs::create_dir_all(&dst_path).with_context(|| {
+                    format!("failed to create directory: {}", dst_path.display())
+                })?;
+            }
+            copy_tree_policy_inner(
+                &src_path,
+                &dst_path,
+                dst_root,
+                export_root,
+                false,
+                policy,
+                stats,
+            )?;
+        } else {
+            // Compute relative path for policy evaluation.
+            let rel = src_path
+                .strip_prefix(export_root)
+                .unwrap_or(&src_path)
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            let decision = policy.evaluate_path(export_root, &rel);
+            match &decision {
+                FilePolicyDecision::Allow => {
+                    std::fs::copy(&src_path, &dst_path).with_context(|| {
+                        format!(
+                            "failed to copy {} -> {}",
+                            src_path.display(),
+                            dst_path.display()
+                        )
+                    })?;
+                    stats.copied += 1;
+                }
+                FilePolicyDecision::LfsTrack { size, threshold } => {
+                    // Copy the actual file content to the Git working tree.
+                    std::fs::copy(&src_path, &dst_path).with_context(|| {
+                        format!(
+                            "failed to copy {} -> {}",
+                            src_path.display(),
+                            dst_path.display()
+                        )
+                    })?;
+
+                    // Ensure `.gitattributes` has the appropriate LFS tracking pattern.
+                    let pattern = crate::lfs::pattern_for_path(&rel);
+                    if let Err(e) = crate::lfs::ensure_lfs_tracked(dst_root, &pattern) {
+                        warn!(
+                            path = rel.as_str(),
+                            pattern = pattern.as_str(),
+                            error = %e,
+                            "failed to update .gitattributes for LFS tracking"
+                        );
+                    } else {
+                        info!(
+                            path = rel.as_str(),
+                            size,
+                            threshold,
+                            pattern = pattern.as_str(),
+                            "LFS: file copied and .gitattributes updated"
+                        );
+                    }
+                    stats.copied += 1;
+                    stats.lfs_tracked += 1;
+                }
+                FilePolicyDecision::Ignored { pattern } => {
+                    warn!(
+                        path = rel.as_str(),
+                        pattern = pattern.as_str(),
+                        "file ignored by policy — not copied to Git"
+                    );
+                    stats.skipped += 1;
+                }
+                FilePolicyDecision::Oversize { size, limit } => {
+                    warn!(
+                        path = rel.as_str(),
+                        size, limit, "file exceeds max_file_size — not copied to Git"
+                    );
+                    stats.skipped += 1;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Remove files from `dst` (Git working tree) that no longer exist in `src`
+/// (SVN export).  Preserves root-level dotfiles/dirs (e.g. `.git/`).
+pub fn remove_stale_files(src: &Path, dst: &Path) -> Result<()> {
+    remove_stale_inner(src, dst, true)
+}
+
+fn remove_stale_inner(src: &Path, dst: &Path, is_root: bool) -> Result<()> {
+    let entries = match std::fs::read_dir(dst) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => {
+            return Err(e)
+                .with_context(|| format!("failed to read directory: {}", dst.display()));
+        }
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let name_str = file_name.to_string_lossy();
+
+        if is_root && name_str.starts_with('.') {
+            continue;
+        }
+
+        let src_path = src.join(&file_name);
+        let dst_path = entry.path();
+
+        if dst_path.is_dir() {
+            if src_path.is_dir() {
+                remove_stale_inner(&src_path, &dst_path, false)?;
+            } else {
+                std::fs::remove_dir_all(&dst_path).with_context(|| {
+                    format!("failed to remove stale directory: {}", dst_path.display())
+                })?;
+                debug!(path = %dst_path.display(), "removed stale directory");
+            }
+        } else if !src_path.exists() {
+            std::fs::remove_file(&dst_path).with_context(|| {
+                format!("failed to remove stale file: {}", dst_path.display())
+            })?;
+            debug!(path = %dst_path.display(), "removed stale file");
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Full history import
+// ---------------------------------------------------------------------------
+
+/// Configuration for a full import run.
+pub struct ImportConfig {
+    /// Committer name (the person running the import).
+    pub committer_name: String,
+    /// Committer email.
+    pub committer_email: String,
+    /// Git remote name (e.g. "origin").
+    pub remote_name: String,
+    /// Git branch to push to (e.g. "main").
+    pub branch: String,
+    /// Git push token.
+    pub push_token: Option<String>,
+    /// Commit message prefix format.  `{rev}`, `{author}`, `{date}` are
+    /// available as placeholders.  If empty, uses the original SVN message.
+    pub message_prefix: Option<String>,
+}
+
+/// Run a full SVN history import, replaying every revision as a Git commit.
+///
+/// Progress is updated in real-time via `progress` and optionally broadcast
+/// via `ws_broadcast` for the web UI.
+pub async fn run_full_import(
+    svn_client: &SvnClient,
+    git_client: &Arc<tokio::sync::Mutex<GitClient>>,
+    identity_mapper: &IdentityMapper,
+    db: &Database,
+    file_policy: &FilePolicy,
+    import_config: &ImportConfig,
+    progress: Arc<RwLock<ImportProgress>>,
+    ws_broadcast: Option<broadcast::Sender<String>>,
+) -> Result<u64> {
+    // Helper to push a log line and broadcast it.
+    let log = |progress: &Arc<RwLock<ImportProgress>>,
+               ws: &Option<broadcast::Sender<String>>,
+               line: String| {
+        let progress = progress.clone();
+        let ws = ws.clone();
+        async move {
+            let mut p = progress.write().await;
+            p.push_log(line.clone());
+            // Broadcast progress update to WebSocket clients.
+            if let Some(ref sender) = ws {
+                let json = serde_json::json!({
+                    "type": "import_progress",
+                    "state": format!("{:?}", p.state).to_lowercase(),
+                    "current_rev": p.current_rev,
+                    "total_revs": p.total_revs,
+                    "commits_created": p.commits_created,
+                    "message": line,
+                });
+                let _ = sender.send(json.to_string());
+            }
+        }
+    };
+
+    // LFS preflight
+    if file_policy.lfs_enabled() {
+        match crate::lfs::preflight_check() {
+            Ok(version) => {
+                log(
+                    &progress,
+                    &ws_broadcast,
+                    format!("[info] Git LFS available: {}", version),
+                )
+                .await;
+            }
+            Err(e) => {
+                log(
+                    &progress,
+                    &ws_broadcast,
+                    format!("[warn] Git LFS not available: {} — large files will be committed directly", e),
+                )
+                .await;
+            }
+        }
+    }
+
+    // Get SVN info
+    log(
+        &progress,
+        &ws_broadcast,
+        "[info] Connecting to SVN repository...".into(),
+    )
+    .await;
+
+    let svn_info = svn_client
+        .info()
+        .await
+        .context("failed to get SVN info")?;
+    let head_rev = svn_info.latest_rev;
+
+    {
+        let mut p = progress.write().await;
+        p.total_revs = head_rev;
+    }
+
+    log(
+        &progress,
+        &ws_broadcast,
+        format!(
+            "[info] SVN HEAD is r{}, importing {} revisions",
+            head_rev, head_rev
+        ),
+    )
+    .await;
+
+    // Get all log entries
+    log(
+        &progress,
+        &ws_broadcast,
+        "[info] Fetching SVN history...".into(),
+    )
+    .await;
+
+    let log_entries = svn_client
+        .log(1, head_rev)
+        .await
+        .context("failed to get SVN log")?;
+
+    {
+        let mut p = progress.write().await;
+        p.total_revs = log_entries.len() as i64;
+    }
+
+    log(
+        &progress,
+        &ws_broadcast,
+        format!("[info] Found {} revisions to import", log_entries.len()),
+    )
+    .await;
+
+    let git_guard = git_client.lock().await;
+    let repo_path = git_guard.repo_path().to_path_buf();
+    drop(git_guard);
+
+    let mut count = 0u64;
+
+    for (idx, entry) in log_entries.iter().enumerate() {
+        // Check for cancellation
+        {
+            let p = progress.read().await;
+            if p.cancel_requested {
+                let mut p = progress.write().await;
+                p.state = ImportState::Cancelled;
+                p.completed_at = Some(chrono::Utc::now().to_rfc3339());
+                log(
+                    &progress,
+                    &ws_broadcast,
+                    "[warn] Import cancelled by user".into(),
+                )
+                .await;
+                return Ok(count);
+            }
+        }
+
+        let rev = entry.revision;
+        {
+            let mut p = progress.write().await;
+            p.current_rev = idx as i64 + 1;
+        }
+
+        // Export this revision
+        let export_dir = match tempfile::tempdir() {
+            Ok(d) => d,
+            Err(e) => {
+                let msg = format!("[error] r{}: failed to create temp dir: {}", rev, e);
+                log(&progress, &ws_broadcast, msg.clone()).await;
+                let mut p = progress.write().await;
+                p.errors.push(msg);
+                continue;
+            }
+        };
+
+        if let Err(e) = svn_client.export("", rev, export_dir.path()).await {
+            let msg = format!("[error] r{}: SVN export failed: {}", rev, e);
+            log(&progress, &ws_broadcast, msg.clone()).await;
+            let mut p = progress.write().await;
+            p.errors.push(msg);
+            continue;
+        }
+
+        // Remove stale files from Git working tree
+        if let Err(e) = remove_stale_files(export_dir.path(), &repo_path) {
+            let msg = format!("[warn] r{}: failed to remove stale files: {}", rev, e);
+            log(&progress, &ws_broadcast, msg).await;
+        }
+
+        // Copy with policy enforcement
+        let copy_stats = match copy_tree_with_policy(export_dir.path(), &repo_path, file_policy, db)
+        {
+            Ok(s) => s,
+            Err(e) => {
+                let msg = format!("[error] r{}: copy failed: {}", rev, e);
+                log(&progress, &ws_broadcast, msg.clone()).await;
+                let mut p = progress.write().await;
+                p.errors.push(msg);
+                continue;
+            }
+        };
+
+        // Update file stats
+        {
+            let mut p = progress.write().await;
+            p.files_imported += copy_stats.copied as u64;
+            p.lfs_files_tracked += copy_stats.lfs_tracked as u64;
+            p.files_skipped += copy_stats.skipped as u64;
+        }
+
+        // Resolve Git identity for this author
+        let (author_name, author_email) = match identity_mapper.svn_to_git(&entry.author) {
+            Ok(GitIdentity { name, email }) => {
+                debug!(rev, svn_author = %entry.author, git_name = %name, "mapped SVN author");
+                (name, email)
+            }
+            Err(_) => {
+                // Fall back to SVN username as both name and email prefix
+                (
+                    entry.author.clone(),
+                    format!("{}@svn", entry.author),
+                )
+            }
+        };
+
+        // Build commit message
+        let message = format!(
+            "{}\n\n[gitsvnsync] imported from SVN r{}\nSVN-Author: {}\nSVN-Date: {}",
+            entry.message, rev, entry.author, entry.date
+        );
+
+        // Commit
+        let git_client_guard = git_client.lock().await;
+        match git_client_guard.commit(
+            &message,
+            &author_name,
+            &author_email,
+            &import_config.committer_name,
+            &import_config.committer_email,
+        ) {
+            Ok(oid) => {
+                let sha = oid.to_string();
+                let short_sha = &sha[..8.min(sha.len())];
+
+                // Log with details
+                let mut detail_parts = vec![format!("{} files", copy_stats.copied)];
+                if copy_stats.lfs_tracked > 0 {
+                    detail_parts.push(format!("LFS: {}", copy_stats.lfs_tracked));
+                }
+                if copy_stats.skipped > 0 {
+                    detail_parts.push(format!("skipped: {}", copy_stats.skipped));
+                }
+                let details = detail_parts.join(", ");
+
+                let log_line = format!(
+                    "[ok] r{} → {} ({}) \"{}\" [{}]",
+                    rev,
+                    short_sha,
+                    author_name,
+                    entry.message.lines().next().unwrap_or("").chars().take(60).collect::<String>(),
+                    details,
+                );
+                log(&progress, &ws_broadcast, log_line).await;
+
+                // Record in DB
+                db.insert_commit_map(
+                    rev,
+                    &sha,
+                    "svn_to_git",
+                    &entry.author,
+                    &format!("{} <{}>", author_name, author_email),
+                )
+                .ok();
+
+                count += 1;
+                {
+                    let mut p = progress.write().await;
+                    p.commits_created = count;
+                }
+            }
+            Err(e) => {
+                // Empty commits (property-only revisions) are expected
+                let msg = format!(
+                    "[skip] r{}: no changes to commit ({})",
+                    rev,
+                    e.to_string().lines().next().unwrap_or("unknown")
+                );
+                log(&progress, &ws_broadcast, msg).await;
+            }
+        }
+        drop(git_client_guard);
+
+        // Broadcast progress JSON update
+        if let Some(ref sender) = ws_broadcast {
+            let p = progress.read().await;
+            let json = serde_json::json!({
+                "type": "import_progress",
+                "state": "running",
+                "current_rev": p.current_rev,
+                "total_revs": p.total_revs,
+                "commits_created": p.commits_created,
+                "files_imported": p.files_imported,
+                "lfs_files_tracked": p.lfs_files_tracked,
+                "files_skipped": p.files_skipped,
+                "percentage": if p.total_revs > 0 { (p.current_rev as f64 / p.total_revs as f64 * 100.0) as u32 } else { 0 },
+            });
+            let _ = sender.send(json.to_string());
+        }
+    }
+
+    // Push all commits at once
+    if count > 0 {
+        log(
+            &progress,
+            &ws_broadcast,
+            format!("[info] Pushing {} commits to remote...", count),
+        )
+        .await;
+
+        let git_guard = git_client.lock().await;
+        match git_guard.push(
+            &import_config.remote_name,
+            &import_config.branch,
+            import_config.push_token.as_deref(),
+        ) {
+            Ok(()) => {
+                log(
+                    &progress,
+                    &ws_broadcast,
+                    "[ok] All commits pushed successfully".into(),
+                )
+                .await;
+            }
+            Err(e) => {
+                let msg = format!("[error] Push failed: {}", e);
+                log(&progress, &ws_broadcast, msg.clone()).await;
+                let mut p = progress.write().await;
+                p.errors.push(msg);
+            }
+        }
+        drop(git_guard);
+    }
+
+    // Set watermarks
+    if let Some(last) = log_entries.last() {
+        db.set_watermark("svn_rev", &last.revision.to_string())
+            .ok();
+    }
+
+    let git_guard = git_client.lock().await;
+    if let Ok(sha) = git_guard.get_head_sha() {
+        db.set_watermark("git_sha", &sha).ok();
+    }
+    drop(git_guard);
+
+    // Final audit log
+    db.insert_audit_log(
+        "import_full",
+        Some("svn_to_git"),
+        Some(head_rev),
+        None,
+        None,
+        Some(&format!(
+            "Full history import: {} commits from {} revisions",
+            count,
+            log_entries.len()
+        )),
+        true,
+    )
+    .ok();
+
+    info!(
+        count,
+        revisions = log_entries.len(),
+        "full import completed"
+    );
+    Ok(count)
+}

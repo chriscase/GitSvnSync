@@ -430,6 +430,22 @@ pub struct SyncConfig {
     /// PR-specific settings (used when `mode` is `Pr`).
     #[serde(default)]
     pub pr: PrConfig,
+
+    /// Maximum file size in bytes (0 = no limit). Files larger are skipped.
+    #[serde(default)]
+    pub max_file_size: u64,
+
+    /// LFS threshold in bytes (0 = disabled). Files larger are LFS-tracked.
+    #[serde(default)]
+    pub lfs_threshold: u64,
+
+    /// File patterns that should always be LFS-tracked (e.g. `*.psd`).
+    #[serde(default)]
+    pub lfs_patterns: Vec<String>,
+
+    /// Glob patterns for files to ignore during sync.
+    #[serde(default)]
+    pub ignore_patterns: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -444,6 +460,10 @@ impl Default for SyncConfig {
             sync_branches: Vec::new(),
             sync_tags: true,
             pr: PrConfig::default(),
+            max_file_size: 0,
+            lfs_threshold: 0,
+            lfs_patterns: Vec::new(),
+            ignore_patterns: Vec::new(),
         }
     }
 }

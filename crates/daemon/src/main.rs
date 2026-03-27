@@ -142,7 +142,13 @@ async fn main() -> Result<()> {
     let (sync_tx, sync_rx) = tokio::sync::mpsc::channel::<()>(16);
 
     // Initialize web server
-    let web_server = WebServer::new(config.clone(), web_db, sync_engine.clone(), sync_tx.clone());
+    let web_server = WebServer::new(
+        config.clone(),
+        web_db,
+        sync_engine.clone(),
+        sync_tx.clone(),
+        args.config.clone(),
+    );
     let ws_broadcast = web_server.broadcast_sender();
     let listen_addr = config.web.listen.clone();
 

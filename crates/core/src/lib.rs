@@ -11,6 +11,7 @@ pub mod errors;
 pub mod file_policy;
 pub mod git;
 pub mod identity;
+pub mod import;
 pub mod lfs;
 pub mod models;
 pub mod notify;

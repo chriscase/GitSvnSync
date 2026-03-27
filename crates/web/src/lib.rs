@@ -26,6 +26,7 @@ use tracing::info;
 
 use gitsvnsync_core::config::AppConfig;
 use gitsvnsync_core::db::Database;
+use gitsvnsync_core::import::ImportProgress;
 use gitsvnsync_core::sync_engine::SyncEngine;
 
 /// Shared application state accessible from all handlers.
@@ -40,6 +41,10 @@ pub struct AppState {
     /// Active sessions (token -> expiry timestamp).
     pub sessions:
         tokio::sync::RwLock<std::collections::HashMap<String, chrono::DateTime<chrono::Utc>>>,
+    /// Import progress tracking (shared with background import task).
+    pub import_progress: Arc<tokio::sync::RwLock<ImportProgress>>,
+    /// Path to the TOML config file on disk.
+    pub config_path: std::path::PathBuf,
 }
 
 /// The web server.
@@ -54,6 +59,7 @@ impl WebServer {
         db: Database,
         sync_engine: Arc<SyncEngine>,
         sync_trigger: tokio::sync::mpsc::Sender<()>,
+        config_path: std::path::PathBuf,
     ) -> Self {
         let (ws_tx, _) = broadcast::channel(256);
         let state = Arc::new(AppState {
@@ -63,6 +69,8 @@ impl WebServer {
             sync_trigger,
             ws_broadcast: ws_tx,
             sessions: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+            import_progress: Arc::new(tokio::sync::RwLock::new(ImportProgress::default())),
+            config_path,
         });
         Self { state }
     }
@@ -102,6 +110,7 @@ impl WebServer {
             .merge(api::sync_history::routes())
             .merge(api::seed::routes())
             .merge(api::webhooks::routes())
+            .merge(api::setup::routes())
             // WebSocket
             .merge(ws::routes())
             // React SPA (fallback for everything else)

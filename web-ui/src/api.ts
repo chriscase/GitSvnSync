@@ -169,6 +169,25 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  applyConfig: (data: Record<string, unknown>) =>
+    fetchJson<{ ok: boolean; message: string; warnings: string[] }>('/setup/apply', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  startImport: () =>
+    fetchJson<{ ok: boolean; message: string }>('/setup/import', {
+      method: 'POST',
+    }),
+
+  getImportStatus: () =>
+    fetchJson<ImportStatus>('/setup/import/status'),
+
+  cancelImport: () =>
+    fetchJson<{ ok: boolean; message: string }>('/setup/import/cancel', {
+      method: 'POST',
+    }),
+
   login: (password: string) =>
     fetchJson<{ token: string }>('/auth/login', {
       method: 'POST',
@@ -183,3 +202,17 @@ export const api = {
     });
   },
 };
+
+export interface ImportStatus {
+  state: 'idle' | 'running' | 'completed' | 'failed' | 'cancelled';
+  current_rev: number;
+  total_revs: number;
+  commits_created: number;
+  files_imported: number;
+  lfs_files_tracked: number;
+  files_skipped: number;
+  errors: string[];
+  log_lines: string[];
+  started_at: string | null;
+  completed_at: string | null;
+}
