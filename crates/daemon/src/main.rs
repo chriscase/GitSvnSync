@@ -106,21 +106,48 @@ async fn main() -> Result<()> {
     let svn_client = SvnClient::new(&config.svn.url, &config.svn.username, &svn_password);
     info!("SVN client initialized for {}", config.svn.url);
 
-    // Initialize Git client
+    // Initialize Git client (graceful: create empty repo if clone fails)
     let git_repo_path = config.daemon.data_dir.join("git-repo");
     let git_client = if git_repo_path.join(".git").exists() {
         GitClient::new(&git_repo_path).context("failed to open existing Git repository")?
     } else {
         let clone_url = config.github.clone_url();
         let token = config.github.token.as_deref();
-        GitClient::clone_repo(&clone_url, &git_repo_path, token)
-            .context("failed to clone Git repository")?
+        match GitClient::clone_repo(&clone_url, &git_repo_path, token) {
+            Ok(client) => {
+                info!("Git client cloned at {}", git_repo_path.display());
+                client
+            }
+            Err(e) => {
+                // Clone failed — init an empty repo so the daemon can start.
+                // The import wizard will populate it later.
+                warn!("Clone failed ({}), initializing empty git repo", e);
+                std::fs::create_dir_all(&git_repo_path)
+                    .context("failed to create git repo directory")?;
+                let init_output = std::process::Command::new("git")
+                    .args(["init", "--initial-branch", &config.github.default_branch])
+                    .current_dir(&git_repo_path)
+                    .output();
+                if init_output.is_err() || !init_output.as_ref().unwrap().status.success() {
+                    // Fallback for older git without --initial-branch
+                    let _ = std::process::Command::new("git")
+                        .args(["init"])
+                        .current_dir(&git_repo_path)
+                        .output();
+                }
+                let _ = std::process::Command::new("git")
+                    .args(["remote", "add", "origin", &clone_url])
+                    .current_dir(&git_repo_path)
+                    .output();
+                GitClient::new(&git_repo_path)
+                    .context("failed to open newly initialized Git repository")?
+            }
+        }
     };
     // Ensure the remote URL has embedded credentials for reliable HTTP auth.
     git_client
         .ensure_remote_credentials("origin", config.github.token.as_deref())
-        .context("failed to update Git remote credentials")?;
-    info!("Git client initialized at {}", git_repo_path.display());
+        .ok(); // Don't crash if this fails
 
     // Initialize identity mapper
     let identity_mapper = Arc::new(
