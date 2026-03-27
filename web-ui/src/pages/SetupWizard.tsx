@@ -10,6 +10,7 @@ interface WizardData {
   // SVN
   svn_url: string;
   svn_username: string;
+  svn_password: string;
   svn_password_env: string;
   svn_layout: 'standard' | 'custom';
   svn_trunk_path: string;
@@ -20,6 +21,7 @@ interface WizardData {
   git_provider: 'github' | 'gitea';
   git_api_url: string;
   git_repo: string;
+  git_token: string;
   git_token_env: string;
   git_default_branch: string;
 
@@ -66,7 +68,8 @@ interface WizardData {
 const DEFAULT_DATA: WizardData = {
   svn_url: '',
   svn_username: '',
-  svn_password_env: 'GITSVNSYNC_SVN_PASSWORD',
+  svn_password: '',
+  svn_password_env: '',
   svn_layout: 'standard',
   svn_trunk_path: 'trunk',
   svn_branches_path: 'branches',
@@ -75,7 +78,8 @@ const DEFAULT_DATA: WizardData = {
   git_provider: 'github',
   git_api_url: 'https://api.github.com',
   git_repo: '',
-  git_token_env: 'GITSVNSYNC_GITHUB_TOKEN',
+  git_token: '',
+  git_token_env: '',
   git_default_branch: 'main',
 
   sync_mode: 'direct',
@@ -137,9 +141,6 @@ function validateStep(step: number, data: WizardData): Errors {
     else if (!/^(svn|https?):\/\/.+/.test(data.svn_url.trim()))
       errors.svn_url = 'Must start with svn://, http://, or https://';
     if (!data.svn_username.trim()) errors.svn_username = 'Username is required';
-    if (!data.svn_password_env.trim()) errors.svn_password_env = 'Environment variable name is required';
-    else if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(data.svn_password_env.trim()))
-      errors.svn_password_env = 'Must be a valid env var name (letters, digits, underscores)';
     if (!data.svn_trunk_path.trim()) errors.svn_trunk_path = 'Trunk path is required';
   }
 
@@ -150,9 +151,6 @@ function validateStep(step: number, data: WizardData): Errors {
     if (!data.git_repo.trim()) errors.git_repo = 'Repository is required';
     else if (!/^[^/]+\/[^/]+$/.test(data.git_repo.trim()))
       errors.git_repo = 'Must be in owner/repo format';
-    if (!data.git_token_env.trim()) errors.git_token_env = 'Token env var is required';
-    else if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(data.git_token_env.trim()))
-      errors.git_token_env = 'Must be a valid env var name';
   }
 
   if (step === 5) {
@@ -212,6 +210,7 @@ export default function SetupWizard() {
       const payload = {
         svn_url: data.svn_url,
         svn_username: data.svn_username,
+        svn_password: data.svn_password || undefined,
         svn_password_env: data.svn_password_env || undefined,
         svn_layout: data.svn_layout,
         svn_trunk_path: data.svn_trunk_path,
@@ -220,7 +219,8 @@ export default function SetupWizard() {
         git_provider: data.git_provider,
         git_api_url: data.git_api_url,
         git_repo: data.git_repo,
-        git_token_env: data.git_token_env,
+        git_token: data.git_token || undefined,
+        git_token_env: data.git_token_env || undefined,
         git_default_branch: data.git_default_branch,
         sync_mode: data.sync_mode,
         sync_auto_merge: data.sync_auto_merge,
@@ -291,7 +291,7 @@ export default function SetupWizard() {
 
         {/* Navigation */}
         <div className="mt-6 flex items-center justify-between">
-          <div>
+          <div className="flex items-center space-x-3">
             {step > 0 && step < STEPS.length - 1 && (
               <button onClick={goBack} className="px-5 py-2.5 border border-gray-600 text-gray-300 hover:bg-gray-700 rounded-lg text-sm font-medium transition-colors">
                 Back
@@ -299,11 +299,9 @@ export default function SetupWizard() {
             )}
           </div>
           <div className="flex items-center space-x-3">
-            {step === 0 && (
-              <button onClick={() => navigate('/login')} className="px-5 py-2.5 text-gray-400 hover:text-gray-200 text-sm font-medium transition-colors">
-                Skip to Login
-              </button>
-            )}
+            <button onClick={() => navigate('/login')} className="px-5 py-2.5 text-gray-400 hover:text-gray-200 text-sm font-medium transition-colors">
+              {step === 0 ? 'Skip to Login' : 'Exit to Dashboard'}
+            </button>
             {step < STEPS.length - 2 && (
               <button onClick={goNext} className="px-6 py-2.5 bg-blue-600 text-white hover:bg-blue-700 rounded-lg text-sm font-medium transition-colors shadow-sm">
                 {step === 0 ? 'Get Started' : 'Next'}
@@ -671,17 +669,17 @@ function SvnStep({
           help="Service account username for SVN access"
           required
         />
-        <FormField
-          label="Password Environment Variable"
-          name="svn_password_env"
-          value={data.svn_password_env}
-          onChange={(v) => update({ svn_password_env: v })}
-          error={errors.svn_password_env}
-          placeholder="GITSVNSYNC_SVN_PASSWORD"
-          help="Name of the env var that holds the SVN password"
-          mono
-          required
-        />
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Password</label>
+          <input
+            type="password"
+            value={data.svn_password}
+            onChange={e => update({ svn_password: e.target.value })}
+            className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            placeholder="Enter SVN password"
+          />
+          <p className="text-xs text-gray-500 mt-1">Stored securely on the server — never written to config files</p>
+        </div>
       </div>
 
       <div className="border-t border-gray-700 pt-5">
@@ -811,17 +809,17 @@ function GitStep({
           mono
         />
         <div className="md:col-span-2">
-          <FormField
-            label="Token Environment Variable"
-            name="git_token_env"
-            value={data.git_token_env}
-            onChange={(v) => update({ git_token_env: v })}
-            error={errors.git_token_env}
-            placeholder="GITSVNSYNC_GITHUB_TOKEN"
-            help="Name of the env var that holds the API token"
-            mono
-            required
-          />
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Personal Access Token</label>
+            <input
+              type="password"
+              value={data.git_token}
+              onChange={e => update({ git_token: e.target.value })}
+              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="ghp_xxxxxxxxxxxx or giteaToken"
+            />
+            <p className="text-xs text-gray-500 mt-1">Needs <code className="text-gray-400">repo</code> scope. Stored securely on the server.</p>
+          </div>
         </div>
       </div>
 

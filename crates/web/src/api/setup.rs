@@ -53,6 +53,8 @@ pub struct ApplyConfigRequest {
     pub svn_url: String,
     pub svn_username: String,
     pub svn_password_env: Option<String>,
+    /// Actual SVN password (stored securely in DB, not in TOML).
+    pub svn_password: Option<String>,
     pub svn_layout: Option<String>,
     pub svn_trunk_path: Option<String>,
     pub svn_branches_path: Option<String>,
@@ -62,7 +64,9 @@ pub struct ApplyConfigRequest {
     pub git_provider: Option<String>,
     pub git_api_url: String,
     pub git_repo: String,
-    pub git_token_env: String,
+    pub git_token_env: Option<String>,
+    /// Actual Git token (stored securely in DB, not in TOML).
+    pub git_token: Option<String>,
     pub git_default_branch: Option<String>,
 
     // Sync
@@ -320,7 +324,9 @@ fn generate_toml(data: &ApplyConfigRequest) -> String {
     lines.push("[github]".into());
     lines.push(format!("api_url = \"{}\"", data.git_api_url));
     lines.push(format!("repo = \"{}\"", data.git_repo));
-    lines.push(format!("token_env = \"{}\"", data.git_token_env));
+    // token_env is optional if the user provides the actual token via the GUI
+    let token_env = data.git_token_env.as_deref().unwrap_or("GIT_TOKEN");
+    lines.push(format!("token_env = \"{}\"", token_env));
     lines.push(format!(
         "default_branch = \"{}\"",
         data.git_default_branch.as_deref().unwrap_or("main")
@@ -477,6 +483,35 @@ async fn apply_config(
         }
     }
 
+    // Store secrets in DB (never written to TOML file)
+    {
+        let db = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(format!("db lock error: {}", e)))?;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        if let Some(ref password) = body.svn_password {
+            if !password.is_empty() {
+                let _ = db.conn().execute(
+                    "INSERT OR REPLACE INTO kv_state (key, value, updated_at) VALUES ('secret_svn_password', ?1, ?2)",
+                    rusqlite::params![password, now],
+                );
+                info!("SVN password stored in database");
+            }
+        }
+
+        if let Some(ref token) = body.git_token {
+            if !token.is_empty() {
+                let _ = db.conn().execute(
+                    "INSERT OR REPLACE INTO kv_state (key, value, updated_at) VALUES ('secret_git_token', ?1, ?2)",
+                    rusqlite::params![token, now],
+                );
+                info!("Git token stored in database");
+            }
+        }
+    }
+
     // Write config file atomically
     let tmp_path = state.config_path.with_extension("toml.tmp");
     if let Err(e) = std::fs::write(&tmp_path, &toml_content) {
@@ -553,26 +588,87 @@ async fn start_import(
         p.started_at = Some(chrono::Utc::now().to_rfc3339());
     }
 
-    // Build clients for the import
-    let svn_password = config.svn.password.clone().unwrap_or_default();
+    // Load secrets from DB (fallback for env vars not being set)
+    let (db_svn_password, db_git_token) = {
+        let db = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(format!("db lock error: {}", e)))?;
+        let conn = db.conn();
+        let svn_pw: Option<String> = conn
+            .query_row(
+                "SELECT value FROM kv_state WHERE key = 'secret_svn_password'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        let git_tok: Option<String> = conn
+            .query_row(
+                "SELECT value FROM kv_state WHERE key = 'secret_git_token'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        (svn_pw, git_tok)
+    };
+
+    // Build clients — prefer env var secrets, fall back to DB secrets
+    let svn_password = config
+        .svn
+        .password
+        .clone()
+        .or(db_svn_password)
+        .unwrap_or_default();
     let svn_client = SvnClient::new(&config.svn.url, &config.svn.username, &svn_password);
 
+    // Resolve git token — prefer env var, fall back to DB secret
+    let git_token = config.github.token.clone().or(db_git_token);
+
     let git_repo_path = config.daemon.data_dir.join("git-repo");
+
+    // Ensure data dir exists
+    std::fs::create_dir_all(&config.daemon.data_dir)
+        .map_err(|e| AppError::Internal(format!("failed to create data dir: {}", e)))?;
 
     // Init or open Git repo
     let git_client = if git_repo_path.join(".git").exists() {
         GitClient::new(&git_repo_path)
             .map_err(|e| AppError::Internal(format!("failed to open git repo: {}", e)))?
     } else {
+        // Create a fresh git repo with the remote configured
         let clone_url = config.github.clone_url();
-        let token = config.github.token.as_deref();
-        GitClient::clone_repo(&clone_url, &git_repo_path, token)
-            .map_err(|e| AppError::Internal(format!("failed to clone git repo: {}", e)))?
+        match GitClient::clone_repo(&clone_url, &git_repo_path, git_token.as_deref()) {
+            Ok(client) => client,
+            Err(_) => {
+                // Clone failed (empty repo or unreachable) — init locally and set remote
+                info!("Clone failed, initializing empty repo with remote");
+                std::fs::create_dir_all(&git_repo_path)
+                    .map_err(|e| AppError::Internal(format!("failed to create git repo dir: {}", e)))?;
+                let output = std::process::Command::new("git")
+                    .args(["init", "--initial-branch", &config.github.default_branch])
+                    .current_dir(&git_repo_path)
+                    .output()
+                    .map_err(|e| AppError::Internal(format!("git init failed: {}", e)))?;
+                if !output.status.success() {
+                    // Fallback for older git without --initial-branch
+                    let _ = std::process::Command::new("git")
+                        .args(["init"])
+                        .current_dir(&git_repo_path)
+                        .output();
+                }
+                let _ = std::process::Command::new("git")
+                    .args(["remote", "add", "origin", &clone_url])
+                    .current_dir(&git_repo_path)
+                    .output();
+                GitClient::new(&git_repo_path)
+                    .map_err(|e| AppError::Internal(format!("failed to open initialized git repo: {}", e)))?
+            }
+        }
     };
 
-    // Ensure credentials are embedded
+    // Ensure credentials are embedded in the remote URL
     git_client
-        .ensure_remote_credentials("origin", config.github.token.as_deref())
+        .ensure_remote_credentials("origin", git_token.as_deref())
         .map_err(|e| AppError::Internal(format!("failed to set git credentials: {}", e)))?;
 
     let git_client = Arc::new(tokio::sync::Mutex::new(git_client));
@@ -591,7 +687,7 @@ async fn start_import(
         committer_email: "reposync@localhost".into(),
         remote_name: "origin".into(),
         branch: config.github.default_branch.clone(),
-        push_token: config.github.token.clone(),
+        push_token: git_token,
         message_prefix: None,
     };
 
