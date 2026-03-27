@@ -730,7 +730,9 @@ impl SyncEngine {
         let git = self.git_client.lock().await;
 
         let token = self.config.github.token.as_deref();
-        git.fetch("origin", token).map_err(SyncError::GitError)?;
+        let branch = &self.config.github.default_branch;
+        git.pull("origin", branch, token)
+            .map_err(SyncError::GitError)?;
 
         // Check the state table first (written by sync_git_to_svn), then fall
         // back to commit_map / sync_records for databases created by older

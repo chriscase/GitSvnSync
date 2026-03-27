@@ -54,21 +54,26 @@ impl GitClient {
     }
 
     /// Clone a remote repository to `path`.
+    ///
+    /// If a token is provided and the URL is HTTP(S), the token is embedded
+    /// directly in the URL (`x-access-token:<token>@host`) for maximum
+    /// compatibility with servers like Gitea that don't work well with
+    /// libgit2's credential callback.
     #[instrument(skip(token), fields(url = %url, path = %path.display()))]
     pub fn clone_repo(url: &str, path: &Path, token: Option<&str>) -> Result<Self, GitError> {
         info!("cloning git repository");
-        let mut callbacks = RemoteCallbacks::new();
-        if let Some(tok) = token {
-            let tok = tok.to_string();
-            callbacks.credentials(move |_url, _username, _allowed| {
-                Cred::userpass_plaintext("x-access-token", &tok)
-            });
-        }
-        let mut fetch_opts = FetchOptions::new();
-        fetch_opts.remote_callbacks(callbacks);
-        let mut builder = git2::build::RepoBuilder::new();
-        builder.fetch_options(fetch_opts);
-        let repo = builder.clone(url, path)?;
+        let clone_url = match token {
+            Some(tok) if url.starts_with("https://") => {
+                let rest = url.strip_prefix("https://").unwrap();
+                format!("https://x-access-token:{}@{}", tok, rest)
+            }
+            Some(tok) if url.starts_with("http://") => {
+                let rest = url.strip_prefix("http://").unwrap();
+                format!("http://x-access-token:{}@{}", tok, rest)
+            }
+            _ => url.to_string(),
+        };
+        let repo = Repository::clone(&clone_url, path)?;
         info!("clone completed");
         Ok(Self {
             repo,
@@ -81,6 +86,43 @@ impl GitClient {
     }
     pub fn repo(&self) -> &Repository {
         &self.repo
+    }
+
+    /// Ensure the origin remote URL contains embedded credentials for HTTP(S) remotes.
+    ///
+    /// libgit2's credential callback doesn't work reliably with all Git servers
+    /// (e.g. Gitea). Embedding `x-access-token:<token>` in the URL is the most
+    /// portable approach and mirrors what CI/CD systems do.
+    pub fn ensure_remote_credentials(
+        &self,
+        remote_name: &str,
+        token: Option<&str>,
+    ) -> Result<(), GitError> {
+        let Some(tok) = token else { return Ok(()) };
+        let remote = self.repo.find_remote(remote_name)?;
+        let Some(url) = remote.url() else {
+            return Ok(());
+        };
+        // Only modify http(s) URLs that don't already have credentials.
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Ok(());
+        }
+        if url.contains('@') {
+            // Already has credentials embedded — leave it alone.
+            return Ok(());
+        }
+        // Insert x-access-token:<tok>@ after the scheme.
+        let new_url = if let Some(rest) = url.strip_prefix("https://") {
+            format!("https://x-access-token:{}@{}", tok, rest)
+        } else if let Some(rest) = url.strip_prefix("http://") {
+            format!("http://x-access-token:{}@{}", tok, rest)
+        } else {
+            return Ok(());
+        };
+        info!("updating remote URL to embed credentials");
+        self.repo
+            .remote_set_url(remote_name, &new_url)?;
+        Ok(())
     }
 
     /// Fetch from a named remote.

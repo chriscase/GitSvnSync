@@ -116,6 +116,10 @@ async fn main() -> Result<()> {
         GitClient::clone_repo(&clone_url, &git_repo_path, token)
             .context("failed to clone Git repository")?
     };
+    // Ensure the remote URL has embedded credentials for reliable HTTP auth.
+    git_client
+        .ensure_remote_credentials("origin", config.github.token.as_deref())
+        .context("failed to update Git remote credentials")?;
     info!("Git client initialized at {}", git_repo_path.display());
 
     // Initialize identity mapper

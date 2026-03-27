@@ -157,6 +157,18 @@ export const api = {
   seedData: () =>
     fetchJson<{ ok: boolean; message: string }>('/seed', { method: 'POST' }),
 
+  testSvnConnection: (data: { url: string; username: string }) =>
+    fetchJson<{ ok: boolean; message: string }>('/setup/test-svn', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  testGitConnection: (data: { api_url: string; repo: string; provider: string }) =>
+    fetchJson<{ ok: boolean; message: string }>('/setup/test-git', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
   login: (password: string) =>
     fetchJson<{ token: string }>('/auth/login', {
       method: 'POST',
