@@ -619,7 +619,19 @@ async fn start_import(
         .clone()
         .or(db_svn_password)
         .unwrap_or_default();
-    let svn_client = SvnClient::new(&config.svn.url, &config.svn.username, &svn_password);
+    // Append trunk_path to SVN URL so export targets the correct branch/trunk,
+    // not the repository root.  e.g. ".../edmsls" + "/branches/SLS/sls_engr_trunk"
+    let svn_import_url = {
+        let base = config.svn.url.trim_end_matches('/');
+        let trunk = if config.svn.trunk_path.is_empty() { "trunk" } else { &config.svn.trunk_path };
+        if trunk.is_empty() || trunk == "/" {
+            base.to_string()
+        } else {
+            format!("{}/{}", base, trunk.trim_start_matches('/'))
+        }
+    };
+    info!(svn_import_url = %svn_import_url, "SVN import URL (repo root + trunk path)");
+    let svn_client = SvnClient::new(&svn_import_url, &config.svn.username, &svn_password);
 
     // Resolve git token — prefer env var, fall back to DB secret
     let git_token = config.github.token.clone().or(db_git_token);

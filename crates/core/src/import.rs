@@ -629,19 +629,35 @@ pub async fn run_full_import(
 
                 // Incremental push every PUSH_BATCH_SIZE commits
                 if commits_since_push >= PUSH_BATCH_SIZE {
+                    let is_first_push = {
+                        let p = progress.read().await;
+                        p.batches_pushed == 0
+                    };
+                    let push_type = if is_first_push { "force-push" } else { "push" };
                     log(
                         &progress,
                         &ws_broadcast,
-                        format!("[info] Pushing batch of {} commits to remote...", commits_since_push),
+                        format!("[info] {} batch of {} commits to remote...", push_type, commits_since_push),
                     )
                     .await;
 
                     let push_guard = git_client.lock().await;
-                    match push_guard.push(
-                        &import_config.remote_name,
-                        &import_config.branch,
-                        import_config.push_token.as_deref(),
-                    ) {
+                    let push_result = if is_first_push {
+                        // First push uses --force to handle divergent histories
+                        // (e.g., GHE repo had an initial commit or existing content)
+                        push_guard.push_force(
+                            &import_config.remote_name,
+                            &import_config.branch,
+                            import_config.push_token.as_deref(),
+                        )
+                    } else {
+                        push_guard.push(
+                            &import_config.remote_name,
+                            &import_config.branch,
+                            import_config.push_token.as_deref(),
+                        )
+                    };
+                    match push_result {
                         Ok(()) => {
                             log(
                                 &progress,

@@ -201,7 +201,7 @@ impl GitClient {
         Ok(oid)
     }
 
-    /// Push a local branch to a remote.
+    /// Push a local branch to a remote (with optional force).
     #[instrument(skip(self))]
     pub fn push(
         &self,
@@ -209,8 +209,28 @@ impl GitClient {
         branch: &str,
         _token: Option<&str>,
     ) -> Result<(), GitError> {
+        self.push_impl(remote_name, branch, false)
+    }
+
+    /// Force-push a local branch to a remote (overwrites remote history).
+    #[instrument(skip(self))]
+    pub fn push_force(
+        &self,
+        remote_name: &str,
+        branch: &str,
+        _token: Option<&str>,
+    ) -> Result<(), GitError> {
+        self.push_impl(remote_name, branch, true)
+    }
+
+    fn push_impl(
+        &self,
+        remote_name: &str,
+        branch: &str,
+        force: bool,
+    ) -> Result<(), GitError> {
         let start = std::time::Instant::now();
-        info!(remote = remote_name, branch, "pushing via git CLI (LFS-compatible)");
+        info!(remote = remote_name, branch, force, "pushing via git CLI (LFS-compatible)");
 
         // Use the git CLI instead of libgit2 so that Git LFS pre-push hooks
         // run automatically.  The remote URL already has credentials embedded
@@ -219,11 +239,19 @@ impl GitClient {
 
         debug!(
             repo_path = %repo_path.display(),
+            force,
             "spawning git push subprocess"
         );
 
+        let mut args = vec!["push"];
+        if force {
+            args.push("--force");
+        }
+        args.push(remote_name);
+        args.push(branch);
+
         let output = std::process::Command::new("git")
-            .args(["push", remote_name, branch])
+            .args(&args)
             .current_dir(repo_path)
             .env("GIT_TERMINAL_PROMPT", "0")
             .output()
