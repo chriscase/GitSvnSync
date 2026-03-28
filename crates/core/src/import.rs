@@ -641,22 +641,91 @@ pub async fn run_full_import(
                     )
                     .await;
 
-                    // Use async push to avoid blocking the tokio runtime
+                    // Use spawn_blocking to avoid blocking the tokio runtime
                     let push_guard = git_client.lock().await;
                     let repo_path = push_guard.repo_workdir();
                     drop(push_guard);
 
-                    let push_result = async_git_push(
-                        &repo_path,
-                        &import_config.remote_name,
-                        &import_config.branch,
-                        is_first_push,
-                        &progress,
-                        &ws_broadcast,
-                    ).await;
+                    let remote = import_config.remote_name.clone();
+                    let branch = import_config.branch.clone();
+                    let force = is_first_push;
+                    let rp = repo_path.clone();
+
+                    // Heartbeat task: log "still pushing..." every 30s
+                    let hb_progress = progress.clone();
+                    let hb_ws = ws_broadcast.clone();
+                    let hb_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let hb_cancel2 = hb_cancel.clone();
+                    let hb_handle = tokio::spawn(async move {
+                        let start = std::time::Instant::now();
+                        loop {
+                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            if hb_cancel2.load(std::sync::atomic::Ordering::Relaxed) {
+                                break;
+                            }
+                            let elapsed = start.elapsed().as_secs();
+                            push_log_line(
+                                &hb_progress,
+                                &hb_ws,
+                                format!("[push] still uploading... ({}m {}s elapsed)", elapsed / 60, elapsed % 60),
+                            ).await;
+                        }
+                    });
+
+                    let push_result = tokio::task::spawn_blocking(move || {
+                        let start = std::time::Instant::now();
+                        info!(remote = %remote, branch = %branch, force, "spawn_blocking push starting");
+
+                        let mut args = vec!["push".to_string(), "--progress".to_string()];
+                        if force {
+                            args.push("--force".to_string());
+                        }
+                        args.push(remote.clone());
+                        args.push(branch.clone());
+
+                        let output = std::process::Command::new("git")
+                            .args(&args)
+                            .current_dir(&rp)
+                            .env("GIT_TERMINAL_PROMPT", "0")
+                            .output();
+
+                        let elapsed = start.elapsed();
+
+                        match output {
+                            Ok(out) => {
+                                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                                if out.status.success() {
+                                    info!(elapsed_secs = elapsed.as_secs_f64(), "push completed");
+                                    Ok(stderr)
+                                } else {
+                                    error!(stderr = %stderr, elapsed_secs = elapsed.as_secs_f64(), "push failed");
+                                    Err(format!("git push failed (exit {:?}, {:.1}s): {}", out.status.code(), elapsed.as_secs_f64(), stderr.trim()))
+                                }
+                            }
+                            Err(e) => {
+                                error!(error = %e, "failed to spawn git push");
+                                Err(format!("failed to spawn git push: {}", e))
+                            }
+                        }
+                    }).await;
+
+                    // Stop heartbeat
+                    hb_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                    hb_handle.abort();
 
                     match push_result {
-                        Ok(()) => {
+                        Ok(Ok(stderr)) => {
+                            // Log any git push output (remote warnings, etc.)
+                            for line in stderr.lines() {
+                                let trimmed = line.trim();
+                                if !trimmed.is_empty() {
+                                    log(&progress, &ws_broadcast, format!("[push] {}", trimmed)).await;
+                                }
+                            }
+                            {
+                                let mut p = progress.write().await;
+                                p.batches_pushed += 1;
+                            }
                             log(
                                 &progress,
                                 &ws_broadcast,
@@ -664,8 +733,12 @@ pub async fn run_full_import(
                             )
                             .await;
                         }
-                        Err(e) => {
+                        Ok(Err(e)) => {
                             let msg = format!("[warn] Batch push failed (will retry at end): {}", e);
+                            log(&progress, &ws_broadcast, msg).await;
+                        }
+                        Err(e) => {
+                            let msg = format!("[warn] Batch push task panicked: {}", e);
                             log(&progress, &ws_broadcast, msg).await;
                         }
                     }
@@ -727,26 +800,41 @@ pub async fn run_full_import(
                 p.batches_pushed == 0
             };
 
-            match async_git_push(
-                &repo_path,
-                &import_config.remote_name,
-                &import_config.branch,
-                is_first_push,
-                &progress,
-                &ws_broadcast,
-            ).await {
-                Ok(()) => {
-                    log(
-                        &progress,
-                        &ws_broadcast,
-                        format!("[ok] All {} commits pushed successfully", count),
-                    )
-                    .await;
+            let remote = import_config.remote_name.clone();
+            let branch = import_config.branch.clone();
+            let force = is_first_push;
+            let rp = repo_path.clone();
+
+            let push_result = tokio::task::spawn_blocking(move || {
+                let mut args = vec!["push".to_string(), "--progress".to_string()];
+                if force { args.push("--force".to_string()); }
+                args.push(remote); args.push(branch);
+                let output = std::process::Command::new("git")
+                    .args(&args).current_dir(&rp)
+                    .env("GIT_TERMINAL_PROMPT", "0").output();
+                match output {
+                    Ok(out) if out.status.success() => Ok(String::from_utf8_lossy(&out.stderr).to_string()),
+                    Ok(out) => Err(format!("exit {:?}: {}", out.status.code(), String::from_utf8_lossy(&out.stderr).trim())),
+                    Err(e) => Err(format!("spawn failed: {}", e)),
+                }
+            }).await;
+
+            match push_result {
+                Ok(Ok(stderr)) => {
+                    for line in stderr.lines() {
+                        let t = line.trim();
+                        if !t.is_empty() { log(&progress, &ws_broadcast, format!("[push] {}", t)).await; }
+                    }
+                    { let mut p = progress.write().await; p.batches_pushed += 1; }
+                    log(&progress, &ws_broadcast, format!("[ok] All {} commits pushed successfully", count)).await;
                     push_success = true;
                     break;
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     let msg = format!("[warn] Push attempt {}/{} failed: {}", attempt, max_retries, e);
+                }
+                Err(e) => {
+                    let msg = format!("[warn] Push attempt {}/{} failed (panic): {}", attempt, max_retries, e);
                     log(&progress, &ws_broadcast, msg.clone()).await;
 
                     if attempt < max_retries {
