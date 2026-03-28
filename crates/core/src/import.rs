@@ -434,6 +434,8 @@ pub async fn run_full_import(
     drop(git_guard);
 
     let mut count = 0u64;
+    let mut commits_since_push = 0u64;
+    const PUSH_BATCH_SIZE: u64 = 50;
 
     for (idx, entry) in log_entries.iter().enumerate() {
         // Check for cancellation
@@ -571,9 +573,42 @@ pub async fn run_full_import(
                 .ok();
 
                 count += 1;
+                commits_since_push += 1;
                 {
                     let mut p = progress.write().await;
                     p.commits_created = count;
+                }
+
+                // Incremental push every PUSH_BATCH_SIZE commits
+                if commits_since_push >= PUSH_BATCH_SIZE {
+                    log(
+                        &progress,
+                        &ws_broadcast,
+                        format!("[info] Pushing batch of {} commits to remote...", commits_since_push),
+                    )
+                    .await;
+
+                    let push_guard = git_client.lock().await;
+                    match push_guard.push(
+                        &import_config.remote_name,
+                        &import_config.branch,
+                        import_config.push_token.as_deref(),
+                    ) {
+                        Ok(()) => {
+                            log(
+                                &progress,
+                                &ws_broadcast,
+                                format!("[ok] Batch pushed ({} of {} total commits)", count, log_entries.len()),
+                            )
+                            .await;
+                        }
+                        Err(e) => {
+                            let msg = format!("[warn] Batch push failed (will retry at end): {}", e);
+                            log(&progress, &ws_broadcast, msg).await;
+                        }
+                    }
+                    drop(push_guard);
+                    commits_since_push = 0;
                 }
             }
             Err(e) => {
@@ -606,37 +641,67 @@ pub async fn run_full_import(
         }
     }
 
-    // Push all commits at once
-    if count > 0 {
-        log(
-            &progress,
-            &ws_broadcast,
-            format!("[info] Pushing {} commits to remote...", count),
-        )
-        .await;
+    // Push remaining commits (those since last batch push)
+    if commits_since_push > 0 {
+        let max_retries = 3;
+        let mut push_success = false;
 
-        let git_guard = git_client.lock().await;
-        match git_guard.push(
-            &import_config.remote_name,
-            &import_config.branch,
-            import_config.push_token.as_deref(),
-        ) {
-            Ok(()) => {
-                log(
-                    &progress,
-                    &ws_broadcast,
-                    "[ok] All commits pushed successfully".into(),
-                )
-                .await;
-            }
-            Err(e) => {
-                let msg = format!("[error] Push failed: {}", e);
-                log(&progress, &ws_broadcast, msg.clone()).await;
-                let mut p = progress.write().await;
-                p.errors.push(msg);
+        for attempt in 1..=max_retries {
+            log(
+                &progress,
+                &ws_broadcast,
+                format!(
+                    "[info] Pushing remaining {} commits to remote (attempt {}/{})...",
+                    commits_since_push, attempt, max_retries
+                ),
+            )
+            .await;
+
+            let git_guard = git_client.lock().await;
+            match git_guard.push(
+                &import_config.remote_name,
+                &import_config.branch,
+                import_config.push_token.as_deref(),
+            ) {
+                Ok(()) => {
+                    log(
+                        &progress,
+                        &ws_broadcast,
+                        format!("[ok] All {} commits pushed successfully", count),
+                    )
+                    .await;
+                    push_success = true;
+                    drop(git_guard);
+                    break;
+                }
+                Err(e) => {
+                    drop(git_guard);
+                    let msg = format!("[warn] Push attempt {}/{} failed: {}", attempt, max_retries, e);
+                    log(&progress, &ws_broadcast, msg.clone()).await;
+
+                    if attempt < max_retries {
+                        let delay_secs = attempt as u64 * 5; // 5s, 10s, 15s backoff
+                        log(
+                            &progress,
+                            &ws_broadcast,
+                            format!("[info] Retrying in {} seconds...", delay_secs),
+                        )
+                        .await;
+                        tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                    }
+                }
             }
         }
-        drop(git_guard);
+
+        if !push_success {
+            let msg = format!(
+                "[error] Push failed after {} attempts. {} commits are saved locally and can be pushed manually with: cd /opt/reposync/git-repo && git push origin main",
+                max_retries, commits_since_push
+            );
+            log(&progress, &ws_broadcast, msg.clone()).await;
+            let mut p = progress.write().await;
+            p.errors.push(msg);
+        }
     }
 
     // Set watermarks
