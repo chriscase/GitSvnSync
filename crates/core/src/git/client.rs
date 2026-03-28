@@ -7,7 +7,7 @@ use git2::{
     Signature,
 };
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::errors::GitError;
 
@@ -202,42 +202,69 @@ impl GitClient {
     }
 
     /// Push a local branch to a remote.
-    #[instrument(skip(self, token))]
+    #[instrument(skip(self))]
     pub fn push(
         &self,
         remote_name: &str,
         branch: &str,
-        token: Option<&str>,
+        _token: Option<&str>,
     ) -> Result<(), GitError> {
-        info!(remote = remote_name, branch, "pushing");
-        let mut remote = self.repo.find_remote(remote_name)?;
-        let mut callbacks = RemoteCallbacks::new();
-        if let Some(tok) = token {
-            let tok = tok.to_string();
-            callbacks.credentials(move |_url, _username, _allowed| {
-                Cred::userpass_plaintext("x-access-token", &tok)
-            });
-        }
-        let push_error = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
-        let push_error_clone = push_error.clone();
-        callbacks.push_update_reference(move |refname, status| {
-            if let Some(msg) = status {
-                warn!(refname, msg, "push rejected");
-                *push_error_clone.lock().unwrap() = Some(msg.to_string());
-            }
-            Ok(())
-        });
-        let mut push_opts = PushOptions::new();
-        push_opts.remote_callbacks(callbacks);
-        let refspec = format!("refs/heads/{}:refs/heads/{}", branch, branch);
-        remote.push(&[&refspec], Some(&mut push_opts))?;
-        if let Some(err_msg) = push_error.lock().unwrap().take() {
+        let start = std::time::Instant::now();
+        info!(remote = remote_name, branch, "pushing via git CLI (LFS-compatible)");
+
+        // Use the git CLI instead of libgit2 so that Git LFS pre-push hooks
+        // run automatically.  The remote URL already has credentials embedded
+        // (set up by ensure_remote_credentials), so no extra auth is needed.
+        let repo_path = self.repo.workdir().unwrap_or_else(|| self.repo.path());
+
+        debug!(
+            repo_path = %repo_path.display(),
+            "spawning git push subprocess"
+        );
+
+        let output = std::process::Command::new("git")
+            .args(["push", remote_name, branch])
+            .current_dir(repo_path)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(|e| {
+                error!(error = %e, "failed to spawn git push process");
+                GitError::IoError(e)
+            })?;
+
+        let elapsed = start.elapsed();
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            error!(
+                remote = remote_name,
+                branch,
+                exit_code = ?output.status.code(),
+                elapsed_secs = elapsed.as_secs_f64(),
+                stderr = %stderr,
+                stdout = %stdout,
+                "git push failed"
+            );
             return Err(GitError::PushRejected {
                 branch: branch.to_string(),
-                detail: err_msg,
+                detail: format!(
+                    "git push failed (exit {:?}, {:.1}s): {}",
+                    output.status.code(),
+                    elapsed.as_secs_f64(),
+                    stderr.trim()
+                ),
             });
         }
-        info!("push completed");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.is_empty() {
+            debug!(stderr = %stderr, "git push stderr (informational)");
+        }
+        info!(
+            elapsed_secs = elapsed.as_secs_f64(),
+            "push completed successfully"
+        );
         Ok(())
     }
 
