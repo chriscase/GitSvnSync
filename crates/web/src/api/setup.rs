@@ -18,7 +18,7 @@ use gitsvnsync_core::db::Database;
 use gitsvnsync_core::file_policy::FilePolicy;
 use gitsvnsync_core::git::GitClient;
 use gitsvnsync_core::identity::IdentityMapper;
-use gitsvnsync_core::import::{self, ImportConfig, ImportProgress, ImportState};
+use gitsvnsync_core::import::{self, ImportConfig, ImportProgress, ImportPhase};
 use gitsvnsync_core::svn::SvnClient;
 
 use crate::api::status::AppError;
@@ -563,7 +563,7 @@ async fn start_import(
     // Check if already running
     {
         let p = state.import_progress.read().await;
-        if p.state == ImportState::Running {
+        if p.phase == ImportPhase::Importing {
             return Ok(Json(ImportActionResponse {
                 ok: false,
                 message: "An import is already running".into(),
@@ -584,7 +584,7 @@ async fn start_import(
     {
         let mut p = state.import_progress.write().await;
         *p = ImportProgress::default();
-        p.state = ImportState::Running;
+        p.phase = ImportPhase::Importing;
         p.started_at = Some(chrono::Utc::now().to_rfc3339());
     }
 
@@ -711,8 +711,8 @@ async fn start_import(
         let mut p = progress.write().await;
         match result {
             Ok(count) => {
-                if p.state != ImportState::Cancelled {
-                    p.state = ImportState::Completed;
+                if p.phase != ImportPhase::Cancelled {
+                    p.phase = ImportPhase::Completed;
                 }
                 p.completed_at = Some(chrono::Utc::now().to_rfc3339());
                 p.push_log(format!(
@@ -722,7 +722,7 @@ async fn start_import(
                 info!(count, "import completed successfully");
             }
             Err(e) => {
-                p.state = ImportState::Failed;
+                p.phase = ImportPhase::Failed;
                 p.completed_at = Some(chrono::Utc::now().to_rfc3339());
                 let msg = format!("[error] Import failed: {}", e);
                 p.push_log(msg.clone());
@@ -735,7 +735,7 @@ async fn start_import(
         if let Some(ref sender) = ws_broadcast {
             let json = serde_json::json!({
                 "type": "import_progress",
-                "state": format!("{:?}", p.state).to_lowercase(),
+                "phase": format!("{:?}", p.phase).to_lowercase(),
                 "current_rev": p.current_rev,
                 "total_revs": p.total_revs,
                 "commits_created": p.commits_created,
@@ -761,7 +761,7 @@ async fn cancel_import(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ImportActionResponse>, AppError> {
     let mut p = state.import_progress.write().await;
-    if p.state == ImportState::Running {
+    if p.phase == ImportPhase::Importing {
         p.cancel_requested = true;
         Ok(Json(ImportActionResponse {
             ok: true,

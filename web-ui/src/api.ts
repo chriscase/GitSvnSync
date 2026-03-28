@@ -203,14 +203,25 @@ export const api = {
   },
 };
 
+export interface VerificationResult {
+  ok: boolean;
+  mismatched_files: string[];
+  missing_files: string[];
+  extra_files: string[];
+  message: string;
+}
+
 export interface ImportStatus {
-  state: 'idle' | 'running' | 'completed' | 'failed' | 'cancelled';
+  phase: 'idle' | 'connecting' | 'importing' | 'verifying' | 'final_push' | 'completed' | 'failed' | 'cancelled';
   current_rev: number;
   total_revs: number;
   commits_created: number;
-  files_imported: number;
-  lfs_files_tracked: number;
+  current_file_count: number;
+  lfs_unique_count: number;
   files_skipped: number;
+  batches_pushed: number;
+  push_started_at: string | null;
+  verification: VerificationResult | null;
   errors: string[];
   log_lines: string[];
   started_at: string | null;

@@ -7,7 +7,7 @@
 //! Also re-exports [`copy_tree_with_policy`] so both personal-mode and
 //! team-mode code can share the file-copy logic.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -29,62 +29,110 @@ use crate::svn::SvnClient;
 /// Maximum number of log lines kept in the ring buffer.
 const MAX_LOG_LINES: usize = 1000;
 
-/// Current state of an import operation.
+/// Current phase of an import operation.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ImportState {
+pub enum ImportPhase {
+    /// Not started.
     Idle,
-    Running,
+    /// Connecting to SVN, fetching info and log.
+    Connecting,
+    /// Processing revisions (with incremental pushes every PUSH_BATCH_SIZE).
+    Importing,
+    /// Comparing SVN HEAD tree with Git working tree.
+    Verifying,
+    /// Pushing any remaining commits after verification.
+    FinalPush,
+    /// Import finished successfully.
     Completed,
+    /// Import failed.
     Failed,
+    /// Import was cancelled by user.
     Cancelled,
+}
+
+/// Results of the SVN/Git tree verification step.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct VerificationResult {
+    pub files_checked: u64,
+    pub files_matched: u64,
+    pub mismatches: Vec<String>,
+    pub svn_only: Vec<String>,
+    pub git_only: Vec<String>,
+    pub sample_hashed: u64,
+    pub verified: bool,
 }
 
 /// Progress information for a running (or completed) import.
 #[derive(Debug, Clone, Serialize)]
 pub struct ImportProgress {
-    pub state: ImportState,
+    pub phase: ImportPhase,
     pub current_rev: i64,
     pub total_revs: i64,
     pub commits_created: u64,
-    pub files_imported: u64,
-    pub lfs_files_tracked: u64,
+    /// Number of files in the most recent revision (not cumulative).
+    pub current_file_count: u64,
+    /// Number of unique LFS files (deduped by path+size).
+    pub lfs_unique_count: u64,
     pub files_skipped: u64,
+    pub batches_pushed: u64,
     pub errors: Vec<String>,
     pub log_lines: VecDeque<String>,
     pub started_at: Option<String>,
+    pub push_started_at: Option<String>,
     pub completed_at: Option<String>,
+    pub verification: Option<VerificationResult>,
     /// Set to true to request cancellation.
     #[serde(skip)]
     pub cancel_requested: bool,
+    /// Tracks unique LFS files (path:size) — not serialized.
+    #[serde(skip)]
+    pub lfs_seen: HashSet<String>,
 }
 
 impl Default for ImportProgress {
     fn default() -> Self {
         Self {
-            state: ImportState::Idle,
+            phase: ImportPhase::Idle,
             current_rev: 0,
             total_revs: 0,
             commits_created: 0,
-            files_imported: 0,
-            lfs_files_tracked: 0,
+            current_file_count: 0,
+            lfs_unique_count: 0,
             files_skipped: 0,
+            batches_pushed: 0,
             errors: Vec::new(),
             log_lines: VecDeque::new(),
             started_at: None,
+            push_started_at: None,
             completed_at: None,
+            verification: None,
             cancel_requested: false,
+            lfs_seen: HashSet::new(),
         }
     }
 }
 
 impl ImportProgress {
-    /// Push a log line, keeping the ring buffer bounded.
+    /// Push a timestamped log line, keeping the ring buffer bounded.
     pub fn push_log(&mut self, line: String) {
+        let timestamp = chrono::Local::now().format("%H:%M:%S");
+        let timestamped = format!("[{}] {}", timestamp, line);
         if self.log_lines.len() >= MAX_LOG_LINES {
             self.log_lines.pop_front();
         }
-        self.log_lines.push_back(line);
+        self.log_lines.push_back(timestamped);
+    }
+
+    /// Record an LFS file, returning true if it's a new unique file.
+    pub fn track_lfs_file(&mut self, path: &str, size: u64) -> bool {
+        let key = format!("{}:{}", path, size);
+        if self.lfs_seen.insert(key) {
+            self.lfs_unique_count += 1;
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -342,7 +390,7 @@ pub async fn run_full_import(
             if let Some(ref sender) = ws {
                 let json = serde_json::json!({
                     "type": "import_progress",
-                    "state": format!("{:?}", p.state).to_lowercase(),
+                    "phase": format!("{:?}", p.phase).to_lowercase(),
                     "current_rev": p.current_rev,
                     "total_revs": p.total_revs,
                     "commits_created": p.commits_created,
@@ -443,7 +491,7 @@ pub async fn run_full_import(
             let p = progress.read().await;
             if p.cancel_requested {
                 let mut p = progress.write().await;
-                p.state = ImportState::Cancelled;
+                p.phase = ImportPhase::Cancelled;
                 p.completed_at = Some(chrono::Utc::now().to_rfc3339());
                 log(
                     &progress,
@@ -500,12 +548,12 @@ pub async fn run_full_import(
             }
         };
 
-        // Update file stats
+        // Update file stats — use current file count (not cumulative)
         {
             let mut p = progress.write().await;
-            p.files_imported += copy_stats.copied as u64;
-            p.lfs_files_tracked += copy_stats.lfs_tracked as u64;
+            p.current_file_count = copy_stats.copied as u64;
             p.files_skipped += copy_stats.skipped as u64;
+            // LFS dedup is handled in copy_tree_with_policy via track_lfs_file
         }
 
         // Resolve Git identity for this author
@@ -628,13 +676,13 @@ pub async fn run_full_import(
             let p = progress.read().await;
             let json = serde_json::json!({
                 "type": "import_progress",
-                "state": "running",
+                "phase": "importing",
                 "current_rev": p.current_rev,
                 "total_revs": p.total_revs,
                 "commits_created": p.commits_created,
-                "files_imported": p.files_imported,
-                "lfs_files_tracked": p.lfs_files_tracked,
-                "files_skipped": p.files_skipped,
+                "current_file_count": p.current_file_count,
+                "lfs_unique_count": p.lfs_unique_count,
+                "batches_pushed": p.batches_pushed,
                 "percentage": if p.total_revs > 0 { (p.current_rev as f64 / p.total_revs as f64 * 100.0) as u32 } else { 0 },
             });
             let _ = sender.send(json.to_string());
