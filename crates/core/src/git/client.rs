@@ -223,6 +223,14 @@ impl GitClient {
         self.push_impl(remote_name, branch, true)
     }
 
+    /// Get the repo working directory path (for use with async push).
+    pub fn repo_workdir(&self) -> std::path::PathBuf {
+        self.repo
+            .workdir()
+            .unwrap_or_else(|| self.repo.path())
+            .to_path_buf()
+    }
+
     fn push_impl(
         &self,
         remote_name: &str,
@@ -232,9 +240,6 @@ impl GitClient {
         let start = std::time::Instant::now();
         info!(remote = remote_name, branch, force, "pushing via git CLI (LFS-compatible)");
 
-        // Use the git CLI instead of libgit2 so that Git LFS pre-push hooks
-        // run automatically.  The remote URL already has credentials embedded
-        // (set up by ensure_remote_credentials), so no extra auth is needed.
         let repo_path = self.repo.workdir().unwrap_or_else(|| self.repo.path());
 
         debug!(
@@ -243,7 +248,7 @@ impl GitClient {
             "spawning git push subprocess"
         );
 
-        let mut args = vec!["push"];
+        let mut args = vec!["push", "--progress"];
         if force {
             args.push("--force");
         }

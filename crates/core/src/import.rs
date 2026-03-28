@@ -14,7 +14,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use serde::Serialize;
 use tokio::sync::{broadcast, RwLock};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::db::Database;
 use crate::file_policy::{FilePolicy, FilePolicyDecision};
@@ -641,22 +641,20 @@ pub async fn run_full_import(
                     )
                     .await;
 
+                    // Use async push to avoid blocking the tokio runtime
                     let push_guard = git_client.lock().await;
-                    let push_result = if is_first_push {
-                        // First push uses --force to handle divergent histories
-                        // (e.g., GHE repo had an initial commit or existing content)
-                        push_guard.push_force(
-                            &import_config.remote_name,
-                            &import_config.branch,
-                            import_config.push_token.as_deref(),
-                        )
-                    } else {
-                        push_guard.push(
-                            &import_config.remote_name,
-                            &import_config.branch,
-                            import_config.push_token.as_deref(),
-                        )
-                    };
+                    let repo_path = push_guard.repo_workdir();
+                    drop(push_guard);
+
+                    let push_result = async_git_push(
+                        &repo_path,
+                        &import_config.remote_name,
+                        &import_config.branch,
+                        is_first_push,
+                        &progress,
+                        &ws_broadcast,
+                    ).await;
+
                     match push_result {
                         Ok(()) => {
                             log(
@@ -671,7 +669,6 @@ pub async fn run_full_import(
                             log(&progress, &ws_broadcast, msg).await;
                         }
                     }
-                    drop(push_guard);
                     commits_since_push = 0;
                 }
             }
@@ -722,11 +719,22 @@ pub async fn run_full_import(
             .await;
 
             let git_guard = git_client.lock().await;
-            match git_guard.push(
+            let repo_path = git_guard.repo_workdir();
+            drop(git_guard);
+
+            let is_first_push = {
+                let p = progress.read().await;
+                p.batches_pushed == 0
+            };
+
+            match async_git_push(
+                &repo_path,
                 &import_config.remote_name,
                 &import_config.branch,
-                import_config.push_token.as_deref(),
-            ) {
+                is_first_push,
+                &progress,
+                &ws_broadcast,
+            ).await {
                 Ok(()) => {
                     log(
                         &progress,
@@ -735,11 +743,9 @@ pub async fn run_full_import(
                     )
                     .await;
                     push_success = true;
-                    drop(git_guard);
                     break;
                 }
                 Err(e) => {
-                    drop(git_guard);
                     let msg = format!("[warn] Push attempt {}/{} failed: {}", attempt, max_retries, e);
                     log(&progress, &ws_broadcast, msg.clone()).await;
 
@@ -802,4 +808,141 @@ pub async fn run_full_import(
         "full import completed"
     );
     Ok(count)
+}
+
+/// Helper to push a log line and broadcast it via WebSocket.
+async fn push_log_line(
+    progress: &Arc<RwLock<ImportProgress>>,
+    ws: &Option<broadcast::Sender<String>>,
+    line: String,
+) {
+    let mut p = progress.write().await;
+    p.push_log(line.clone());
+    if let Some(ref sender) = ws {
+        let json = serde_json::json!({
+            "type": "import_progress",
+            "phase": format!("{:?}", p.phase).to_lowercase(),
+            "current_rev": p.current_rev,
+            "total_revs": p.total_revs,
+            "commits_created": p.commits_created,
+            "message": line,
+        });
+        let _ = sender.send(json.to_string());
+    }
+}
+
+/// Async git push that doesn't block the tokio runtime.
+/// Streams stderr output into the import progress log so users see real-time
+/// push progress (object counting, compression, upload, LFS transfers).
+async fn async_git_push(
+    repo_path: &std::path::Path,
+    remote: &str,
+    branch: &str,
+    force: bool,
+    progress: &Arc<RwLock<ImportProgress>>,
+    ws_broadcast: &Option<tokio::sync::broadcast::Sender<String>>,
+) -> Result<()> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::process::Command;
+
+    let start = std::time::Instant::now();
+
+    let mut args = vec!["push", "--progress"];
+    if force {
+        args.push("--force");
+    }
+    args.push(remote);
+    args.push(branch);
+
+    info!(
+        remote,
+        branch,
+        force,
+        repo_path = %repo_path.display(),
+        "async git push starting"
+    );
+
+    let mut child = Command::new("git")
+        .args(&args)
+        .current_dir(repo_path)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("failed to spawn git push")?;
+
+    // Stream stderr (where git push progress goes) into the import log
+    let stderr = child.stderr.take();
+    if let Some(stderr) = stderr {
+        let mut reader = BufReader::new(stderr);
+        let mut line = String::new();
+        let mut last_heartbeat = std::time::Instant::now();
+
+        loop {
+            line.clear();
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                reader.read_line(&mut line),
+            )
+            .await
+            {
+                Ok(Ok(0)) => break, // EOF
+                Ok(Ok(_)) => {
+                    let trimmed = line.trim().to_string();
+                    if !trimmed.is_empty() {
+                        push_log_line(progress, ws_broadcast, format!("[push] {}", trimmed)).await;
+                    }
+                    last_heartbeat = std::time::Instant::now();
+                }
+                Ok(Err(e)) => {
+                    warn!(error = %e, "error reading git push stderr");
+                    break;
+                }
+                Err(_) => {
+                    // Timeout — push is still running but no output for 30s
+                    let elapsed = start.elapsed().as_secs();
+                    push_log_line(
+                        progress,
+                        ws_broadcast,
+                        format!(
+                            "[push] still uploading... ({}m {}s elapsed)",
+                            elapsed / 60,
+                            elapsed % 60
+                        ),
+                    )
+                    .await;
+                    let _ = last_heartbeat;
+                }
+            }
+        }
+    }
+
+    let status = child
+        .wait()
+        .await
+        .context("failed to wait for git push")?;
+
+    let elapsed = start.elapsed();
+
+    if !status.success() {
+        let msg = format!(
+            "git push failed (exit {:?}, {:.1}s)",
+            status.code(),
+            elapsed.as_secs_f64(),
+        );
+        error!(msg = %msg, "push failed");
+        anyhow::bail!(msg);
+    }
+
+    // Update batches pushed counter
+    {
+        let mut p = progress.write().await;
+        p.batches_pushed += 1;
+    }
+
+    info!(
+        elapsed_secs = elapsed.as_secs_f64(),
+        "async push completed successfully"
+    );
+    Ok(())
 }
