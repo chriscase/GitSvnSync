@@ -47,6 +47,12 @@ struct SystemMetrics {
     git_push_pid: Option<u32>,
     git_push_elapsed_secs: Option<u64>,
     data_dir_size_bytes: u64,
+    /// Network bytes sent since boot (from /proc/net/dev)
+    net_bytes_sent: u64,
+    /// Network bytes received since boot
+    net_bytes_recv: u64,
+    /// SVN process active (svn export/log/info running)
+    svn_active: bool,
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -129,6 +135,12 @@ async fn get_system_metrics(
     let git_repo_path = data_dir.join("git-repo");
     let data_dir_size_bytes = dir_size(&git_repo_path);
 
+    // Network I/O from /proc/net/dev
+    let (net_bytes_sent, net_bytes_recv) = read_net_bytes();
+
+    // SVN process detection
+    let svn_active = is_process_running("svn");
+
     Ok(Json(SystemMetrics {
         disk_free_bytes,
         disk_total_bytes,
@@ -143,6 +155,9 @@ async fn get_system_metrics(
         git_push_pid,
         git_push_elapsed_secs,
         data_dir_size_bytes,
+        net_bytes_sent,
+        net_bytes_recv,
+        svn_active,
     }))
 }
 
@@ -335,6 +350,67 @@ fn dir_size_inner(path: &Path) -> u64 {
         }
     }
     total
+}
+
+/// Read total network bytes sent/received from /proc/net/dev (Linux only).
+/// Returns (bytes_sent, bytes_recv) summed across all non-loopback interfaces.
+#[cfg(target_os = "linux")]
+fn read_net_bytes() -> (u64, u64) {
+    let content = match std::fs::read_to_string("/proc/net/dev") {
+        Ok(c) => c,
+        Err(_) => return (0, 0),
+    };
+    let mut total_sent = 0u64;
+    let mut total_recv = 0u64;
+    for line in content.lines().skip(2) {
+        let line = line.trim();
+        if line.starts_with("lo:") {
+            continue; // skip loopback
+        }
+        if let Some(data) = line.split(':').nth(1) {
+            let fields: Vec<&str> = data.split_whitespace().collect();
+            if fields.len() >= 10 {
+                if let Ok(recv) = fields[0].parse::<u64>() {
+                    total_recv += recv;
+                }
+                if let Ok(sent) = fields[8].parse::<u64>() {
+                    total_sent += sent;
+                }
+            }
+        }
+    }
+    (total_sent, total_recv)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_net_bytes() -> (u64, u64) {
+    (0, 0)
+}
+
+/// Check if any process with the given name is running (Linux only).
+#[cfg(target_os = "linux")]
+fn is_process_running(name: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let fname = entry.file_name();
+        let fname_str = fname.to_string_lossy();
+        if fname_str.chars().all(|c| c.is_ascii_digit()) {
+            let cmdline_path = entry.path().join("cmdline");
+            if let Ok(cmdline) = std::fs::read_to_string(&cmdline_path) {
+                if cmdline.contains(name) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+#[cfg(not(target_os = "linux"))]
+fn is_process_running(_name: &str) -> bool {
+    false
 }
 
 // ---------------------------------------------------------------------------

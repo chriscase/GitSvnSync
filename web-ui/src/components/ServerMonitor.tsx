@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, HardDrive, Wifi, Cpu, MemoryStick } from 'lucide-react';
 import { api, type SystemMetrics } from '../api';
@@ -78,10 +78,29 @@ function MetricCard({
 
 export default function ServerMonitor() {
   const [open, setOpen] = useState(true);
+  const prevNet = useRef<{ sent: number; recv: number; ts: number } | null>(null);
+  const [netRate, setNetRate] = useState<{ up: number; down: number }>({ up: 0, down: 0 });
 
   const { data: metrics } = useQuery<SystemMetrics>({
     queryKey: ['system-metrics'],
-    queryFn: api.getSystemMetrics,
+    queryFn: async () => {
+      const m = await api.getSystemMetrics();
+      // Calculate network throughput from cumulative byte counters
+      const now = Date.now();
+      if (prevNet.current && m.net_bytes_sent > 0) {
+        const dtSec = (now - prevNet.current.ts) / 1000;
+        if (dtSec > 0.5) {
+          const upBytes = m.net_bytes_sent - prevNet.current.sent;
+          const downBytes = m.net_bytes_recv - prevNet.current.recv;
+          setNetRate({
+            up: Math.max(0, upBytes / dtSec),
+            down: Math.max(0, downBytes / dtSec),
+          });
+        }
+      }
+      prevNet.current = { sent: m.net_bytes_sent, recv: m.net_bytes_recv, ts: now };
+      return m;
+    },
     refetchInterval: 3000,
     refetchIntervalInBackground: false,
   });
@@ -128,6 +147,15 @@ export default function ServerMonitor() {
               <span>Push Active</span>
             </span>
           )}
+          {!metrics.git_push_active && metrics.svn_active && (
+            <span className="flex items-center space-x-1.5 text-xs text-blue-400 font-normal">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+              </span>
+              <span>SVN Active</span>
+            </span>
+          )}
         </div>
         {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
       </button>
@@ -145,7 +173,7 @@ export default function ServerMonitor() {
               barColorClass={diskBarColor(freePercent)}
             />
 
-            {/* Network / Git Push */}
+            {/* Network */}
             <MetricCard
               icon={<Wifi className="w-4 h-4 text-gray-500" />}
               label="Network"
@@ -157,7 +185,7 @@ export default function ServerMonitor() {
                       <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
                     </span>
                     <span className="text-emerald-300">
-                      Pushing...{' '}
+                      Push{' '}
                       {metrics.git_push_elapsed_secs != null && (
                         <span className="text-emerald-400/80">
                           ({formatElapsedSecs(metrics.git_push_elapsed_secs)})
@@ -165,17 +193,31 @@ export default function ServerMonitor() {
                       )}
                     </span>
                   </span>
+                ) : metrics.svn_active ? (
+                  <span className="flex items-center space-x-2">
+                    <span className="relative flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500" />
+                    </span>
+                    <span className="text-blue-300">SVN Export</span>
+                  </span>
+                ) : (netRate.up > 1024 || netRate.down > 1024) ? (
+                  <span className="text-cyan-300">Active</span>
                 ) : (
                   <span className="text-gray-400">Idle</span>
                 )
               }
               subValue={
-                metrics.git_push_active && metrics.git_push_pid
-                  ? `PID ${metrics.git_push_pid}`
-                  : 'Git Push Monitor'
+                <span>
+                  ↑ {formatBytes(netRate.up)}/s &nbsp; ↓ {formatBytes(netRate.down)}/s
+                </span>
               }
-              barPercent={metrics.git_push_active ? 100 : 0}
-              barColorClass={metrics.git_push_active ? 'bg-emerald-500' : 'bg-gray-600'}
+              barPercent={Math.min(100, (netRate.up + netRate.down) / (10 * 1024 * 1024) * 100)}
+              barColorClass={
+                metrics.git_push_active ? 'bg-emerald-500' :
+                metrics.svn_active ? 'bg-blue-500' :
+                (netRate.up + netRate.down) > 1024 ? 'bg-cyan-500' : 'bg-gray-600'
+              }
             />
 
             {/* CPU */}

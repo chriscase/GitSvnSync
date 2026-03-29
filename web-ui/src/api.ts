@@ -223,6 +223,9 @@ export interface SystemMetrics {
   git_push_pid: number | null;
   git_push_elapsed_secs: number | null;
   data_dir_size_bytes: number;
+  net_bytes_sent: number;
+  net_bytes_recv: number;
+  svn_active: boolean;
 }
 
 export interface VerificationResult {
