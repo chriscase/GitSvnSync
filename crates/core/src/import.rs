@@ -627,6 +627,11 @@ pub async fn run_full_import(
                     p.commits_created = count;
                 }
 
+                // IMPORTANT: Drop the git client lock BEFORE attempting push
+                // to avoid deadlock (tokio::sync::Mutex is not reentrant)
+                let repo_path = git_client_guard.repo_workdir();
+                drop(git_client_guard);
+
                 // Incremental push every PUSH_BATCH_SIZE commits
                 if commits_since_push >= PUSH_BATCH_SIZE {
                     let is_first_push = {
@@ -642,10 +647,6 @@ pub async fn run_full_import(
                     .await;
 
                     // Use spawn_blocking to avoid blocking the tokio runtime
-                    let push_guard = git_client.lock().await;
-                    let repo_path = push_guard.repo_workdir();
-                    drop(push_guard);
-
                     let remote = import_config.remote_name.clone();
                     let branch = import_config.branch.clone();
                     let force = is_first_push;
@@ -747,6 +748,7 @@ pub async fn run_full_import(
             }
             Err(e) => {
                 // Empty commits (property-only revisions) are expected
+                drop(git_client_guard);
                 let msg = format!(
                     "[skip] r{}: no changes to commit ({})",
                     rev,
@@ -755,7 +757,6 @@ pub async fn run_full_import(
                 log(&progress, &ws_broadcast, msg).await;
             }
         }
-        drop(git_client_guard);
 
         // Broadcast progress JSON update
         if let Some(ref sender) = ws_broadcast {
