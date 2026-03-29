@@ -128,13 +128,133 @@ impl LdapConfig {
             let entry = SearchEntry::construct(entries.into_iter().next().unwrap());
             entry.dn
         } else {
-            // No service account — construct DN directly.
-            format!("cn={},{}", username, self.base_dn)
+            // No service account — try common AD bind formats.
+            // AD supports UPN (user@domain), DOMAIN\user, and DN-based bind.
+            // Extract domain from base_dn: dc=mgc,dc=mentorg,dc=com → mgc.mentorg.com
+            let domain = self.base_dn
+                .split(',')
+                .filter_map(|part| part.trim().strip_prefix("dc=").or_else(|| part.trim().strip_prefix("DC=")))
+                .collect::<Vec<_>>()
+                .join(".");
+
+            // Try UPN format first (most common for AD): user@domain
+            let upn = format!("{}@{}", username, domain);
+            debug!("LDAP: trying UPN bind: {}", upn);
+
+            let bind_result = ldap
+                .simple_bind(&upn, password)
+                .await
+                .map_err(|e| LdapAuthError::BindFailed(e.to_string()))?;
+
+            if bind_result.rc == 0 {
+                // UPN bind succeeded — now search for user attributes
+                let (entries, _) = ldap
+                    .search(&self.base_dn, Scope::Subtree, &search_filter, vec![
+                        &self.display_name_attr,
+                        &self.email_attr,
+                        &self.group_attr,
+                    ])
+                    .await
+                    .map_err(|e| LdapAuthError::SearchFailed(e.to_string()))?
+                    .success()
+                    .map_err(|e| LdapAuthError::SearchFailed(e.to_string()))?;
+
+                if entries.is_empty() {
+                    // Auth succeeded but user not found in search — return basic info
+                    return Ok(LdapUser {
+                        username: username.to_string(),
+                        display_name: username.to_string(),
+                        email: format!("{}@{}", username, domain),
+                        groups: vec![],
+                    });
+                }
+
+                let entry = SearchEntry::construct(entries.into_iter().next().unwrap());
+                let display_name = entry.attrs.get(&self.display_name_attr)
+                    .and_then(|v| v.first())
+                    .cloned()
+                    .unwrap_or_else(|| username.to_string());
+                let email = entry.attrs.get(&self.email_attr)
+                    .and_then(|v| v.first())
+                    .cloned()
+                    .unwrap_or_else(|| format!("{}@{}", username, domain));
+                let groups = entry.attrs.get(&self.group_attr)
+                    .cloned()
+                    .unwrap_or_default();
+
+                let _ = ldap.unbind().await;
+                return Ok(LdapUser {
+                    username: username.to_string(),
+                    display_name,
+                    email,
+                    groups,
+                });
+            }
+
+            // UPN failed — try DOMAIN\user format
+            let netbios = domain.split('.').next().unwrap_or("DOMAIN").to_uppercase();
+            let domain_user = format!("{}\\{}", netbios, username);
+            debug!("LDAP: UPN failed (rc={}), trying DOMAIN\\user: {}", bind_result.rc, domain_user);
+
+            // Need a fresh connection for the retry
+            drop(ldap);
+            let tls_connector2 = TlsConnector::builder()
+                .danger_accept_invalid_certs(true)
+                .danger_accept_invalid_hostnames(true)
+                .build()
+                .map_err(|e| LdapAuthError::ConnectionFailed(format!("TLS: {}", e)))?;
+            let settings2 = LdapConnSettings::new().set_connector(tls_connector2);
+            let (conn2, mut ldap2) = LdapConnAsync::with_settings(settings2, &self.url)
+                .await
+                .map_err(|e| LdapAuthError::ConnectionFailed(e.to_string()))?;
+            ldap3::drive!(conn2);
+
+            let bind_result2 = ldap2
+                .simple_bind(&domain_user, password)
+                .await
+                .map_err(|e| LdapAuthError::BindFailed(e.to_string()))?;
+
+            if bind_result2.rc != 0 {
+                return Err(LdapAuthError::InvalidCredentials);
+            }
+
+            // DOMAIN\user bind succeeded — search for attributes
+            let search_filter2 = self.search_filter.replace("{0}", username);
+            let (entries, _) = ldap2
+                .search(&self.base_dn, Scope::Subtree, &search_filter2, vec![
+                    &self.display_name_attr,
+                    &self.email_attr,
+                    &self.group_attr,
+                ])
+                .await
+                .map_err(|e| LdapAuthError::SearchFailed(e.to_string()))?
+                .success()
+                .map_err(|e| LdapAuthError::SearchFailed(e.to_string()))?;
+
+            let (display_name, email, groups) = if !entries.is_empty() {
+                let entry = SearchEntry::construct(entries.into_iter().next().unwrap());
+                let dn = entry.attrs.get(&self.display_name_attr)
+                    .and_then(|v| v.first()).cloned().unwrap_or_else(|| username.to_string());
+                let em = entry.attrs.get(&self.email_attr)
+                    .and_then(|v| v.first()).cloned().unwrap_or_else(|| format!("{}@{}", username, domain));
+                let gr = entry.attrs.get(&self.group_attr).cloned().unwrap_or_default();
+                (dn, em, gr)
+            } else {
+                (username.to_string(), format!("{}@{}", username, domain), vec![])
+            };
+
+            let _ = ldap2.unbind().await;
+            return Ok(LdapUser {
+                username: username.to_string(),
+                display_name,
+                email,
+                groups,
+            });
         };
 
         debug!("LDAP: attempting bind for user DN '{}'", user_dn);
 
-        // Step 2: Bind as the user to verify credentials.
+        // Step 2: Bind as the user to verify credentials (service account path).
         let bind_result = ldap
             .simple_bind(&user_dn, password)
             .await
