@@ -1,11 +1,14 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type AuditEntry, type SyncRecord, type CommitMapEntry } from '../api';
+import ImportProgressCard from '../components/ImportProgressCard';
+import ServerMonitor from '../components/ServerMonitor';
 
 export default function Dashboard() {
   const { data: status, isLoading: statusLoading, isError, error } = useQuery({
     queryKey: ['status'],
     queryFn: api.getStatus,
+    refetchInterval: 5000,
   });
 
   const { data: recentActivity } = useQuery({
@@ -44,6 +47,16 @@ export default function Dashboard() {
     return `${mins}m`;
   };
 
+  const formatTimeAgo = (isoDate: string): string => {
+    const diff = Math.max(0, Math.floor((Date.now() - new Date(isoDate).getTime()) / 1000));
+    if (diff < 60) return `${diff}s ago`;
+    const mins = Math.floor(diff / 60);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ${mins % 60}m ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  };
+
   const entries = recentActivity?.entries ?? [];
   const records = syncRecords?.entries ?? [];
   const cmEntries = commitMap?.entries ?? [];
@@ -52,8 +65,11 @@ export default function Dashboard() {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-gray-100">Dashboard</h1>
 
+      {/* Import Progress Card */}
+      <ImportProgressCard />
+
       {/* Status Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <StatusCard
           title="Sync State"
           value={status?.state ?? 'unknown'}
@@ -83,6 +99,11 @@ export default function Dashboard() {
         <StatusCard
           title="Uptime"
           value={status ? formatUptime(status.uptime_secs) : '-'}
+          color="gray"
+        />
+        <StatusCard
+          title="Last Sync"
+          value={status?.last_sync_at ? formatTimeAgo(status.last_sync_at) : 'Never'}
           color="gray"
         />
       </div>
@@ -240,6 +261,9 @@ export default function Dashboard() {
           <p className="text-gray-400 text-sm">No activity yet</p>
         )}
       </div>
+
+      {/* Server Monitor */}
+      <ServerMonitor />
     </div>
   );
 }

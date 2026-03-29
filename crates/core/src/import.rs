@@ -460,6 +460,14 @@ pub async fn run_full_import(
     )
     .await;
 
+    // Persist initial importing state
+    {
+        let p = progress.read().await;
+        if let Err(e) = db.persist_import_progress(&p) {
+            warn!("failed to persist import progress: {}", e);
+        }
+    }
+
     let svn_info = svn_client
         .info()
         .await
@@ -775,6 +783,13 @@ pub async fn run_full_import(
                                 let mut p = progress.write().await;
                                 p.batches_pushed += 1;
                             }
+                            // Persist progress after batch push
+                            {
+                                let p = progress.read().await;
+                                if let Err(e) = db.persist_import_progress(&p) {
+                                    warn!("failed to persist import progress after batch push: {}", e);
+                                }
+                            }
                             log(
                                 &progress,
                                 &ws_broadcast,
@@ -821,6 +836,14 @@ pub async fn run_full_import(
                 "percentage": if p.total_revs > 0 { (p.current_rev as f64 / p.total_revs as f64 * 100.0) as u32 } else { 0 },
             });
             let _ = sender.send(json.to_string());
+        }
+
+        // Persist progress to DB every 10 revisions
+        if (idx + 1) % 10 == 0 {
+            let p = progress.read().await;
+            if let Err(e) = db.persist_import_progress(&p) {
+                warn!("failed to persist import progress at rev {}: {}", idx + 1, e);
+            }
         }
     }
 
@@ -908,6 +931,14 @@ pub async fn run_full_import(
             log(&progress, &ws_broadcast, msg.clone()).await;
             let mut p = progress.write().await;
             p.errors.push(msg);
+        }
+    }
+
+    // Persist progress before final watermarks
+    {
+        let p = progress.read().await;
+        if let Err(e) = db.persist_import_progress(&p) {
+            warn!("failed to persist import progress before watermarks: {}", e);
         }
     }
 

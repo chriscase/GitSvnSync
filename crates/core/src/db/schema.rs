@@ -129,6 +129,26 @@ static MIGRATIONS: &[(u32, &str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_audit_log_success ON audit_log (success);
         "#,
     ),
+    (
+        4,
+        "import progress persistence",
+        r#"
+        CREATE TABLE IF NOT EXISTS import_progress (
+            id               INTEGER PRIMARY KEY CHECK (id = 1),
+            phase            TEXT NOT NULL DEFAULT 'idle',
+            current_rev      INTEGER NOT NULL DEFAULT 0,
+            total_revs       INTEGER NOT NULL DEFAULT 0,
+            commits_created  INTEGER NOT NULL DEFAULT 0,
+            batches_pushed   INTEGER NOT NULL DEFAULT 0,
+            lfs_unique_count INTEGER NOT NULL DEFAULT 0,
+            files_skipped    INTEGER NOT NULL DEFAULT 0,
+            errors_json      TEXT NOT NULL DEFAULT '[]',
+            started_at       TEXT,
+            completed_at     TEXT,
+            updated_at       TEXT NOT NULL DEFAULT ''
+        );
+        "#,
+    ),
 ];
 
 /// Run all pending migrations against `conn`.
@@ -177,7 +197,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap();
-        assert_eq!(get_schema_version(&conn).unwrap(), 3);
+        assert_eq!(get_schema_version(&conn).unwrap(), 4);
     }
 
     #[test]
@@ -203,5 +223,6 @@ mod tests {
         assert!(tables.contains(&"sync_records".to_string()));
         assert!(tables.contains(&"kv_state".to_string()));
         assert!(tables.contains(&"pr_sync_log".to_string()));
+        assert!(tables.contains(&"import_progress".to_string()));
     }
 }

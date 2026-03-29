@@ -871,6 +871,11 @@ async fn start_import(
             }
         }
 
+        // Persist final state to DB
+        if let Err(e) = import_db.persist_import_progress(&p) {
+            tracing::warn!("failed to persist final import progress: {}", e);
+        }
+
         // Send final broadcast
         if let Some(ref sender) = ws_broadcast {
             let json = serde_json::json!({
@@ -894,6 +899,20 @@ async fn import_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ImportProgress>, AppError> {
     let p = state.import_progress.read().await;
+
+    // If in-memory progress shows Idle, check the DB for persisted state
+    // (e.g. after a daemon restart mid-import).
+    if p.phase == ImportPhase::Idle {
+        let db = state.db.lock().map_err(|e| {
+            AppError::Internal(format!("DB lock failed: {}", e))
+        })?;
+        if let Ok(Some(db_progress)) = db.load_import_progress() {
+            if db_progress.phase != ImportPhase::Idle {
+                return Ok(Json(db_progress));
+            }
+        }
+    }
+
     Ok(Json(p.clone()))
 }
 

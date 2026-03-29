@@ -1105,6 +1105,134 @@ impl Database {
         )?;
         Ok(count)
     }
+
+    // -- import_progress ----------------------------------------------------
+
+    /// Persist the current import progress to the singleton row in `import_progress`.
+    ///
+    /// Uses an upsert (INSERT OR REPLACE) so the row is created on the first
+    /// call and updated on subsequent calls.
+    pub fn persist_import_progress(
+        &self,
+        progress: &crate::import::ImportProgress,
+    ) -> Result<(), DatabaseError> {
+        let phase_str = match progress.phase {
+            crate::import::ImportPhase::Idle => "idle",
+            crate::import::ImportPhase::Connecting => "connecting",
+            crate::import::ImportPhase::Importing => "importing",
+            crate::import::ImportPhase::Verifying => "verifying",
+            crate::import::ImportPhase::FinalPush => "final_push",
+            crate::import::ImportPhase::Completed => "completed",
+            crate::import::ImportPhase::Failed => "failed",
+            crate::import::ImportPhase::Cancelled => "cancelled",
+        };
+        let errors_json = serde_json::to_string(&progress.errors).unwrap_or_else(|_| "[]".into());
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn();
+        conn.execute(
+            "INSERT OR REPLACE INTO import_progress
+             (id, phase, current_rev, total_revs, commits_created, batches_pushed,
+              lfs_unique_count, files_skipped, errors_json, started_at, completed_at, updated_at)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                phase_str,
+                progress.current_rev,
+                progress.total_revs,
+                progress.commits_created as i64,
+                progress.batches_pushed as i64,
+                progress.lfs_unique_count as i64,
+                progress.files_skipped as i64,
+                errors_json,
+                progress.started_at,
+                progress.completed_at,
+                now,
+            ],
+        )?;
+        debug!("persisted import_progress (phase={})", phase_str);
+        Ok(())
+    }
+
+    /// Load the persisted import progress from the singleton row, if it exists.
+    ///
+    /// Note: `log_lines` are NOT restored (too large); only structural progress
+    /// data is loaded.
+    pub fn load_import_progress(
+        &self,
+    ) -> Result<Option<crate::import::ImportProgress>, DatabaseError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT phase, current_rev, total_revs, commits_created, batches_pushed,
+                    lfs_unique_count, files_skipped, errors_json, started_at, completed_at
+             FROM import_progress WHERE id = 1",
+        )?;
+        let mut rows = stmt.query_map([], |row| {
+            let phase_str: String = row.get(0)?;
+            let current_rev: i64 = row.get(1)?;
+            let total_revs: i64 = row.get(2)?;
+            let commits_created: i64 = row.get(3)?;
+            let batches_pushed: i64 = row.get(4)?;
+            let lfs_unique_count: i64 = row.get(5)?;
+            let files_skipped: i64 = row.get(6)?;
+            let errors_json: String = row.get(7)?;
+            let started_at: Option<String> = row.get(8)?;
+            let completed_at: Option<String> = row.get(9)?;
+            Ok((
+                phase_str,
+                current_rev,
+                total_revs,
+                commits_created,
+                batches_pushed,
+                lfs_unique_count,
+                files_skipped,
+                errors_json,
+                started_at,
+                completed_at,
+            ))
+        })?;
+
+        match rows.next() {
+            Some(Ok((
+                phase_str,
+                current_rev,
+                total_revs,
+                commits_created,
+                batches_pushed,
+                lfs_unique_count,
+                files_skipped,
+                errors_json,
+                started_at,
+                completed_at,
+            ))) => {
+                let phase = match phase_str.as_str() {
+                    "idle" => crate::import::ImportPhase::Idle,
+                    "connecting" => crate::import::ImportPhase::Connecting,
+                    "importing" => crate::import::ImportPhase::Importing,
+                    "verifying" => crate::import::ImportPhase::Verifying,
+                    "final_push" => crate::import::ImportPhase::FinalPush,
+                    "completed" => crate::import::ImportPhase::Completed,
+                    "failed" => crate::import::ImportPhase::Failed,
+                    "cancelled" => crate::import::ImportPhase::Cancelled,
+                    _ => crate::import::ImportPhase::Idle,
+                };
+                let errors: Vec<String> =
+                    serde_json::from_str(&errors_json).unwrap_or_default();
+                let mut progress = crate::import::ImportProgress::default();
+                progress.phase = phase;
+                progress.current_rev = current_rev;
+                progress.total_revs = total_revs;
+                progress.commits_created = commits_created as u64;
+                progress.batches_pushed = batches_pushed as u64;
+                progress.lfs_unique_count = lfs_unique_count as u64;
+                progress.files_skipped = files_skipped as u64;
+                progress.errors = errors;
+                progress.started_at = started_at;
+                progress.completed_at = completed_at;
+                Ok(Some(progress))
+            }
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
 }
 
 /// Parse a datetime string, returning Utc::now() as a fallback if parsing fails.
