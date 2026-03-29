@@ -189,6 +189,20 @@ export default function SetupWizard() {
     [],
   );
 
+  // Auto-detect running import on page load — jump to Import step
+  useEffect(() => {
+    (async () => {
+      try {
+        const status: ImportStatus = await api.getImportStatus();
+        if (status.phase === 'importing' || status.phase === 'connecting' || status.phase === 'verifying' || status.phase === 'final_push') {
+          setStep(7); // Jump to Import step
+        }
+      } catch {
+        // No import running or API not available — stay on Welcome
+      }
+    })();
+  }, []);
+
   useEffect(() => {
     stepRef.current?.querySelector<HTMLInputElement>('input, select, textarea')?.focus();
   }, [step]);
