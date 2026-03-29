@@ -758,8 +758,11 @@ TOML
                 fi
                 CYCLE_OK=false
             else
-                # (b) Verify the replayed SVN commit carries Git/PR metadata.
-                # GitSvnSync formats commit messages with "Git-Commit:" and "PR:" trailers.
+                # (b) Verify the replayed SVN commit carries EXACT Git/PR metadata.
+                # GitSvnSync formats commit messages with "Git-Commit: <sha>" and
+                # "PR: #N (<branch>)" trailers. We require an exact match to the
+                # values recorded in S6 — a generic "some trailer exists" is not
+                # sufficient to prove this cycle's PR was actually replayed.
                 SVN_LOG_XML=$(svn log "$SVN_URL/$GIT_FILE" --xml -l 3 \
                     --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
                     --non-interactive --no-auth-cache 2>/dev/null || echo "")
@@ -768,29 +771,38 @@ TOML
                 S7_PROOF_DETAILS="content=OK"
                 S7_PASS=true
 
-                # Check for Git-Commit trailer in the SVN log message.
-                if echo "$SVN_LOG_XML" | grep -q "Git-Commit:"; then
-                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, Git-Commit=found"
+                # Load expected values from S6 artifacts.
+                EXPECTED_PR=$(cat "$CYCLE_DIR/s6-pr-number.txt" 2>/dev/null || echo "")
+                EXPECTED_SHA=$(cat "$CYCLE_DIR/s6-merge-sha.txt" 2>/dev/null || echo "")
+
+                # --- Git-Commit trailer: require exact SHA match ---
+                if [[ -z "$EXPECTED_SHA" ]]; then
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, Git-Commit=FAIL(no expected SHA from S6)"
+                    S7_PASS=false
+                elif echo "$SVN_LOG_XML" | grep -q "Git-Commit: ${EXPECTED_SHA}"; then
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, Git-Commit=${EXPECTED_SHA:0:8}=exact"
                 else
-                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, Git-Commit=MISSING"
+                    OBSERVED_SHA=$(echo "$SVN_LOG_XML" | sed -n 's/.*Git-Commit: \([0-9a-f]*\).*/\1/p' | head -1)
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, Git-Commit=MISMATCH(expected=${EXPECTED_SHA:0:8},observed=${OBSERVED_SHA:-MISSING})"
                     S7_PASS=false
                 fi
 
-                # Check for PR number reference in the SVN log message.
-                PR_NUM_FROM_S6=$(cat "$CYCLE_DIR/s6-pr-number.txt" 2>/dev/null || echo "")
-                if [[ -n "$PR_NUM_FROM_S6" ]] && echo "$SVN_LOG_XML" | grep -q "#${PR_NUM_FROM_S6}"; then
-                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, PR=#${PR_NUM_FROM_S6}=found"
-                elif echo "$SVN_LOG_XML" | grep -qE "PR: #[0-9]+"; then
-                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, PR=found(different number)"
+                # --- PR trailer: require exact "#N" match ---
+                if [[ -z "$EXPECTED_PR" ]]; then
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, PR=FAIL(no expected PR# from S6)"
+                    S7_PASS=false
+                elif echo "$SVN_LOG_XML" | grep -q "#${EXPECTED_PR}"; then
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, PR=#${EXPECTED_PR}=exact"
                 else
-                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, PR=MISSING"
+                    OBSERVED_PR=$(echo "$SVN_LOG_XML" | sed -n 's/.*PR: #\([0-9]*\).*/\1/p' | head -1)
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, PR=MISMATCH(expected=#${EXPECTED_PR},observed=#${OBSERVED_PR:-MISSING})"
                     S7_PASS=false
                 fi
 
                 if $S7_PASS; then
                     record_scenario "s7-git-to-svn-sync" "pass" "$S7_PROOF_DETAILS"
                 else
-                    record_scenario "s7-git-to-svn-sync" "fail" "content OK but metadata missing ($S7_PROOF_DETAILS)"
+                    record_scenario "s7-git-to-svn-sync" "fail" "content OK but provenance mismatch ($S7_PROOF_DETAILS)"
                     CYCLE_OK=false
                 fi
             fi
