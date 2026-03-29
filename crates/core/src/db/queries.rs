@@ -673,15 +673,15 @@ impl Database {
         )
     }
 
-    /// List recent audit-log entries.
-    pub fn list_audit_log(&self, limit: u32) -> Result<Vec<AuditLogEntry>, DatabaseError> {
+    /// List recent audit-log entries with optional offset for pagination.
+    pub fn list_audit_log(&self, limit: u32, offset: u32) -> Result<Vec<AuditLogEntry>, DatabaseError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id, action, direction, svn_rev, git_sha, author, details, created_at, success
-             FROM audit_log ORDER BY id DESC LIMIT ?1",
+             FROM audit_log ORDER BY id DESC LIMIT ?1 OFFSET ?2",
         )?;
         let entries = stmt
-            .query_map(params![limit], |row| {
+            .query_map(params![limit, offset], |row| {
                 let success_int: i32 = row.get(8)?;
                 Ok(AuditLogEntry {
                     id: row.get(0)?,
@@ -807,15 +807,33 @@ impl Database {
         Ok(entries)
     }
 
-    /// Count audit entries that represent failures (explicit `success = false`).
+    /// Count audit entries that represent failures in the last 24 hours.
     pub fn count_errors(&self) -> Result<i64, DatabaseError> {
         let conn = self.conn();
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM audit_log WHERE success = 0",
+            "SELECT COUNT(*) FROM audit_log WHERE success = 0 AND created_at > datetime('now', '-24 hours')",
             [],
             |row| row.get(0),
         )?;
         Ok(count)
+    }
+
+    /// Return the timestamp of the most recent error, if any.
+    pub fn last_error_at(&self) -> Result<Option<String>, DatabaseError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT MAX(created_at) FROM audit_log WHERE success = 0",
+        )?;
+        let result: Option<String> = stmt.query_row([], |row| row.get(0))?;
+        Ok(result)
+    }
+
+    /// Delete all error entries from the audit log.
+    /// Returns the number of rows deleted.
+    pub fn clear_errors(&self) -> Result<usize, DatabaseError> {
+        let conn = self.conn();
+        let deleted = conn.execute("DELETE FROM audit_log WHERE success = 0", [])?;
+        Ok(deleted)
     }
 
     // -- kv_state -----------------------------------------------------------
@@ -1324,7 +1342,7 @@ mod tests {
             true,
         )
         .unwrap();
-        let entries = db.list_audit_log(10).unwrap();
+        let entries = db.list_audit_log(10, 0).unwrap();
         assert_eq!(entries.len(), 1);
         assert!(entries[0].success);
         assert_eq!(db.count_audit_log().unwrap(), 1);
@@ -1464,7 +1482,7 @@ mod tests {
         assert_eq!(db.count_errors().unwrap(), 1);
 
         // list_audit_log should have correct success flags.
-        let entries = db.list_audit_log(10).unwrap();
+        let entries = db.list_audit_log(10, 0).unwrap();
         assert_eq!(entries.len(), 2);
         // Newest first.
         assert!(!entries[0].success); // sync_cycle failure
@@ -1510,7 +1528,7 @@ mod tests {
         db.insert_audit_entry(&success_entry).unwrap();
         db.insert_audit_entry(&failure_entry).unwrap();
 
-        let entries = db.list_audit_log(10).unwrap();
+        let entries = db.list_audit_log(10, 0).unwrap();
         assert_eq!(entries.len(), 2);
         // Newest first.
         assert!(!entries[0].success);
@@ -1576,7 +1594,7 @@ mod tests {
         assert_eq!(db.count_audit_log().unwrap(), 3);
 
         // The failed entry should be retrievable with correct details.
-        let all = db.list_audit_log(10).unwrap();
+        let all = db.list_audit_log(10, 0).unwrap();
         let failures: Vec<_> = all.iter().filter(|e| !e.success).collect();
         assert_eq!(failures.len(), 1);
         assert_eq!(

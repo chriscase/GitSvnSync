@@ -1,5 +1,6 @@
 .PHONY: build release test lint clean web-ui test-env-up test-env-down test-all install \
-       validate validate-quick validate-soak validate-ghe-live validate-ghe-live-dry-run
+        deploy deploy-dry-run deploy-no-ui \
+        validate validate-quick validate-soak validate-ghe-live validate-ghe-live-dry-run
 
 # Development
 build:
@@ -58,6 +59,16 @@ install: release
 	sudo install -m 755 target/release/gitsvnsync-daemon /usr/local/bin/
 	sudo install -m 755 target/release/gitsvnsync /usr/local/bin/
 	@echo "Installed gitsvnsync-daemon and gitsvnsync to /usr/local/bin/"
+
+# Deployment
+deploy:
+	@bash scripts/deploy.sh
+
+deploy-dry-run:
+	@bash scripts/deploy.sh --dry-run
+
+deploy-no-ui:
+	@bash scripts/deploy.sh --no-web-ui
 
 # Validation scripts
 validate:

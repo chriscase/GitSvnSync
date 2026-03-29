@@ -14,7 +14,7 @@ pub fn run_log(config: &PersonalConfig, limit: u32) -> Result<()> {
     let db = Database::new(&db_path).context("failed to open database")?;
 
     let entries = db
-        .list_audit_log(limit)
+        .list_audit_log(limit, 0)
         .context("failed to list audit entries")?;
 
     if entries.is_empty() {

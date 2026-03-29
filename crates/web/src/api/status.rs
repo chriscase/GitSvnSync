@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Serialize;
 
@@ -28,6 +28,7 @@ struct StatusResponse {
     total_conflicts: i64,
     active_conflicts: i64,
     total_errors: i64,
+    last_error_at: Option<String>,
     uptime_secs: u64,
 }
 
@@ -64,6 +65,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/status", get(get_status))
         .route("/api/status/health", get(health_check))
         .route("/api/status/system", get(get_system_metrics))
+        .route("/api/status/reset-errors", post(reset_errors))
 }
 
 async fn health_check() -> Json<HealthResponse> {
@@ -97,8 +99,44 @@ async fn get_status(
         total_conflicts: status.total_conflicts,
         active_conflicts: status.active_conflicts,
         total_errors: status.total_errors,
+        last_error_at: status.last_error_at,
         uptime_secs: status.uptime_secs,
     }))
+}
+
+async fn reset_errors(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::api::auth::validate_session(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
+
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+
+    let cleared = db
+        .clear_errors()
+        .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
+
+    let _ = db.insert_audit_log(
+        "errors_cleared",
+        None,
+        None,
+        None,
+        None,
+        Some(&format!("Cleared {} error entries", cleared)),
+        true,
+    );
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "cleared": cleared
+    })))
 }
 
 async fn get_system_metrics(

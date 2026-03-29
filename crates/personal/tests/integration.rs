@@ -1172,7 +1172,7 @@ fn test_database_watermark_and_commit_map() {
         true,
     )
     .unwrap();
-    let audit = db.list_audit_log(10).unwrap();
+    let audit = db.list_audit_log(10, 0).unwrap();
     assert_eq!(audit.len(), 1);
     assert_eq!(audit[0].action, "test_action");
     assert_eq!(audit[0].svn_rev, Some(100));
@@ -1265,7 +1265,7 @@ async fn test_full_svn_to_git_cycle_with_metadata() {
     assert!(commit_map[0].git_author.contains("Test User"));
 
     // Verify the audit log was written.
-    let audit = db_arc.list_audit_log(10).unwrap();
+    let audit = db_arc.list_audit_log(10, 0).unwrap();
     assert!(!audit.is_empty(), "audit log should have entries");
     assert_eq!(audit[0].action, "svn_to_git_sync");
 

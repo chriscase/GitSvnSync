@@ -251,6 +251,7 @@ impl SyncEngine {
             .count_active_conflicts()
             .map_err(SyncError::DatabaseError)?;
         let total_errors = self.db.count_errors().map_err(SyncError::DatabaseError)?;
+        let last_error_at = self.db.last_error_at().map_err(SyncError::DatabaseError)?;
 
         let uptime = (Utc::now() - self.started_at).num_seconds().max(0) as u64;
 
@@ -263,6 +264,7 @@ impl SyncEngine {
             total_conflicts,
             active_conflicts,
             total_errors,
+            last_error_at,
             uptime_secs: uptime,
         })
     }

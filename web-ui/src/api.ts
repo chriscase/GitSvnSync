@@ -9,6 +9,7 @@ export interface SyncStatus {
   total_conflicts: number;
   active_conflicts: number;
   total_errors: number;
+  last_error_at: string | null;
   uptime_secs: number;
 }
 
@@ -141,8 +142,25 @@ export const api = {
   deferConflict: (id: string) =>
     fetchJson<{ ok: boolean }>(`/conflicts/${id}/defer`, { method: 'POST' }),
 
-  getAuditLog: (limit = 50) =>
-    fetchJson<AuditListResponse>(`/audit?limit=${limit}`),
+  getAuditLog: (limit = 50, page?: number, success?: boolean) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (page !== undefined) params.append('page', String(page));
+    if (success !== undefined) params.append('success', String(success));
+    return fetchJson<AuditListResponse>(`/audit?${params.toString()}`);
+  },
+
+  resetErrors: async (): Promise<{ok: boolean, cleared: number}> => {
+    const token = localStorage.getItem('session_token');
+    const res = await fetch(`${API_BASE}/status/reset-errors`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+    if (!res.ok) throw new Error('Failed to reset errors');
+    return res.json();
+  },
 
   getIdentityMappings: () => fetchJson<AuthorMapping[]>('/config/identity'),
 

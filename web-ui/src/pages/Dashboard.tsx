@@ -1,10 +1,13 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { api, type AuditEntry, type SyncRecord, type CommitMapEntry } from '../api';
 import ImportProgressCard from '../components/ImportProgressCard';
 import ServerMonitor from '../components/ServerMonitor';
 
 export default function Dashboard() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { data: status, isLoading: statusLoading, isError, error } = useQuery({
     queryKey: ['status'],
     queryFn: api.getStatus,
@@ -85,16 +88,32 @@ export default function Dashboard() {
           title="Total Syncs"
           value={String(status?.total_syncs ?? 0)}
           color="blue"
+          onClick={() => navigate('/audit')}
         />
         <StatusCard
           title="Active Conflicts"
           value={String(status?.active_conflicts ?? 0)}
           color={status?.active_conflicts ? 'red' : 'green'}
+          onClick={() => navigate('/conflicts')}
         />
         <StatusCard
-          title="Total Errors"
+          title="Errors (24h)"
           value={String(status?.total_errors ?? 0)}
           color={status?.total_errors ? 'red' : 'gray'}
+          onClick={() => navigate('/audit?success=false')}
+          subtitle={
+            status?.last_error_at
+              ? `Last: ${formatTimeAgo(status.last_error_at)}`
+              : 'No recent errors'
+          }
+          onClear={
+            (status?.total_errors ?? 0) > 0
+              ? async () => {
+                  await api.resetErrors();
+                  queryClient.invalidateQueries({ queryKey: ['status'] });
+                }
+              : undefined
+          }
         />
         <StatusCard
           title="Uptime"
@@ -366,10 +385,16 @@ function StatusCard({
   title,
   value,
   color,
+  onClick,
+  subtitle,
+  onClear,
 }: {
   title: string;
   value: string;
   color: string;
+  onClick?: () => void;
+  subtitle?: string;
+  onClear?: () => void;
 }) {
   const colorClasses: Record<string, string> = {
     green: 'bg-green-900/30 border-green-700',
@@ -379,10 +404,31 @@ function StatusCard({
     gray: 'bg-gray-800 border-gray-700',
   };
 
+  const clickableClasses = onClick
+    ? 'cursor-pointer hover:border-blue-500/50 transition-colors'
+    : '';
+
   return (
-    <div className={`rounded-lg border p-4 ${colorClasses[color] ?? colorClasses.gray}`}>
-      <p className="text-sm text-gray-400">{title}</p>
+    <div
+      className={`rounded-lg border p-4 ${colorClasses[color] ?? colorClasses.gray} ${clickableClasses}`}
+      onClick={onClick}
+    >
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-gray-400">{title}</p>
+        {onClear && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onClear();
+            }}
+            className="text-xs text-gray-400 hover:text-red-400 transition-colors px-1.5 py-0.5 rounded border border-gray-600 hover:border-red-500/50"
+          >
+            Clear
+          </button>
+        )}
+      </div>
       <p className="text-2xl font-bold capitalize text-gray-100">{value}</p>
+      {subtitle && <p className="text-xs text-gray-500 mt-1">{subtitle}</p>}
     </div>
   );
 }

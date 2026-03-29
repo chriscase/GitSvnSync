@@ -20,6 +20,7 @@ pub struct SyncStatus {
     pub total_conflicts: i64,
     pub active_conflicts: i64,
     pub total_errors: i64,
+    pub last_error_at: Option<String>,
     pub uptime_secs: u64,
 }
 

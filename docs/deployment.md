@@ -1,5 +1,31 @@
 # Deployment Guide
 
+## Development Workflow (push to dev server)
+
+For iterative development against `orw-chrisc-rk10.wv.mentorg.com`:
+
+```bash
+make deploy          # Full deploy: build web UI locally, push code, build on server, restart
+make deploy-no-ui    # Rust-only: skip npm build (faster when only backend changed)
+make deploy-dry-run  # Preview all steps without touching the server
+```
+
+`scripts/deploy.sh` handles the full cycle:
+1. **Push** — `git push server <branch>`
+2. **Web UI** — `npm run build` locally, then rsync `web-ui/dist/` to server staging area
+3. **Remote** (single SSH session) — `git reset --hard`, `cargo build --release`, `sudo install` binaries to `/usr/local/bin/`, sudo-copy web UI to `/usr/local/bin/static/`, `systemctl restart gitsvnsync`
+
+**SSH prerequisite** (one-time setup):
+```bash
+mkdir -p ~/.ssh/cm && chmod 700 ~/.ssh/cm
+```
+
+Ensure `~/.ssh/config` has ControlMaster configured for the `rk10` host — see the SSH config in the repo for the recommended settings.
+
+> **Note:** The daemon serves the React UI as static files from a `static/` directory next to the binary. In the systemd deployment this resolves to `/usr/local/bin/static/`.
+
+---
+
 ## systemd (Recommended for Linux)
 
 ### Install

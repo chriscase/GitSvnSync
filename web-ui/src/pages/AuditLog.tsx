@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { api, type AuditEntry } from '../api';
 
 const ACTION_TYPES = [
@@ -15,14 +16,26 @@ const ACTION_TYPES = [
 ];
 
 export default function AuditLog() {
-  const [limit] = useState(100);
+  const [searchParams] = useSearchParams();
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(1);
   const [actionFilter, setActionFilter] = useState('');
   const [successFilter, setSuccessFilter] = useState<string>('');
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
+  // Read success=false from URL params (from clickable card integration)
+  useEffect(() => {
+    const successParam = searchParams.get('success');
+    if (successParam === 'false') {
+      setSuccessFilter('failure');
+    } else if (successParam === 'true') {
+      setSuccessFilter('success');
+    }
+  }, [searchParams]);
+
   const { data: response, isLoading, isError, error } = useQuery({
-    queryKey: ['audit', limit],
-    queryFn: () => api.getAuditLog(limit),
+    queryKey: ['audit', PAGE_SIZE, page],
+    queryFn: () => api.getAuditLog(PAGE_SIZE, page),
   });
 
   if (isLoading) {
@@ -38,6 +51,8 @@ export default function AuditLog() {
   }
 
   const allEntries = response?.entries ?? [];
+  const totalCount = response?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   // Client-side filtering
   const entries = allEntries.filter((e) => {
@@ -147,6 +162,37 @@ export default function AuditLog() {
           </tbody>
         </table>
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center space-x-4 py-4">
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page <= 1}
+            className={`px-3 py-2 text-sm rounded-md border ${
+              page <= 1
+                ? 'border-gray-700 text-gray-600 cursor-not-allowed'
+                : 'border-gray-600 text-gray-300 hover:bg-gray-700'
+            }`}
+          >
+            &larr; Previous
+          </button>
+          <span className="text-sm text-gray-400">
+            Page {page} of {totalPages}
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages}
+            className={`px-3 py-2 text-sm rounded-md border ${
+              page >= totalPages
+                ? 'border-gray-700 text-gray-600 cursor-not-allowed'
+                : 'border-gray-600 text-gray-300 hover:bg-gray-700'
+            }`}
+          >
+            Next &rarr;
+          </button>
+        </div>
+      )}
     </div>
   );
 }

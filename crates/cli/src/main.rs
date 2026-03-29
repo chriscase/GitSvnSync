@@ -611,7 +611,7 @@ fn cmd_identity(config: &AppConfig, action: IdentityAction) -> Result<()> {
 
 fn cmd_audit(db: &Database, limit: u32) -> Result<()> {
     let entries = db
-        .list_audit_log(limit)
+        .list_audit_log(limit, 0)
         .context("failed to list audit entries")?;
 
     if entries.is_empty() {

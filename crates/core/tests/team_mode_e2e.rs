@@ -839,7 +839,7 @@ async fn test_team_mode_forced_failure_persists_audit_entry() {
     // --- Verify acceptance criteria ---
 
     // 1. A failed audit entry was persisted.
-    let audit_entries = engine.db().list_audit_log(10).unwrap();
+    let audit_entries = engine.db().list_audit_log(10, 0).unwrap();
     assert!(
         !audit_entries.is_empty(),
         "expected at least 1 audit entry after failed sync"

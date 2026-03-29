@@ -19,6 +19,9 @@ use crate::AppState;
 #[derive(Deserialize)]
 pub struct AuditQuery {
     pub limit: Option<u32>,
+    pub offset: Option<u32>,
+    pub page: Option<u32>,
+    pub success: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -60,16 +63,33 @@ async fn list_audit(
     .await?;
 
     let limit = query.limit.unwrap_or(50).min(500);
+    let offset = if let Some(page) = query.page {
+        (page.saturating_sub(1)) * limit
+    } else {
+        query.offset.unwrap_or(0)
+    };
 
     let db = state
         .db
         .lock()
         .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+
+    let total_count = db
+        .count_audit_log()
+        .map_err(|e| AppError::Internal(format!("database error: {}", e)))? as usize;
+
     let entries = db
-        .list_audit_log(limit)
+        .list_audit_log(limit, offset)
         .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
 
-    let total = entries.len();
+    // Apply success filter if provided
+    let entries: Vec<_> = if let Some(success_val) = query.success {
+        entries.into_iter().filter(|e| e.success == success_val).collect()
+    } else {
+        entries
+    };
+
+    let total = total_count;
     let views: Vec<AuditEntryView> = entries
         .into_iter()
         .map(|e| AuditEntryView {
