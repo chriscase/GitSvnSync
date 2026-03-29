@@ -117,6 +117,12 @@ export const api = {
 
   getHealth: () => fetchJson<{ ok: boolean }>('/status/health'),
 
+  getSystemMetrics: async (): Promise<SystemMetrics> => {
+    const res = await fetch('/api/status/system');
+    if (!res.ok) throw new Error('Failed to fetch system metrics');
+    return res.json();
+  },
+
   getConflicts: (status?: string) => {
     const params = new URLSearchParams();
     if (status) params.append('status', status);
@@ -202,6 +208,22 @@ export const api = {
     });
   },
 };
+
+export interface SystemMetrics {
+  disk_free_bytes: number;
+  disk_total_bytes: number;
+  disk_usage_percent: number;
+  mem_used_bytes: number;
+  mem_total_bytes: number;
+  mem_usage_percent: number;
+  cpu_load_1m: number;
+  cpu_load_5m: number;
+  cpu_load_15m: number;
+  git_push_active: boolean;
+  git_push_pid: number | null;
+  git_push_elapsed_secs: number | null;
+  data_dir_size_bytes: number;
+}
 
 export interface VerificationResult {
   ok: boolean;

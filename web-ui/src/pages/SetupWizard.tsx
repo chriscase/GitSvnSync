@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, type AuthorMapping, type ImportStatus } from '../api';
 import ImportPhaseGraphic from '../components/ImportPhaseGraphic';
+import ServerMonitor from '../components/ServerMonitor';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1637,6 +1638,9 @@ function ImportStep() {
         </div>
       </div>
 
+      {/* Server Monitor — visible during active import */}
+      {(isActive || isComplete || isFailed) && <ServerMonitor />}
+
       {/* Error display */}
       {isFailed && status?.errors && status.errors.length > 0 && (
         <div className="bg-red-900/30 border border-red-700 rounded-lg p-5">
@@ -1707,6 +1711,7 @@ function getLogLineColor(line: string): string {
   // Log lines are now prefixed with [HH:MM:SS] by the backend,
   // so strip the timestamp before checking the tag.
   const stripped = line.replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '');
+  if (stripped.startsWith('[push]')) return 'text-cyan-400';
   if (stripped.startsWith('[ok]')) return 'text-emerald-400';
   if (stripped.startsWith('[error]')) return 'text-red-400';
   if (stripped.startsWith('[warn]')) return 'text-yellow-400';
