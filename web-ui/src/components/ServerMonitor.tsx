@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, HardDrive, Wifi, Cpu, MemoryStick } from 'lucide-react';
 import { api, type SystemMetrics } from '../api';
@@ -78,32 +78,19 @@ function MetricCard({
 
 export default function ServerMonitor() {
   const [open, setOpen] = useState(true);
-  const prevNet = useRef<{ sent: number; recv: number; ts: number } | null>(null);
-  const [netRate, setNetRate] = useState<{ up: number; down: number }>({ up: 0, down: 0 });
 
   const { data: metrics } = useQuery<SystemMetrics>({
     queryKey: ['system-metrics'],
-    queryFn: async () => {
-      const m = await api.getSystemMetrics();
-      // Calculate network throughput from cumulative byte counters
-      const now = Date.now();
-      if (prevNet.current && m.net_bytes_sent > 0) {
-        const dtSec = (now - prevNet.current.ts) / 1000;
-        if (dtSec > 0.5) {
-          const upBytes = m.net_bytes_sent - prevNet.current.sent;
-          const downBytes = m.net_bytes_recv - prevNet.current.recv;
-          setNetRate({
-            up: Math.max(0, upBytes / dtSec),
-            down: Math.max(0, downBytes / dtSec),
-          });
-        }
-      }
-      prevNet.current = { sent: m.net_bytes_sent, recv: m.net_bytes_recv, ts: now };
-      return m;
-    },
+    queryFn: api.getSystemMetrics,
     refetchInterval: 3000,
     refetchIntervalInBackground: false,
   });
+
+  // Use server-provided rates (computed from /proc/net/dev deltas server-side)
+  const netRate = {
+    up: metrics?.net_up_bytes_per_sec ?? 0,
+    down: metrics?.net_down_bytes_per_sec ?? 0,
+  };
 
   if (!metrics) {
     return (

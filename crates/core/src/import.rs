@@ -1027,7 +1027,25 @@ async fn async_git_push(
                 Ok(Ok(_)) => {
                     let trimmed = line.trim().to_string();
                     if !trimmed.is_empty() {
-                        push_log_line(progress, ws_broadcast, format!("[push] {}", trimmed)).await;
+                        // Filter verbose git progress lines — only show summaries
+                        let is_progress = trimmed.starts_with("Counting objects:")
+                            || trimmed.starts_with("Compressing objects:")
+                            || trimmed.starts_with("Writing objects:")
+                            || trimmed.starts_with("Resolving deltas:")
+                            || trimmed.starts_with("Delta compression");
+
+                        if is_progress {
+                            // Only log the final "Total" or "100%" lines
+                            if trimmed.starts_with("Total ") || trimmed.contains("100%") {
+                                // Extract a clean summary from "Total N (delta M), reused X, SIZE | SPEED"
+                                if trimmed.starts_with("Total ") {
+                                    push_log_line(progress, ws_broadcast, format!("[push] {}", trimmed)).await;
+                                }
+                                // Skip the 100% lines — redundant with Total
+                            }
+                        } else {
+                            push_log_line(progress, ws_broadcast, format!("[push] {}", trimmed)).await;
+                        }
                     }
                     last_heartbeat = std::time::Instant::now();
                 }

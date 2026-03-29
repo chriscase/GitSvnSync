@@ -45,6 +45,8 @@ pub struct AppState {
     pub import_progress: Arc<tokio::sync::RwLock<ImportProgress>>,
     /// Path to the TOML config file on disk.
     pub config_path: std::path::PathBuf,
+    /// Previous network byte counters for rate calculation.
+    pub prev_net_snapshot: std::sync::Mutex<Option<(u64, u64, std::time::Instant)>>,
 }
 
 /// The web server.
@@ -71,6 +73,7 @@ impl WebServer {
             sessions: tokio::sync::RwLock::new(std::collections::HashMap::new()),
             import_progress: Arc::new(tokio::sync::RwLock::new(ImportProgress::default())),
             config_path,
+            prev_net_snapshot: std::sync::Mutex::new(None),
         });
         Self { state }
     }

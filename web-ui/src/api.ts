@@ -227,6 +227,8 @@ export interface SystemMetrics {
   data_dir_size_bytes: number;
   net_bytes_sent: number;
   net_bytes_recv: number;
+  net_up_bytes_per_sec: number;
+  net_down_bytes_per_sec: number;
   svn_active: boolean;
 }
 

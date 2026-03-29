@@ -51,6 +51,10 @@ struct SystemMetrics {
     net_bytes_sent: u64,
     /// Network bytes received since boot
     net_bytes_recv: u64,
+    /// Network upload rate (bytes/sec), computed server-side
+    net_up_bytes_per_sec: f64,
+    /// Network download rate (bytes/sec), computed server-side
+    net_down_bytes_per_sec: f64,
     /// SVN process active (svn export/log/info running)
     svn_active: bool,
 }
@@ -138,8 +142,34 @@ async fn get_system_metrics(
     // Network I/O from /proc/net/dev
     let (net_bytes_sent, net_bytes_recv) = read_net_bytes();
 
-    // SVN process detection
-    let svn_active = is_process_running("svn");
+    // Compute server-side network rates by diffing with previous snapshot
+    let (net_up_bytes_per_sec, net_down_bytes_per_sec) = {
+        let mut prev = state.prev_net_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        let now = std::time::Instant::now();
+        let rates = if let Some((prev_sent, prev_recv, prev_time)) = prev.as_ref() {
+            let dt = now.duration_since(*prev_time).as_secs_f64();
+            if dt > 0.5 {
+                let up = (net_bytes_sent.saturating_sub(*prev_sent)) as f64 / dt;
+                let down = (net_bytes_recv.saturating_sub(*prev_recv)) as f64 / dt;
+                (up, down)
+            } else {
+                (0.0, 0.0)
+            }
+        } else {
+            (0.0, 0.0)
+        };
+        *prev = Some((net_bytes_sent, net_bytes_recv, now));
+        rates
+    };
+
+    // SVN process detection + import awareness
+    let svn_proc = is_process_running("svn");
+    let import_progress = state.import_progress.read().await;
+    let import_phase = &import_progress.phase;
+    let svn_active = svn_proc || matches!(import_phase, gitsvnsync_core::import::ImportPhase::Importing);
+    // Also detect push from import state
+    let git_push_active = git_push_active || matches!(import_phase, gitsvnsync_core::import::ImportPhase::FinalPush);
+    drop(import_progress);
 
     Ok(Json(SystemMetrics {
         disk_free_bytes,
@@ -157,6 +187,8 @@ async fn get_system_metrics(
         data_dir_size_bytes,
         net_bytes_sent,
         net_bytes_recv,
+        net_up_bytes_per_sec,
+        net_down_bytes_per_sec,
         svn_active,
     }))
 }
