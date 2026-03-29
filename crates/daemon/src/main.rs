@@ -104,6 +104,40 @@ async fn main() -> Result<()> {
     // Resolve secrets from DB (fallback when env vars are absent)
     config.resolve_secrets_from_db(&db);
 
+    // Auto-bootstrap admin user if users table is empty
+    match db.count_users() {
+        Ok(0) => {
+            let admin_password = std::env::var("REPOSYNC_ADMIN_PASSWORD")
+                .unwrap_or_else(|_| {
+                    warn!("No REPOSYNC_ADMIN_PASSWORD set and no users exist — creating admin user with default password 'changeme'. CHANGE THIS IMMEDIATELY!");
+                    "changeme".to_string()
+                });
+            match gitsvnsync_core::crypto::hash_password(&admin_password) {
+                Ok(hash) => {
+                    let now = chrono::Utc::now().to_rfc3339();
+                    let admin = gitsvnsync_core::models::User {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        username: "admin".to_string(),
+                        display_name: "Administrator".to_string(),
+                        email: "admin@localhost".to_string(),
+                        password_hash: hash,
+                        role: "admin".to_string(),
+                        enabled: true,
+                        created_at: now.clone(),
+                        updated_at: now,
+                    };
+                    match db.insert_user(&admin) {
+                        Ok(()) => info!("Created bootstrap admin user (username: admin)"),
+                        Err(e) => error!("Failed to create bootstrap admin user: {}", e),
+                    }
+                }
+                Err(e) => error!("Failed to hash admin password: {}", e),
+            }
+        }
+        Ok(n) => info!("{} user(s) found in database, skipping admin bootstrap", n),
+        Err(e) => warn!("Failed to check users table (may not exist yet): {}", e),
+    }
+
     // Initialize SVN client
     let svn_password = config.svn.password.clone().unwrap_or_default();
     let svn_client = SvnClient::new(&config.svn.url, &config.svn.username, &svn_password);

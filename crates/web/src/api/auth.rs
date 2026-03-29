@@ -1,9 +1,9 @@
-//! Authentication endpoints (simple password-based sessions).
+//! Authentication endpoints (multi-user with backward-compatible single-password fallback).
 
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,9 @@ use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
+    /// Username for multi-user login. Optional for backward compat with
+    /// single-password mode.
+    pub username: Option<String>,
     pub password: String,
 }
 
@@ -25,6 +28,17 @@ pub struct LoginRequest {
 struct LoginResponse {
     token: String,
     expires_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user: Option<UserInfo>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct UserInfo {
+    pub id: String,
+    pub username: String,
+    pub display_name: String,
+    pub email: String,
+    pub role: String,
 }
 
 #[derive(Deserialize)]
@@ -41,54 +55,148 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/auth/login", post(login))
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/verify", post(verify))
+        .route("/api/auth/me", get(me))
 }
 
 async fn login(
     State(state): State<Arc<AppState>>,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
-    let configured_password = state.config.web.admin_password.as_deref().unwrap_or("");
+    // Check if any users exist in the database (multi-user mode).
+    let has_users = {
+        let db = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+        db.count_users()
+            .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
+            > 0
+    };
 
-    // If no admin password is configured, authentication is disabled
-    if configured_password.is_empty() {
-        return Err(AppError::BadRequest(
-            "authentication is not configured (no admin password set)".into(),
-        ));
+    if has_users {
+        // Multi-user mode: require username
+        let username = body.username.as_deref().unwrap_or("");
+        if username.is_empty() {
+            return Err(AppError::BadRequest("username is required".into()));
+        }
+
+        // Scope the db lock so it's dropped before any .await
+        let (token, expires_at, user_info) = {
+            let db = state
+                .db
+                .lock()
+                .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+
+            let user = db
+                .get_user_by_username(username)
+                .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
+                .ok_or_else(|| AppError::Unauthorized("invalid username or password".into()))?;
+
+            if !user.enabled {
+                return Err(AppError::Unauthorized("account is disabled".into()));
+            }
+
+            let password_valid = gitsvnsync_core::crypto::verify_password(&body.password, &user.password_hash)
+                .map_err(|e| AppError::Internal(format!("password verification error: {}", e)))?;
+
+            if !password_valid {
+                return Err(AppError::Unauthorized("invalid username or password".into()));
+            }
+
+            // Create DB session
+            let token = Uuid::new_v4().to_string();
+            let now = Utc::now();
+            let expires_at = now + Duration::hours(24);
+
+            let session = gitsvnsync_core::models::Session {
+                token: token.clone(),
+                user_id: user.id.clone(),
+                expires_at: expires_at.to_rfc3339(),
+                created_at: now.to_rfc3339(),
+            };
+
+            db.insert_session(&session)
+                .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
+
+            let info = UserInfo {
+                id: user.id,
+                username: user.username,
+                display_name: user.display_name,
+                email: user.email,
+                role: user.role,
+            };
+
+            (token, expires_at, info)
+        };
+
+        // Now safe to .await — db lock is dropped
+        {
+            let mut sessions = state.sessions.write().await;
+            sessions.insert(token.clone(), expires_at);
+        }
+
+        Ok(Json(LoginResponse {
+            token,
+            expires_at: expires_at.to_rfc3339(),
+            user: Some(user_info),
+        }))
+    } else {
+        // Backward-compatible single-password mode
+        let configured_password = state.config.web.admin_password.as_deref().unwrap_or("");
+
+        if configured_password.is_empty() {
+            return Err(AppError::BadRequest(
+                "authentication is not configured (no admin password set and no users created)".into(),
+            ));
+        }
+
+        // Constant-time comparison to prevent timing attacks.
+        let password_matches = body.password.len() == configured_password.len()
+            && body
+                .password
+                .bytes()
+                .zip(configured_password.bytes())
+                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                == 0;
+
+        if !password_matches {
+            return Err(AppError::Unauthorized("invalid password".into()));
+        }
+
+        let token = Uuid::new_v4().to_string();
+        let expires_at = Utc::now() + Duration::hours(24);
+
+        {
+            let mut sessions = state.sessions.write().await;
+            sessions.insert(token.clone(), expires_at);
+        }
+
+        Ok(Json(LoginResponse {
+            token,
+            expires_at: expires_at.to_rfc3339(),
+            user: None,
+        }))
     }
-
-    // Constant-time comparison to prevent timing attacks.
-    let password_matches = body.password.len() == configured_password.len()
-        && body
-            .password
-            .bytes()
-            .zip(configured_password.bytes())
-            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-            == 0;
-
-    if !password_matches {
-        return Err(AppError::Unauthorized("invalid password".into()));
-    }
-
-    let token = Uuid::new_v4().to_string();
-    let expires_at = Utc::now() + Duration::hours(24);
-
-    {
-        let mut sessions = state.sessions.write().await;
-        sessions.insert(token.clone(), expires_at);
-    }
-
-    Ok(Json(LoginResponse {
-        token,
-        expires_at: expires_at.to_rfc3339(),
-    }))
 }
 
 async fn logout(
     State(state): State<Arc<AppState>>,
     Json(body): Json<LogoutRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let mut sessions = state.sessions.write().await;
-    sessions.remove(&body.token);
+    // Remove from DB sessions first (no .await needed)
+    let _ = {
+        let db = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+        db.delete_session(&body.token)
+    };
+
+    // Remove from in-memory sessions
+    {
+        let mut sessions = state.sessions.write().await;
+        sessions.remove(&body.token);
+    }
 
     Ok(Json(serde_json::json!({
         "ok": true,
@@ -105,8 +213,42 @@ async fn verify(
     State(state): State<Arc<AppState>>,
     Json(body): Json<VerifyRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let sessions = state.sessions.read().await;
+    // Check DB sessions first (scoped so lock is dropped before .await)
+    let db_result = {
+        let db = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+        if let Ok(Some(session)) = db.get_session(&body.token) {
+            if let Ok(Some(user)) = db.get_user(&session.user_id) {
+                Some(serde_json::json!({
+                    "valid": true,
+                    "expires_at": session.expires_at,
+                    "user": {
+                        "id": user.id,
+                        "username": user.username,
+                        "display_name": user.display_name,
+                        "email": user.email,
+                        "role": user.role,
+                    }
+                }))
+            } else {
+                Some(serde_json::json!({
+                    "valid": true,
+                    "expires_at": session.expires_at,
+                }))
+            }
+        } else {
+            None
+        }
+    };
 
+    if let Some(result) = db_result {
+        return Ok(Json(result));
+    }
+
+    // Fallback to in-memory sessions (backward compat)
+    let sessions = state.sessions.read().await;
     if let Some(expires_at) = sessions.get(&body.token) {
         if *expires_at > Utc::now() {
             return Ok(Json(serde_json::json!({
@@ -121,6 +263,61 @@ async fn verify(
     })))
 }
 
+async fn me(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or_else(|| AppError::Unauthorized("missing or invalid Authorization header".into()))?;
+
+    // Check DB session (scoped so lock is dropped before .await)
+    let db_result = {
+        let db = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+
+        if let Ok(Some(session)) = db.get_session(token) {
+            if let Ok(Some(user)) = db.get_user(&session.user_id) {
+                Some(serde_json::json!({
+                    "id": user.id,
+                    "username": user.username,
+                    "display_name": user.display_name,
+                    "email": user.email,
+                    "role": user.role,
+                }))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    if let Some(user_json) = db_result {
+        return Ok(Json(user_json));
+    }
+
+    // Fallback: if in-memory session exists (legacy mode), return minimal info
+    let sessions = state.sessions.read().await;
+    if let Some(expires_at) = sessions.get(token) {
+        if *expires_at > Utc::now() {
+            return Ok(Json(serde_json::json!({
+                "id": "legacy",
+                "username": "admin",
+                "display_name": "Admin",
+                "email": "",
+                "role": "admin",
+            })));
+        }
+    }
+
+    Err(AppError::Unauthorized("session expired or invalid".into()))
+}
+
 /// Middleware helper to validate a session token from the Authorization header.
 ///
 /// Call this from handlers that require authentication. Returns `Ok(())` if
@@ -131,24 +328,97 @@ pub async fn validate_session(
     state: &Arc<AppState>,
     auth_header: Option<&str>,
 ) -> Result<(), AppError> {
-    // If no admin password is configured, skip authentication entirely
+    // If no admin password is configured AND no users exist, skip authentication entirely
     if state.config.web.admin_password.is_none() {
-        return Ok(());
+        let has_users = {
+            let db = state
+                .db
+                .lock()
+                .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+            db.count_users()
+                .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
+                > 0
+        };
+        if !has_users {
+            return Ok(());
+        }
     }
 
     let token = auth_header
         .and_then(|h| h.strip_prefix("Bearer "))
         .ok_or_else(|| AppError::Unauthorized("missing or invalid Authorization header".into()))?;
 
-    let now = Utc::now();
+    // Check DB sessions first
+    {
+        let db = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+        if let Ok(Some(_session)) = db.get_session(token) {
+            // Valid DB session — also prune expired sessions opportunistically
+            let _ = db.prune_expired_sessions();
+            return Ok(());
+        }
+    }
 
-    // Validate and opportunistically prune expired sessions
+    // Fallback to in-memory sessions (backward compat)
+    let now = Utc::now();
     let mut sessions = state.sessions.write().await;
     sessions.retain(|_, expiry| *expiry > now);
 
     if let Some(expires_at) = sessions.get(token) {
         if *expires_at > now {
             return Ok(());
+        }
+    }
+
+    Err(AppError::Unauthorized("session expired or invalid".into()))
+}
+
+/// Validate a session and return the user's role. Returns `None` for legacy
+/// single-password sessions (treated as admin).
+pub async fn validate_session_with_role(
+    state: &Arc<AppState>,
+    auth_header: Option<&str>,
+) -> Result<(String, String), AppError> {
+    // If no admin password is configured AND no users exist, skip auth
+    if state.config.web.admin_password.is_none() {
+        let has_users = {
+            let db = state
+                .db
+                .lock()
+                .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+            db.count_users()
+                .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
+                > 0
+        };
+        if !has_users {
+            return Ok(("legacy".into(), "admin".into()));
+        }
+    }
+
+    let token = auth_header
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or_else(|| AppError::Unauthorized("missing or invalid Authorization header".into()))?;
+
+    // Check DB sessions first
+    {
+        let db = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+        if let Ok(Some(session)) = db.get_session(token) {
+            if let Ok(Some(user)) = db.get_user(&session.user_id) {
+                return Ok((user.id, user.role));
+            }
+        }
+    }
+
+    // Fallback to in-memory sessions (backward compat — treat as admin)
+    let sessions = state.sessions.read().await;
+    if let Some(expires_at) = sessions.get(token) {
+        if *expires_at > Utc::now() {
+            return Ok(("legacy".into(), "admin".into()));
         }
     }
 

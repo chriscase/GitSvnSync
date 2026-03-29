@@ -8,4 +8,5 @@ pub mod seed;
 pub mod setup;
 pub mod status;
 pub mod sync_history;
+pub mod users;
 pub mod webhooks;

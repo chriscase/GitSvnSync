@@ -25,6 +25,9 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 regex-lite = { workspace = true }
 glob-match = { workspace = true }
+bcrypt = { workspace = true }
+aes-gcm = { workspace = true }
+rand = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]

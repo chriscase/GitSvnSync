@@ -295,6 +295,50 @@ pub struct WebAuditEntry {
 }
 
 // ---------------------------------------------------------------------------
+// Multi-user auth types
+// ---------------------------------------------------------------------------
+
+/// A user account.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+    pub id: String,
+    pub username: String,
+    pub display_name: String,
+    pub email: String,
+    #[serde(skip_serializing)]
+    pub password_hash: String,
+    pub role: String,
+    pub enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// An encrypted credential stored for a user (e.g. SVN password, API token).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserCredential {
+    pub id: String,
+    pub user_id: String,
+    pub service: String,
+    pub server_url: String,
+    pub username: String,
+    #[serde(skip_serializing)]
+    pub encrypted_value: String,
+    #[serde(skip_serializing)]
+    pub nonce: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// An active user session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Session {
+    pub token: String,
+    pub user_id: String,
+    pub expires_at: String,
+    pub created_at: String,
+}
+
+// ---------------------------------------------------------------------------
 // Personal Branch Mode types
 // ---------------------------------------------------------------------------
 

@@ -1,7 +1,16 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { api } from '../api';
+import { api, type User } from '../api';
 import SyncStatus from './SyncStatus';
+
+function getStoredUser(): User | null {
+  try {
+    const stored = localStorage.getItem('user');
+    return stored ? JSON.parse(stored) : null;
+  } catch {
+    return null;
+  }
+}
 
 export default function Layout() {
   const navigate = useNavigate();
@@ -10,11 +19,15 @@ export default function Layout() {
     queryFn: api.getStatus,
   });
 
+  const user = getStoredUser();
+  const isAdmin = user?.role === 'admin';
+
   const handleLogout = async () => {
     try {
       await api.logout();
     } finally {
       localStorage.removeItem('session_token');
+      localStorage.removeItem('user');
       navigate('/login');
     }
   };
@@ -77,10 +90,23 @@ export default function Layout() {
                 <NavLink to="/setup" className={navLinkClass}>
                   Setup
                 </NavLink>
+                <NavLink to="/settings" className={navLinkClass}>
+                  Settings
+                </NavLink>
+                {isAdmin && (
+                  <NavLink to="/users" className={navLinkClass}>
+                    Users
+                  </NavLink>
+                )}
               </div>
             </div>
             <div className="flex items-center space-x-4">
               {status && <SyncStatus status={status} />}
+              {user && (
+                <span className="text-sm text-gray-400">
+                  {user.display_name || user.username}
+                </span>
+              )}
               <button
                 onClick={handleLogout}
                 className="text-gray-400 hover:text-white text-sm"

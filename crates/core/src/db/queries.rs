@@ -1251,6 +1251,347 @@ impl Database {
             None => Ok(None),
         }
     }
+
+    // -- users ---------------------------------------------------------------
+
+    /// Count total users in the database.
+    pub fn count_users(&self) -> Result<i64, DatabaseError> {
+        let conn = self.conn();
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
+        Ok(count)
+    }
+
+    /// Insert a new user.
+    pub fn insert_user(&self, user: &models::User) -> Result<(), DatabaseError> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO users (id, username, display_name, email, password_hash, role, enabled, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                user.id,
+                user.username,
+                user.display_name,
+                user.email,
+                user.password_hash,
+                user.role,
+                user.enabled as i32,
+                user.created_at,
+                user.updated_at,
+            ],
+        )?;
+        debug!(id = %user.id, username = %user.username, "inserted user");
+        Ok(())
+    }
+
+    /// Get a user by ID.
+    pub fn get_user(&self, id: &str) -> Result<Option<models::User>, DatabaseError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, username, display_name, email, password_hash, role, enabled, created_at, updated_at
+             FROM users WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], |row| {
+            Ok(models::User {
+                id: row.get(0)?,
+                username: row.get(1)?,
+                display_name: row.get(2)?,
+                email: row.get(3)?,
+                password_hash: row.get(4)?,
+                role: row.get(5)?,
+                enabled: row.get::<_, i32>(6)? != 0,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(user)) => Ok(Some(user)),
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
+
+    /// Get a user by username.
+    pub fn get_user_by_username(&self, username: &str) -> Result<Option<models::User>, DatabaseError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, username, display_name, email, password_hash, role, enabled, created_at, updated_at
+             FROM users WHERE username = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![username], |row| {
+            Ok(models::User {
+                id: row.get(0)?,
+                username: row.get(1)?,
+                display_name: row.get(2)?,
+                email: row.get(3)?,
+                password_hash: row.get(4)?,
+                role: row.get(5)?,
+                enabled: row.get::<_, i32>(6)? != 0,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(user)) => Ok(Some(user)),
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
+
+    /// List all users.
+    pub fn list_users(&self) -> Result<Vec<models::User>, DatabaseError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, username, display_name, email, password_hash, role, enabled, created_at, updated_at
+             FROM users ORDER BY username",
+        )?;
+        let entries = stmt
+            .query_map([], |row| {
+                Ok(models::User {
+                    id: row.get(0)?,
+                    username: row.get(1)?,
+                    display_name: row.get(2)?,
+                    email: row.get(3)?,
+                    password_hash: row.get(4)?,
+                    role: row.get(5)?,
+                    enabled: row.get::<_, i32>(6)? != 0,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(entries)
+    }
+
+    /// Update a user (display_name, email, role, enabled). Does NOT update password.
+    pub fn update_user(
+        &self,
+        id: &str,
+        display_name: &str,
+        email: &str,
+        role: &str,
+        enabled: bool,
+    ) -> Result<(), DatabaseError> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn();
+        let changed = conn.execute(
+            "UPDATE users SET display_name = ?1, email = ?2, role = ?3, enabled = ?4, updated_at = ?5
+             WHERE id = ?6",
+            params![display_name, email, role, enabled as i32, now, id],
+        )?;
+        if changed == 0 {
+            return Err(DatabaseError::NotFound {
+                entity: "user".into(),
+                id: id.into(),
+            });
+        }
+        debug!(id, "updated user");
+        Ok(())
+    }
+
+    /// Update a user's password hash.
+    pub fn update_user_password(&self, id: &str, password_hash: &str) -> Result<(), DatabaseError> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn();
+        let changed = conn.execute(
+            "UPDATE users SET password_hash = ?1, updated_at = ?2 WHERE id = ?3",
+            params![password_hash, now, id],
+        )?;
+        if changed == 0 {
+            return Err(DatabaseError::NotFound {
+                entity: "user".into(),
+                id: id.into(),
+            });
+        }
+        debug!(id, "updated user password");
+        Ok(())
+    }
+
+    /// Disable a user (soft-delete).
+    pub fn disable_user(&self, id: &str) -> Result<(), DatabaseError> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn();
+        let changed = conn.execute(
+            "UPDATE users SET enabled = 0, updated_at = ?1 WHERE id = ?2",
+            params![now, id],
+        )?;
+        if changed == 0 {
+            return Err(DatabaseError::NotFound {
+                entity: "user".into(),
+                id: id.into(),
+            });
+        }
+        debug!(id, "disabled user");
+        Ok(())
+    }
+
+    // -- user_credentials ----------------------------------------------------
+
+    /// Insert a new user credential.
+    pub fn insert_user_credential(
+        &self,
+        cred: &models::UserCredential,
+    ) -> Result<(), DatabaseError> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO user_credentials (id, user_id, service, server_url, username, encrypted_value, nonce, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(user_id, service, server_url) DO UPDATE SET
+                username = excluded.username,
+                encrypted_value = excluded.encrypted_value,
+                nonce = excluded.nonce,
+                updated_at = excluded.updated_at",
+            params![
+                cred.id,
+                cred.user_id,
+                cred.service,
+                cred.server_url,
+                cred.username,
+                cred.encrypted_value,
+                cred.nonce,
+                cred.created_at,
+                cred.updated_at,
+            ],
+        )?;
+        debug!(id = %cred.id, user_id = %cred.user_id, service = %cred.service, "upserted user credential");
+        Ok(())
+    }
+
+    /// List credentials for a user (summaries only — encrypted values excluded from display).
+    pub fn list_user_credentials(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<models::UserCredential>, DatabaseError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, user_id, service, server_url, username, encrypted_value, nonce, created_at, updated_at
+             FROM user_credentials WHERE user_id = ?1 ORDER BY service, server_url",
+        )?;
+        let entries = stmt
+            .query_map(params![user_id], |row| {
+                Ok(models::UserCredential {
+                    id: row.get(0)?,
+                    user_id: row.get(1)?,
+                    service: row.get(2)?,
+                    server_url: row.get(3)?,
+                    username: row.get(4)?,
+                    encrypted_value: row.get(5)?,
+                    nonce: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(entries)
+    }
+
+    /// Get a specific credential by ID.
+    pub fn get_user_credential(&self, cred_id: &str) -> Result<Option<models::UserCredential>, DatabaseError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, user_id, service, server_url, username, encrypted_value, nonce, created_at, updated_at
+             FROM user_credentials WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![cred_id], |row| {
+            Ok(models::UserCredential {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                service: row.get(2)?,
+                server_url: row.get(3)?,
+                username: row.get(4)?,
+                encrypted_value: row.get(5)?,
+                nonce: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(cred)) => Ok(Some(cred)),
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
+
+    /// Delete a credential by ID.
+    pub fn delete_user_credential(&self, cred_id: &str) -> Result<(), DatabaseError> {
+        let conn = self.conn();
+        let changed = conn.execute(
+            "DELETE FROM user_credentials WHERE id = ?1",
+            params![cred_id],
+        )?;
+        if changed == 0 {
+            return Err(DatabaseError::NotFound {
+                entity: "user_credential".into(),
+                id: cred_id.into(),
+            });
+        }
+        debug!(cred_id, "deleted user credential");
+        Ok(())
+    }
+
+    // -- sessions ------------------------------------------------------------
+
+    /// Insert a new session.
+    pub fn insert_session(&self, session: &models::Session) -> Result<(), DatabaseError> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, expires_at, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                session.token,
+                session.user_id,
+                session.expires_at,
+                session.created_at,
+            ],
+        )?;
+        debug!(user_id = %session.user_id, "inserted session");
+        Ok(())
+    }
+
+    /// Get a session by token (only if not expired).
+    pub fn get_session(&self, token: &str) -> Result<Option<models::Session>, DatabaseError> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT token, user_id, expires_at, created_at
+             FROM sessions WHERE token = ?1 AND expires_at > ?2",
+        )?;
+        let mut rows = stmt.query_map(params![token, now], |row| {
+            Ok(models::Session {
+                token: row.get(0)?,
+                user_id: row.get(1)?,
+                expires_at: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(session)) => Ok(Some(session)),
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
+
+    /// Delete a session by token (logout).
+    pub fn delete_session(&self, token: &str) -> Result<(), DatabaseError> {
+        let conn = self.conn();
+        conn.execute("DELETE FROM sessions WHERE token = ?1", params![token])?;
+        debug!("deleted session");
+        Ok(())
+    }
+
+    /// Prune expired sessions.
+    pub fn prune_expired_sessions(&self) -> Result<usize, DatabaseError> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn();
+        let deleted = conn.execute(
+            "DELETE FROM sessions WHERE expires_at <= ?1",
+            params![now],
+        )?;
+        if deleted > 0 {
+            debug!(deleted, "pruned expired sessions");
+        }
+        Ok(deleted)
+    }
 }
 
 /// Parse a datetime string, returning Utc::now() as a fallback if parsing fails.

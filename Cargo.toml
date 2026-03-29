@@ -82,5 +82,10 @@ regex-lite = "0.1"
 # Glob pattern matching
 glob-match = "0.2"
 
+# Password hashing & encryption
+bcrypt = "0.15"
+aes-gcm = "0.10"
+rand = "0.8"
+
 # Testing
 tempfile = "3"

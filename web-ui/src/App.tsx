@@ -8,6 +8,8 @@ import Config from './pages/Config';
 import AuditLog from './pages/AuditLog';
 import Login from './pages/Login';
 import SetupWizard from './pages/SetupWizard';
+import UserSettings from './pages/UserSettings';
+import AdminUsers from './pages/AdminUsers';
 
 // ---------------------------------------------------------------------------
 // Splash Screen (React-controlled with minimum display time)
@@ -105,6 +107,8 @@ export default function App() {
             <Route path="conflicts/:id" element={<ConflictDetail />} />
             <Route path="config" element={<Config />} />
             <Route path="audit" element={<AuditLog />} />
+            <Route path="settings" element={<UserSettings />} />
+            <Route path="users" element={<AdminUsers />} />
           </Route>
         </Routes>
       </div>

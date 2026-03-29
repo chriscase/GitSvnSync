@@ -93,6 +93,54 @@ export interface ConfigResponse {
   sync: { mode: string; auto_merge: boolean; sync_tags: boolean };
 }
 
+// Multi-user auth types
+export interface User {
+  id: string;
+  username: string;
+  display_name: string;
+  email: string;
+  role: string;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface CredentialSummary {
+  id: string;
+  service: string;
+  server_url: string;
+  username: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateUserRequest {
+  username: string;
+  display_name: string;
+  email: string;
+  password: string;
+  role: string;
+}
+
+export interface UpdateUserRequest {
+  display_name?: string;
+  email?: string;
+  role?: string;
+  enabled?: boolean;
+  password?: string;
+}
+
+export interface StoreCredentialRequest {
+  service: string;
+  server_url: string;
+  username: string;
+  value: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  user?: User;
+}
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem('session_token');
   const headers: Record<string, string> = {
@@ -214,10 +262,11 @@ export const api = {
       method: 'POST',
     }),
 
-  login: (password: string) =>
-    fetchJson<{ token: string }>('/auth/login', {
+  // Auth - multi-user login (backward compatible with single-password mode)
+  login: (username: string, password: string) =>
+    fetchJson<LoginResponse>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ username, password }),
     }),
 
   logout: () => {
@@ -227,6 +276,48 @@ export const api = {
       body: JSON.stringify({ token: token ?? '' }),
     });
   },
+
+  getMe: () => fetchJson<User>('/auth/me'),
+
+  // Users (admin)
+  getUsers: () => fetchJson<User[]>('/users'),
+
+  createUser: (data: CreateUserRequest) =>
+    fetchJson<User>('/users', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  updateUser: (id: string, data: UpdateUserRequest) =>
+    fetchJson<User>(`/users/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  deleteUser: (id: string) =>
+    fetchJson<{ ok: boolean }>(`/users/${id}`, {
+      method: 'DELETE',
+    }),
+
+  // Credentials
+  getUserCredentials: (userId: string) =>
+    fetchJson<CredentialSummary[]>(`/users/${userId}/credentials`),
+
+  storeCredential: (userId: string, data: StoreCredentialRequest) =>
+    fetchJson<CredentialSummary>(`/users/${userId}/credentials`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  deleteCredential: (userId: string, credId: string) =>
+    fetchJson<{ ok: boolean }>(`/users/${userId}/credentials/${credId}`, {
+      method: 'DELETE',
+    }),
+
+  testCredential: (userId: string, credId: string) =>
+    fetchJson<{ ok: boolean; message: string }>(`/users/${userId}/credentials/${credId}/test`, {
+      method: 'POST',
+    }),
 };
 
 export interface SystemMetrics {
