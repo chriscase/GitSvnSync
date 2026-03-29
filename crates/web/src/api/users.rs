@@ -93,13 +93,13 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/users", get(list_users))
         .route("/api/users", post(create_user))
-        .route("/api/users/{id}", get(get_user))
-        .route("/api/users/{id}", put(update_user))
-        .route("/api/users/{id}", delete(disable_user))
-        .route("/api/users/{id}/credentials", get(list_credentials))
-        .route("/api/users/{id}/credentials", post(create_credential))
+        .route("/api/users/:id", get(get_user))
+        .route("/api/users/:id", put(update_user))
+        .route("/api/users/:id", delete(disable_user))
+        .route("/api/users/:id/credentials", get(list_credentials))
+        .route("/api/users/:id/credentials", post(create_credential))
         .route(
-            "/api/users/{id}/credentials/{cred_id}",
+            "/api/users/:id/credentials/:cred_id",
             delete(delete_credential),
         )
         // LDAP administration
