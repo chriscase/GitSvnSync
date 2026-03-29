@@ -101,6 +101,9 @@ async fn main() -> Result<()> {
     let web_db = Database::new(&db_path).context("failed to open web database connection")?;
     info!("Database initialized at {}", db_path.display());
 
+    // Resolve secrets from DB (fallback when env vars are absent)
+    config.resolve_secrets_from_db(&db);
+
     // Initialize SVN client
     let svn_password = config.svn.password.clone().unwrap_or_default();
     let svn_client = SvnClient::new(&config.svn.url, &config.svn.username, &svn_password);

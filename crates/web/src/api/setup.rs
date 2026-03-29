@@ -93,6 +93,8 @@ pub struct ApplyConfigRequest {
     // Web
     pub web_listen: Option<String>,
     pub web_admin_password_env: Option<String>,
+    /// Actual admin password (stored securely in DB, not in TOML).
+    pub web_admin_password: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -119,14 +121,130 @@ pub struct ImportActionResponse {
 // Routes
 // ---------------------------------------------------------------------------
 
+/// Response for `GET /api/setup/config` — returns saved config for wizard pre-population.
+#[derive(Serialize)]
+pub struct SetupConfigResponse {
+    // SVN
+    pub svn_url: String,
+    pub svn_username: String,
+    pub svn_layout: String,
+    pub svn_trunk_path: String,
+    pub svn_password_set: bool,
+
+    // Git
+    pub git_provider: String,
+    pub git_api_url: String,
+    pub git_repo: String,
+    pub git_branch: String,
+    pub git_token_set: bool,
+
+    // Sync
+    pub sync_mode: String,
+    pub auto_merge: bool,
+    pub sync_tags: bool,
+    pub lfs_threshold: u64,
+
+    // Identity
+    pub email_domain: String,
+
+    // Server
+    pub listen: String,
+    pub auth_mode: String,
+    pub poll_interval: u64,
+    pub log_level: String,
+    pub data_dir: String,
+    pub admin_password_set: bool,
+
+    /// Whether a config file exists on disk.
+    pub config_exists: bool,
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/api/setup/config", get(get_setup_config))
         .route("/api/setup/test-svn", post(test_svn_connection))
         .route("/api/setup/test-git", post(test_git_connection))
         .route("/api/setup/apply", post(apply_config))
         .route("/api/setup/import", post(start_import))
         .route("/api/setup/import/status", get(import_status))
         .route("/api/setup/import/cancel", post(cancel_import))
+}
+
+// ---------------------------------------------------------------------------
+// Get saved config for wizard pre-population
+// ---------------------------------------------------------------------------
+
+async fn get_setup_config(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<SetupConfigResponse>, AppError> {
+    crate::api::auth::validate_session(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    ).await?;
+
+    let cfg = &state.config;
+
+    // Check which secrets exist in the database (lock the mutex)
+    let db = state.db.lock().map_err(|e| {
+        AppError::Internal(format!("DB lock failed: {}", e))
+    })?;
+
+    let svn_password_set = db
+        .get_state("secret_svn_password")
+        .ok()
+        .flatten()
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+        || cfg.svn.password.is_some();
+
+    let git_token_set = db
+        .get_state("secret_git_token")
+        .ok()
+        .flatten()
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+        || cfg.github.token.is_some();
+
+    let admin_password_set = db
+        .get_state("secret_admin_password")
+        .ok()
+        .flatten()
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+        || cfg.web.admin_password.is_some();
+
+    drop(db); // release lock
+
+    Ok(Json(SetupConfigResponse {
+        svn_url: cfg.svn.url.clone(),
+        svn_username: cfg.svn.username.clone(),
+        svn_layout: if cfg.svn.trunk_path.is_empty() { "single".into() } else { "standard".into() },
+        svn_trunk_path: cfg.svn.trunk_path.clone(),
+        svn_password_set,
+
+        git_provider: "github".into(),
+        git_api_url: cfg.github.api_url.clone(),
+        git_repo: cfg.github.repo.clone(),
+        git_branch: cfg.github.default_branch.clone(),
+        git_token_set,
+
+        sync_mode: format!("{:?}", cfg.sync.mode).to_lowercase(),
+        auto_merge: cfg.sync.auto_merge,
+        sync_tags: cfg.sync.sync_tags,
+        lfs_threshold: cfg.sync.lfs_threshold,
+
+        email_domain: cfg.identity.email_domain.clone().unwrap_or_default(),
+
+        listen: cfg.web.listen.clone(),
+        auth_mode: "simple".into(),
+        poll_interval: cfg.daemon.poll_interval_secs,
+        log_level: cfg.daemon.log_level.clone(),
+        data_dir: cfg.daemon.data_dir.display().to_string(),
+        admin_password_set,
+
+        config_exists: true,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -508,6 +626,16 @@ async fn apply_config(
                     rusqlite::params![token, now],
                 );
                 info!("Git token stored in database");
+            }
+        }
+
+        if let Some(ref password) = body.web_admin_password {
+            if !password.is_empty() {
+                let _ = db.conn().execute(
+                    "INSERT OR REPLACE INTO kv_state (key, value, updated_at) VALUES ('secret_admin_password', ?1, ?2)",
+                    rusqlite::params![password, now],
+                );
+                info!("Admin password stored in database");
             }
         }
     }

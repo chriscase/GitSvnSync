@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
+use crate::db::Database;
 use crate::errors::ConfigError;
 
 // ---------------------------------------------------------------------------
@@ -546,6 +547,68 @@ impl AppConfig {
 
         debug!("environment variable resolution complete");
         Ok(())
+    }
+
+    /// Fall back to secrets stored in the database when env vars are absent.
+    ///
+    /// The wizard saves passwords / tokens into the `kv_state` table.  This
+    /// method reads them back and fills any resolved field that is still
+    /// `None` after [`resolve_env_vars`](Self::resolve_env_vars).  Env-var
+    /// values therefore always take priority (they are set first).
+    pub fn resolve_secrets_from_db(&mut self, db: &Database) {
+        // SVN password
+        if self.svn.password.is_some() {
+            debug!("SVN password already set from env var, skipping DB lookup");
+        } else {
+            match db.get_state("secret_svn_password") {
+                Ok(Some(val)) if !val.is_empty() => {
+                    self.svn.password = Some(val);
+                    info!("Loaded SVN password from database");
+                }
+                Ok(_) => {
+                    debug!("No SVN password found in database");
+                }
+                Err(e) => {
+                    warn!("Failed to read SVN password from database: {}", e);
+                }
+            }
+        }
+
+        // Git token
+        if self.github.token.is_some() {
+            debug!("Git token already set from env var, skipping DB lookup");
+        } else {
+            match db.get_state("secret_git_token") {
+                Ok(Some(val)) if !val.is_empty() => {
+                    self.github.token = Some(val);
+                    info!("Loaded Git token from database");
+                }
+                Ok(_) => {
+                    debug!("No Git token found in database");
+                }
+                Err(e) => {
+                    warn!("Failed to read Git token from database: {}", e);
+                }
+            }
+        }
+
+        // Admin password
+        if self.web.admin_password.is_some() {
+            debug!("Admin password already set from env var, skipping DB lookup");
+        } else {
+            match db.get_state("secret_admin_password") {
+                Ok(Some(val)) if !val.is_empty() => {
+                    self.web.admin_password = Some(val);
+                    info!("Loaded admin password from database");
+                }
+                Ok(_) => {
+                    debug!("No admin password found in database");
+                }
+                Err(e) => {
+                    warn!("Failed to read admin password from database: {}", e);
+                }
+            }
+        }
     }
 
     /// Validate that all required fields are present and sane.

@@ -186,6 +186,8 @@ export const api = {
       method: 'POST',
     }),
 
+  getSetupConfig: () => fetchJson<WizardSetupConfig>('/setup/config'),
+
   getImportStatus: () =>
     fetchJson<ImportStatus>('/setup/import/status'),
 
@@ -234,6 +236,39 @@ export interface VerificationResult {
   missing_files: string[];
   extra_files: string[];
   message: string;
+}
+
+export interface WizardSetupConfig {
+  // SVN
+  svn_url: string;
+  svn_username: string;
+  svn_layout: string;
+  svn_trunk_path: string;
+  svn_password_set: boolean;
+
+  // Git
+  git_provider: string;
+  git_api_url: string;
+  git_repo: string;
+  git_branch: string;
+  git_token_set: boolean;
+
+  // Sync
+  sync_mode: string;
+  auto_merge: boolean;
+  sync_tags: boolean;
+  lfs_threshold: number;
+
+  // Identity
+  email_domain: string;
+
+  // Server
+  listen: string;
+  auth_mode: string;
+  poll_interval: number;
+  log_level: string;
+  data_dir: string;
+  admin_password_set: boolean;
 }
 
 export interface ImportStatus {

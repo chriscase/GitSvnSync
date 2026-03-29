@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, type AuthorMapping, type ImportStatus } from '../api';
+import { api, type AuthorMapping, type ImportStatus, type WizardSetupConfig } from '../api';
 import ImportPhaseGraphic from '../components/ImportPhaseGraphic';
 import ServerMonitor from '../components/ServerMonitor';
 
@@ -184,6 +184,15 @@ export default function SetupWizard() {
   const [saveWarnings, setSaveWarnings] = useState<string[]>([]);
   const stepRef = useRef<HTMLDivElement>(null);
 
+  // Track whether secrets are already saved on the server
+  const [svnPasswordSaved, setSvnPasswordSaved] = useState(false);
+  const [gitTokenSaved, setGitTokenSaved] = useState(false);
+  // adminPasswordSaved reserved for future use when admin password field is added
+  const [, setAdminPasswordSaved] = useState(false);
+  // Track whether user has typed new values for password fields
+  const [svnPasswordDirty, setSvnPasswordDirty] = useState(false);
+  const [gitTokenDirty, setGitTokenDirty] = useState(false);
+
   const update = useCallback(
     (fields: Partial<WizardData>) => setData(prev => ({ ...prev, ...fields })),
     [],
@@ -199,6 +208,46 @@ export default function SetupWizard() {
         }
       } catch {
         // No import running or API not available — stay on Welcome
+      }
+    })();
+  }, []);
+
+  // Pre-populate wizard from saved config (if any)
+  useEffect(() => {
+    (async () => {
+      try {
+        const cfg: WizardSetupConfig = await api.getSetupConfig();
+        const merged: Partial<WizardData> = {};
+
+        if (cfg.svn_url) merged.svn_url = cfg.svn_url;
+        if (cfg.svn_username) merged.svn_username = cfg.svn_username;
+        if (cfg.svn_layout) merged.svn_layout = cfg.svn_layout as WizardData['svn_layout'];
+        if (cfg.svn_trunk_path) merged.svn_trunk_path = cfg.svn_trunk_path;
+        if (cfg.svn_password_set) setSvnPasswordSaved(true);
+
+        if (cfg.git_provider) merged.git_provider = cfg.git_provider as WizardData['git_provider'];
+        if (cfg.git_api_url) merged.git_api_url = cfg.git_api_url;
+        if (cfg.git_repo) merged.git_repo = cfg.git_repo;
+        if (cfg.git_branch) merged.git_default_branch = cfg.git_branch;
+        if (cfg.git_token_set) setGitTokenSaved(true);
+
+        if (cfg.sync_mode) merged.sync_mode = cfg.sync_mode as WizardData['sync_mode'];
+        if (cfg.auto_merge !== undefined) merged.sync_auto_merge = cfg.auto_merge;
+        if (cfg.sync_tags !== undefined) merged.sync_tags = cfg.sync_tags;
+        if (cfg.lfs_threshold > 0) merged.lfs_threshold_mb = cfg.lfs_threshold / (1024 * 1024);
+
+        if (cfg.email_domain) merged.identity_email_domain = cfg.email_domain;
+
+        if (cfg.listen) merged.web_listen = cfg.listen;
+        if (cfg.auth_mode) merged.web_auth_mode = cfg.auth_mode as WizardData['web_auth_mode'];
+        if (cfg.poll_interval > 0) merged.daemon_poll_interval = cfg.poll_interval;
+        if (cfg.log_level) merged.daemon_log_level = cfg.log_level;
+        if (cfg.data_dir) merged.daemon_data_dir = cfg.data_dir;
+        if (cfg.admin_password_set) setAdminPasswordSaved(true);
+
+        setData(prev => ({ ...prev, ...merged }));
+      } catch {
+        // Endpoint not available yet (404) or other error — keep DEFAULT_DATA
       }
     })();
   }, []);
@@ -226,7 +275,7 @@ export default function SetupWizard() {
       const payload = {
         svn_url: data.svn_url,
         svn_username: data.svn_username,
-        svn_password: data.svn_password || undefined,
+        svn_password: svnPasswordDirty && data.svn_password ? data.svn_password : undefined,
         svn_password_env: data.svn_password_env || undefined,
         svn_layout: data.svn_layout,
         svn_trunk_path: data.svn_trunk_path,
@@ -235,7 +284,7 @@ export default function SetupWizard() {
         git_provider: data.git_provider,
         git_api_url: data.git_api_url,
         git_repo: data.git_repo,
-        git_token: data.git_token || undefined,
+        git_token: gitTokenDirty && data.git_token ? data.git_token : undefined,
         git_token_env: data.git_token_env || undefined,
         git_default_branch: data.git_default_branch,
         sync_mode: data.sync_mode,
@@ -269,8 +318,8 @@ export default function SetupWizard() {
   const renderStep = () => {
     switch (step) {
       case 0: return <WelcomeStep />;
-      case 1: return <SvnStep data={data} update={update} errors={errors} />;
-      case 2: return <GitStep data={data} update={update} errors={errors} />;
+      case 1: return <SvnStep data={data} update={update} errors={errors} svnPasswordSaved={svnPasswordSaved} svnPasswordDirty={svnPasswordDirty} onSvnPasswordChange={() => setSvnPasswordDirty(true)} />;
+      case 2: return <GitStep data={data} update={update} errors={errors} gitTokenSaved={gitTokenSaved} gitTokenDirty={gitTokenDirty} onGitTokenChange={() => setGitTokenDirty(true)} />;
       case 3: return <SyncStep data={data} update={update} />;
       case 4: return <IdentityStep data={data} update={update} errors={errors} />;
       case 5: return <ServerAuthStep data={data} update={update} errors={errors} />;
@@ -649,10 +698,16 @@ function SvnStep({
   data,
   update,
   errors,
+  svnPasswordSaved,
+  svnPasswordDirty,
+  onSvnPasswordChange,
 }: {
   data: WizardData;
   update: (f: Partial<WizardData>) => void;
   errors: Errors;
+  svnPasswordSaved: boolean;
+  svnPasswordDirty: boolean;
+  onSvnPasswordChange: () => void;
 }) {
   return (
     <div className="space-y-6">
@@ -690,9 +745,9 @@ function SvnStep({
           <input
             type="password"
             value={data.svn_password}
-            onChange={e => update({ svn_password: e.target.value })}
+            onChange={e => { update({ svn_password: e.target.value }); onSvnPasswordChange(); }}
             className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            placeholder="Enter SVN password"
+            placeholder={svnPasswordSaved && !svnPasswordDirty ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (saved)' : 'Enter SVN password'}
           />
           <p className="text-xs text-gray-500 mt-1">Stored securely on the server — never written to config files</p>
         </div>
@@ -755,10 +810,16 @@ function GitStep({
   data,
   update,
   errors,
+  gitTokenSaved,
+  gitTokenDirty,
+  onGitTokenChange,
 }: {
   data: WizardData;
   update: (f: Partial<WizardData>) => void;
   errors: Errors;
+  gitTokenSaved: boolean;
+  gitTokenDirty: boolean;
+  onGitTokenChange: () => void;
 }) {
   const handleProviderChange = (provider: string) => {
     const p = provider as 'github' | 'gitea';
@@ -830,9 +891,9 @@ function GitStep({
             <input
               type="password"
               value={data.git_token}
-              onChange={e => update({ git_token: e.target.value })}
+              onChange={e => { update({ git_token: e.target.value }); onGitTokenChange(); }}
               className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="ghp_xxxxxxxxxxxx or giteaToken"
+              placeholder={gitTokenSaved && !gitTokenDirty ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (saved)' : 'ghp_xxxxxxxxxxxx or giteaToken'}
             />
             <p className="text-xs text-gray-500 mt-1">Needs <code className="text-gray-400">repo</code> scope. Stored securely on the server.</p>
           </div>
