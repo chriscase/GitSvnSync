@@ -136,6 +136,30 @@ export interface StoreCredentialRequest {
   value: string;
 }
 
+export interface LdapConfig {
+  enabled: boolean;
+  url: string;
+  base_dn: string;
+  search_filter: string;
+  display_name_attr: string;
+  email_attr: string;
+  group_attr: string;
+  bind_dn: string;
+  bind_password_set: boolean;
+}
+
+export interface SaveLdapConfigRequest {
+  enabled: boolean;
+  url: string;
+  base_dn: string;
+  search_filter: string;
+  display_name_attr: string;
+  email_attr: string;
+  group_attr: string;
+  bind_dn?: string;
+  bind_password?: string;
+}
+
 export interface LoginResponse {
   token: string;
   user?: User;
@@ -317,6 +341,21 @@ export const api = {
   testCredential: (userId: string, credId: string) =>
     fetchJson<{ ok: boolean; message: string }>(`/users/${userId}/credentials/${credId}/test`, {
       method: 'POST',
+    }),
+
+  // LDAP configuration (admin)
+  getLdapConfig: () => fetchJson<LdapConfig>('/admin/ldap'),
+
+  saveLdapConfig: (config: SaveLdapConfigRequest) =>
+    fetchJson<{ ok: boolean; message: string }>('/admin/ldap', {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    }),
+
+  testLdapConnection: (config: SaveLdapConfigRequest) =>
+    fetchJson<{ ok: boolean; message: string }>('/admin/ldap/test', {
+      method: 'POST',
+      body: JSON.stringify(config),
     }),
 };
 

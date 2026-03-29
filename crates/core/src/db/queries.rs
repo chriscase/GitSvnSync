@@ -1592,6 +1592,101 @@ impl Database {
         }
         Ok(deleted)
     }
+
+    // -- LDAP configuration -------------------------------------------------
+
+    /// Check whether LDAP authentication is enabled.
+    pub fn is_ldap_enabled(&self) -> Result<bool, DatabaseError> {
+        Ok(self.get_state("ldap_enabled")?.as_deref() == Some("true"))
+    }
+
+    /// Load LDAP configuration from the `kv_state` table.
+    /// Returns `None` if LDAP has not been configured.
+    pub fn load_ldap_config(&self) -> Result<Option<crate::ldap_auth::LdapConfig>, DatabaseError> {
+        let url = match self.get_state("ldap_url")? {
+            Some(u) if !u.is_empty() => u,
+            _ => return Ok(None),
+        };
+
+        let base_dn = self.get_state("ldap_base_dn")?.unwrap_or_default();
+        let search_filter = self
+            .get_state("ldap_search_filter")?
+            .unwrap_or_else(|| "(&(objectClass=user)(name={0}))".to_string());
+        let display_name_attr = self
+            .get_state("ldap_display_name_attr")?
+            .unwrap_or_else(|| "displayname".to_string());
+        let email_attr = self
+            .get_state("ldap_email_attr")?
+            .unwrap_or_else(|| "mail".to_string());
+        let group_attr = self
+            .get_state("ldap_group_attr")?
+            .unwrap_or_else(|| "memberOf".to_string());
+        let bind_dn = self.get_state("ldap_bind_dn")?.filter(|s| !s.is_empty());
+
+        // Decrypt bind password if stored.
+        let bind_password = if let Some(enc_pw) = self.get_state("ldap_bind_password")? {
+            if enc_pw.is_empty() {
+                None
+            } else if let Some(nonce) = self.get_state("ldap_bind_password_nonce")? {
+                match crate::crypto::get_or_create_encryption_key(self) {
+                    Ok(key) => crate::crypto::decrypt_credential(&enc_pw, &nonce, &key).ok(),
+                    Err(_) => None,
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        Ok(Some(crate::ldap_auth::LdapConfig {
+            url,
+            base_dn,
+            search_filter,
+            display_name_attr,
+            email_attr,
+            group_attr,
+            bind_dn,
+            bind_password,
+        }))
+    }
+
+    /// Save LDAP configuration to the `kv_state` table.
+    /// The bind password is encrypted before storage.
+    pub fn save_ldap_config(
+        &self,
+        config: &crate::ldap_auth::LdapConfig,
+        enabled: bool,
+    ) -> Result<(), DatabaseError> {
+        self.set_state("ldap_enabled", if enabled { "true" } else { "false" })?;
+        self.set_state("ldap_url", &config.url)?;
+        self.set_state("ldap_base_dn", &config.base_dn)?;
+        self.set_state("ldap_search_filter", &config.search_filter)?;
+        self.set_state("ldap_display_name_attr", &config.display_name_attr)?;
+        self.set_state("ldap_email_attr", &config.email_attr)?;
+        self.set_state("ldap_group_attr", &config.group_attr)?;
+        self.set_state(
+            "ldap_bind_dn",
+            config.bind_dn.as_deref().unwrap_or(""),
+        )?;
+
+        // Encrypt and store bind password.
+        if let Some(ref pw) = config.bind_password {
+            if !pw.is_empty() {
+                let key = crate::crypto::get_or_create_encryption_key(self)
+                    .map_err(|e| DatabaseError::Other(format!("encryption key error: {}", e)))?;
+                let (encrypted, nonce) = crate::crypto::encrypt_credential(pw, &key)
+                    .map_err(|e| DatabaseError::Other(format!("encryption error: {}", e)))?;
+                self.set_state("ldap_bind_password", &encrypted)?;
+                self.set_state("ldap_bind_password_nonce", &nonce)?;
+            }
+        } else {
+            self.set_state("ldap_bind_password", "")?;
+            self.set_state("ldap_bind_password_nonce", "")?;
+        }
+
+        Ok(())
+    }
 }
 
 /// Parse a datetime string, returning Utc::now() as a fallback if parsing fails.

@@ -102,6 +102,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/api/users/{id}/credentials/{cred_id}",
             delete(delete_credential),
         )
+        // LDAP administration
+        .route("/api/admin/ldap", get(get_ldap_config))
+        .route("/api/admin/ldap", put(save_ldap_config))
+        .route("/api/admin/ldap/test", post(test_ldap_connection))
 }
 
 // ---------------------------------------------------------------------------
@@ -459,4 +463,202 @@ async fn delete_credential(
         "ok": true,
         "message": "credential deleted",
     })))
+}
+
+// ---------------------------------------------------------------------------
+// LDAP configuration handlers
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct LdapConfigResponse {
+    enabled: bool,
+    url: String,
+    base_dn: String,
+    search_filter: String,
+    display_name_attr: String,
+    email_attr: String,
+    group_attr: String,
+    bind_dn: String,
+    bind_password_set: bool,
+}
+
+#[derive(Deserialize)]
+struct SaveLdapConfigRequest {
+    enabled: bool,
+    url: String,
+    base_dn: String,
+    search_filter: String,
+    display_name_attr: String,
+    email_attr: String,
+    group_attr: String,
+    bind_dn: Option<String>,
+    bind_password: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TestLdapRequest {
+    url: String,
+    base_dn: String,
+    search_filter: String,
+    display_name_attr: String,
+    email_attr: String,
+    group_attr: String,
+    bind_dn: Option<String>,
+    bind_password: Option<String>,
+}
+
+async fn get_ldap_config(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<LdapConfigResponse>, AppError> {
+    let (_user_id, role) = validate_session_with_role(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
+
+    if role != "admin" {
+        return Err(AppError::Unauthorized("admin access required".into()));
+    }
+
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+
+    let enabled = db.is_ldap_enabled().unwrap_or(false);
+    let config = db
+        .load_ldap_config()
+        .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
+
+    let resp = if let Some(cfg) = config {
+        LdapConfigResponse {
+            enabled,
+            url: cfg.url,
+            base_dn: cfg.base_dn,
+            search_filter: cfg.search_filter,
+            display_name_attr: cfg.display_name_attr,
+            email_attr: cfg.email_attr,
+            group_attr: cfg.group_attr,
+            bind_dn: cfg.bind_dn.unwrap_or_default(),
+            bind_password_set: cfg.bind_password.is_some(),
+        }
+    } else {
+        LdapConfigResponse {
+            enabled: false,
+            url: String::new(),
+            base_dn: String::new(),
+            search_filter: "(&(objectClass=user)(name={0}))".to_string(),
+            display_name_attr: "displayname".to_string(),
+            email_attr: "mail".to_string(),
+            group_attr: "memberOf".to_string(),
+            bind_dn: String::new(),
+            bind_password_set: false,
+        }
+    };
+
+    Ok(Json(resp))
+}
+
+async fn save_ldap_config(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<SaveLdapConfigRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (_user_id, role) = validate_session_with_role(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
+
+    if role != "admin" {
+        return Err(AppError::Unauthorized("admin access required".into()));
+    }
+
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+
+    // If no password provided in the request, keep the existing one
+    let bind_password = if body.bind_password.as_deref().is_some_and(|p| !p.is_empty()) {
+        body.bind_password
+    } else {
+        // Preserve existing password
+        db.load_ldap_config()
+            .ok()
+            .flatten()
+            .and_then(|c| c.bind_password)
+    };
+
+    let config = gitsvnsync_core::ldap_auth::LdapConfig {
+        url: body.url,
+        base_dn: body.base_dn,
+        search_filter: body.search_filter,
+        display_name_attr: body.display_name_attr,
+        email_attr: body.email_attr,
+        group_attr: body.group_attr,
+        bind_dn: body.bind_dn.filter(|s| !s.is_empty()),
+        bind_password,
+    };
+
+    db.save_ldap_config(&config, body.enabled)
+        .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "message": "LDAP configuration saved",
+    })))
+}
+
+async fn test_ldap_connection(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<TestLdapRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (_user_id, role) = validate_session_with_role(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
+
+    if role != "admin" {
+        return Err(AppError::Unauthorized("admin access required".into()));
+    }
+
+    // If bind_password is empty, try to use the stored one
+    let bind_password = if body.bind_password.as_deref().is_some_and(|p| !p.is_empty()) {
+        body.bind_password
+    } else {
+        let db = state
+            .db
+            .lock()
+            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+        db.load_ldap_config()
+            .ok()
+            .flatten()
+            .and_then(|c| c.bind_password)
+    };
+
+    let config = gitsvnsync_core::ldap_auth::LdapConfig {
+        url: body.url,
+        base_dn: body.base_dn,
+        search_filter: body.search_filter,
+        display_name_attr: body.display_name_attr,
+        email_attr: body.email_attr,
+        group_attr: body.group_attr,
+        bind_dn: body.bind_dn.filter(|s| !s.is_empty()),
+        bind_password,
+    };
+
+    match config.test_connection().await {
+        Ok(msg) => Ok(Json(serde_json::json!({
+            "ok": true,
+            "message": msg,
+        }))),
+        Err(e) => Ok(Json(serde_json::json!({
+            "ok": false,
+            "message": format!("LDAP connection test failed: {}", e),
+        }))),
+    }
 }

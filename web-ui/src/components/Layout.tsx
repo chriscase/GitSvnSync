@@ -98,6 +98,11 @@ export default function Layout() {
                     Users
                   </NavLink>
                 )}
+                {isAdmin && (
+                  <NavLink to="/ldap" className={navLinkClass}>
+                    LDAP
+                  </NavLink>
+                )}
               </div>
             </div>
             <div className="flex items-center space-x-4">

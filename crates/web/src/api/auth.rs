@@ -80,6 +80,127 @@ async fn login(
             return Err(AppError::BadRequest("username is required".into()));
         }
 
+        // -------------------------------------------------------------------
+        // Try LDAP authentication first (if enabled)
+        // -------------------------------------------------------------------
+        let ldap_result = {
+            let db = state
+                .db
+                .lock()
+                .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+            let ldap_enabled = db.is_ldap_enabled().unwrap_or(false);
+            if ldap_enabled {
+                db.load_ldap_config()
+                    .map_err(|e| AppError::Internal(format!("ldap config error: {}", e)))?
+            } else {
+                None
+            }
+        };
+
+        if let Some(ldap_config) = ldap_result {
+            match ldap_config.authenticate(username, &body.password).await {
+                Ok(ldap_user) => {
+                    // LDAP auth succeeded — provision or update local user
+                    let (token, expires_at, user_info) = {
+                        let db = state
+                            .db
+                            .lock()
+                            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+
+                        let local_user = db
+                            .get_user_by_username(username)
+                            .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
+
+                        let user = if let Some(existing) = local_user {
+                            // Update display_name and email from LDAP
+                            let _ = db.update_user(
+                                &existing.id,
+                                &ldap_user.display_name,
+                                &ldap_user.email,
+                                &existing.role,
+                                existing.enabled,
+                            );
+                            db.get_user(&existing.id)
+                                .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
+                                .unwrap_or(existing)
+                        } else {
+                            // Auto-provision new user from LDAP attributes
+                            let random_hash = gitsvnsync_core::crypto::hash_password(
+                                &Uuid::new_v4().to_string(),
+                            )
+                            .map_err(|e| {
+                                AppError::Internal(format!("password hashing error: {}", e))
+                            })?;
+
+                            let now = Utc::now().to_rfc3339();
+                            let new_user = gitsvnsync_core::models::User {
+                                id: Uuid::new_v4().to_string(),
+                                username: ldap_user.username.clone(),
+                                display_name: ldap_user.display_name.clone(),
+                                email: ldap_user.email.clone(),
+                                password_hash: random_hash,
+                                role: "user".to_string(),
+                                enabled: true,
+                                created_at: now.clone(),
+                                updated_at: now,
+                            };
+
+                            db.insert_user(&new_user)
+                                .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
+                            new_user
+                        };
+
+                        if !user.enabled {
+                            return Err(AppError::Unauthorized("account is disabled".into()));
+                        }
+
+                        // Create DB session
+                        let token = Uuid::new_v4().to_string();
+                        let now = Utc::now();
+                        let expires_at = now + Duration::hours(24);
+
+                        let session = gitsvnsync_core::models::Session {
+                            token: token.clone(),
+                            user_id: user.id.clone(),
+                            expires_at: expires_at.to_rfc3339(),
+                            created_at: now.to_rfc3339(),
+                        };
+
+                        db.insert_session(&session)
+                            .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
+
+                        let info = UserInfo {
+                            id: user.id,
+                            username: user.username,
+                            display_name: user.display_name,
+                            email: user.email,
+                            role: user.role,
+                        };
+
+                        (token, expires_at, info)
+                    };
+
+                    {
+                        let mut sessions = state.sessions.write().await;
+                        sessions.insert(token.clone(), expires_at);
+                    }
+
+                    return Ok(Json(LoginResponse {
+                        token,
+                        expires_at: expires_at.to_rfc3339(),
+                        user: Some(user_info),
+                    }));
+                }
+                Err(e) => {
+                    // LDAP failed — fall through to local auth
+                    tracing::debug!("LDAP auth failed for '{}': {}", username, e);
+                }
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // Local bcrypt authentication
+        // -------------------------------------------------------------------
         // Scope the db lock so it's dropped before any .await
         let (token, expires_at, user_info) = {
             let db = state

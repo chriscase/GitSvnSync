@@ -82,6 +82,9 @@ regex-lite = "0.1"
 # Glob pattern matching
 glob-match = "0.2"
 
+# LDAP authentication
+ldap3 = "0.11"
+
 # Password hashing & encryption
 bcrypt = "0.15"
 aes-gcm = "0.10"

@@ -10,6 +10,7 @@ import Login from './pages/Login';
 import SetupWizard from './pages/SetupWizard';
 import UserSettings from './pages/UserSettings';
 import AdminUsers from './pages/AdminUsers';
+import AdminLdap from './pages/AdminLdap';
 
 // ---------------------------------------------------------------------------
 // Splash Screen (React-controlled with minimum display time)
@@ -109,6 +110,7 @@ export default function App() {
             <Route path="audit" element={<AuditLog />} />
             <Route path="settings" element={<UserSettings />} />
             <Route path="users" element={<AdminUsers />} />
+            <Route path="ldap" element={<AdminLdap />} />
           </Route>
         </Routes>
       </div>

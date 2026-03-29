@@ -273,6 +273,10 @@ pub enum DatabaseError {
     /// Generic I/O error (e.g. file permissions).
     #[error("database I/O error: {0}")]
     IoError(#[from] std::io::Error),
+
+    /// Generic error with a descriptive message.
+    #[error("{0}")]
+    Other(String),
 }
 
 // ---------------------------------------------------------------------------
