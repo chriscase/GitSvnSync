@@ -97,7 +97,8 @@ async fn login(
             }
         };
 
-        if let Some(ldap_config) = ldap_result {
+        if let Some(ref ldap_config) = ldap_result {
+            tracing::info!("Attempting LDAP auth for '{}' against {}", username, ldap_config.url);
             match ldap_config.authenticate(username, &body.password).await {
                 Ok(ldap_user) => {
                     // LDAP auth succeeded — provision or update local user
@@ -193,7 +194,7 @@ async fn login(
                 }
                 Err(e) => {
                     // LDAP failed — fall through to local auth
-                    tracing::debug!("LDAP auth failed for '{}': {}", username, e);
+                    tracing::warn!("LDAP auth failed for '{}': {}", username, e);
                 }
             }
         }

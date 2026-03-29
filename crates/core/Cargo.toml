@@ -27,6 +27,7 @@ regex-lite = { workspace = true }
 glob-match = { workspace = true }
 bcrypt = { workspace = true }
 ldap3 = { workspace = true }
+native-tls = "0.2"
 aes-gcm = { workspace = true }
 rand = { workspace = true }
 tempfile = { workspace = true }

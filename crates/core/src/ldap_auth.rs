@@ -4,6 +4,7 @@
 //! server. On first login, a local user account is auto-provisioned from LDAP attributes.
 
 use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
+use native_tls::TlsConnector;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -81,8 +82,15 @@ impl LdapConfig {
         username: &str,
         password: &str,
     ) -> Result<LdapUser, LdapAuthError> {
-        // Build connection settings — ldap3 handles TLS for ldaps:// URLs.
-        let settings = LdapConnSettings::new();
+        // Build connection settings — accept internal/self-signed CA certs
+        // commonly used by corporate LDAP/AD servers.
+        let tls_connector = TlsConnector::builder()
+            .danger_accept_invalid_certs(true)
+            .danger_accept_invalid_hostnames(true)
+            .build()
+            .map_err(|e| LdapAuthError::ConnectionFailed(format!("TLS setup failed: {}", e)))?;
+        let settings = LdapConnSettings::new()
+            .set_connector(tls_connector);
         let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &self.url)
             .await
             .map_err(|e| LdapAuthError::ConnectionFailed(e.to_string()))?;
