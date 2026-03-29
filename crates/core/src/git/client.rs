@@ -201,6 +201,108 @@ impl GitClient {
         Ok(oid)
     }
 
+    /// Stage all changes and create a commit using the `git` CLI.
+    ///
+    /// This is required when LFS-tracked files are present because `git2`
+    /// (libgit2) does not support Git LFS filters.  The CLI `git add` invokes
+    /// the LFS clean filter which replaces large files with pointer files,
+    /// whereas `git2::Index::add_all()` adds the raw file content as a blob.
+    ///
+    /// Returns the commit SHA on success.
+    #[instrument(skip(self, message))]
+    pub fn commit_via_cli(
+        &self,
+        message: &str,
+        author_name: &str,
+        author_email: &str,
+        committer_name: &str,
+        committer_email: &str,
+    ) -> Result<Oid, GitError> {
+        let repo_path = self.repo.workdir().unwrap_or_else(|| self.repo.path());
+
+        info!(
+            repo_path = %repo_path.display(),
+            "committing via git CLI (LFS-aware)"
+        );
+
+        // Stage all changes using git add, which invokes LFS clean filters.
+        let add_output = std::process::Command::new("git")
+            .args(["add", "--all"])
+            .current_dir(repo_path)
+            .output()
+            .map_err(|e| {
+                error!(error = %e, "failed to spawn git add");
+                GitError::IoError(e)
+            })?;
+
+        if !add_output.status.success() {
+            let stderr = String::from_utf8_lossy(&add_output.stderr);
+            error!(stderr = %stderr, "git add --all failed");
+            return Err(GitError::Git2Error(git2::Error::from_str(&format!(
+                "git add --all failed: {}",
+                stderr.trim()
+            ))));
+        }
+
+        // Check if there's anything to commit (git diff --cached --quiet).
+        let diff_output = std::process::Command::new("git")
+            .args(["diff", "--cached", "--quiet"])
+            .current_dir(repo_path)
+            .output()
+            .map_err(GitError::IoError)?;
+
+        if diff_output.status.success() {
+            // Exit code 0 means no staged changes — nothing to commit.
+            return Err(GitError::Git2Error(git2::Error::from_str(
+                "nothing to commit (working tree clean)",
+            )));
+        }
+
+        // Build the commit via git CLI with explicit author/committer.
+        let author_str = format!("{} <{}>", author_name, author_email);
+        let commit_output = std::process::Command::new("git")
+            .args(["commit", "-m", message, "--author", &author_str])
+            .current_dir(repo_path)
+            .env("GIT_COMMITTER_NAME", committer_name)
+            .env("GIT_COMMITTER_EMAIL", committer_email)
+            .output()
+            .map_err(|e| {
+                error!(error = %e, "failed to spawn git commit");
+                GitError::IoError(e)
+            })?;
+
+        if !commit_output.status.success() {
+            let stderr = String::from_utf8_lossy(&commit_output.stderr);
+            error!(stderr = %stderr, "git commit failed");
+            return Err(GitError::Git2Error(git2::Error::from_str(&format!(
+                "git commit failed: {}",
+                stderr.trim()
+            ))));
+        }
+
+        // Read the resulting commit SHA from rev-parse HEAD.
+        let rev_output = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo_path)
+            .output()
+            .map_err(GitError::IoError)?;
+
+        let sha_str = String::from_utf8_lossy(&rev_output.stdout).trim().to_string();
+        let oid = Oid::from_str(&sha_str).map_err(|e| {
+            error!(sha = %sha_str, error = %e, "failed to parse commit SHA");
+            e
+        })?;
+
+        // Reload the git2 index so subsequent operations see the new state.
+        // This is needed because we bypassed git2 for the commit.
+        if let Ok(mut index) = self.repo.index() {
+            let _ = index.read(false);
+        }
+
+        info!(sha = %oid, "created commit via CLI (LFS-aware)");
+        Ok(oid)
+    }
+
     /// Push a local branch to a remote (with optional force).
     #[instrument(skip(self))]
     pub fn push(

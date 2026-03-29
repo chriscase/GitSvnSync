@@ -401,8 +401,8 @@ pub async fn run_full_import(
         }
     };
 
-    // LFS preflight
-    if file_policy.lfs_enabled() {
+    // LFS preflight: check availability and install hooks in the repo
+    let lfs_available = if file_policy.lfs_enabled() {
         match crate::lfs::preflight_check() {
             Ok(version) => {
                 log(
@@ -411,6 +411,32 @@ pub async fn run_full_import(
                     format!("[info] Git LFS available: {}", version),
                 )
                 .await;
+
+                // Install LFS hooks/filters in the repo so `git add` invokes
+                // the clean filter and creates pointer files for tracked patterns.
+                let git_guard = git_client.lock().await;
+                let rp = git_guard.repo_workdir();
+                drop(git_guard);
+                match crate::lfs::install_lfs_hooks(&rp) {
+                    Ok(()) => {
+                        log(
+                            &progress,
+                            &ws_broadcast,
+                            "[info] Git LFS installed in repo (filters active)".into(),
+                        )
+                        .await;
+                        true
+                    }
+                    Err(e) => {
+                        log(
+                            &progress,
+                            &ws_broadcast,
+                            format!("[warn] git lfs install failed: {} — LFS tracking will not work", e),
+                        )
+                        .await;
+                        false
+                    }
+                }
             }
             Err(e) => {
                 log(
@@ -419,9 +445,12 @@ pub async fn run_full_import(
                     format!("[warn] Git LFS not available: {} — large files will be committed directly", e),
                 )
                 .await;
+                false
             }
         }
-    }
+    } else {
+        false
+    };
 
     // Get SVN info
     log(
@@ -577,15 +606,34 @@ pub async fn run_full_import(
             entry.message, rev, entry.author, entry.date
         );
 
-        // Commit
+        // Commit — use CLI when LFS files are present so that `git add`
+        // invokes the LFS clean filter and stores large files as pointers.
+        // libgit2's Index::add_all() bypasses LFS filters entirely.
+        let use_cli = lfs_available && copy_stats.lfs_tracked > 0;
         let git_client_guard = git_client.lock().await;
-        match git_client_guard.commit(
-            &message,
-            &author_name,
-            &author_email,
-            &import_config.committer_name,
-            &import_config.committer_email,
-        ) {
+        let commit_result = if use_cli {
+            debug!(
+                rev,
+                lfs_count = copy_stats.lfs_tracked,
+                "using git CLI for commit (LFS files present)"
+            );
+            git_client_guard.commit_via_cli(
+                &message,
+                &author_name,
+                &author_email,
+                &import_config.committer_name,
+                &import_config.committer_email,
+            )
+        } else {
+            git_client_guard.commit(
+                &message,
+                &author_name,
+                &author_email,
+                &import_config.committer_name,
+                &import_config.committer_email,
+            )
+        };
+        match commit_result {
             Ok(oid) => {
                 let sha = oid.to_string();
                 let short_sha = &sha[..8.min(sha.len())];
