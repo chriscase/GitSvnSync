@@ -39,6 +39,12 @@ impl Database {
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         conn.execute_batch("PRAGMA busy_timeout = 5000;")?;
 
+        // Checkpoint any pending WAL data on startup to recover from
+        // previous unclean shutdowns (SIGKILL, power loss, etc.).
+        if let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+            tracing::warn!("WAL checkpoint on startup failed: {}", e);
+        }
+
         debug!("database opened successfully with WAL mode");
         Ok(Self {
             conn: Mutex::new(conn),
