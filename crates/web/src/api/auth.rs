@@ -128,7 +128,20 @@ async fn login(
             tracing::debug!("login: before LDAP authenticate for '{}'", username);
             tracing::info!("Attempting LDAP auth for '{}' against {}", username, ldap_config.url);
             // LDAP auth is async (uses tokio-native-tls) — run directly
-            let ldap_auth_result = ldap_config.authenticate(username, &body.password).await;
+            // LDAP auth with a 5-second timeout to prevent blocking the
+            // tokio runtime when the LDAP server is slow or unreachable.
+            let ldap_auth_result = match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                ldap_config.authenticate(username, &body.password),
+            ).await {
+                Ok(result) => result,
+                Err(_) => {
+                    tracing::warn!("LDAP auth timed out after 5s for '{}'", username);
+                    Err(gitsvnsync_core::ldap_auth::LdapAuthError::ConnectionFailed(
+                        "LDAP connection timed out after 5 seconds".into()
+                    ))
+                }
+            };
             match ldap_auth_result {
                 Ok(ldap_user) => {
                     tracing::debug!("login: LDAP auth succeeded for '{}', provisioning user", username);
