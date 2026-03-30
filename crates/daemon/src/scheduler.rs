@@ -124,19 +124,16 @@ impl Scheduler {
         let sched_stats = self.stats.clone();
         let ws = self.ws_broadcast.clone();
 
-        // Run the sync cycle on a dedicated thread with its own tokio
-        // runtime. This completely isolates blocking I/O (libgit2 fetch,
-        // std::process::Command for SVN) from the main async runtime
-        // that serves the web UI. A separate runtime avoids the deadlock
-        // that occurs with spawn_blocking + Handle::block_on when the
-        // async code uses tokio::sync::Mutex.
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("failed to build sync runtime");
-            let result = rt.block_on(engine.run_sync_cycle());
-            match result {
+        // Run the sync cycle in a tokio::spawn task. The sync engine
+        // uses tokio::sync::Mutex internally, so it must run on the
+        // same runtime. Blocking I/O (libgit2, CLI commands) will
+        // temporarily occupy a worker thread, but with worker_threads=16
+        // the web server has plenty of capacity.
+        //
+        // The key stability fix: we check is_running() above so at most
+        // ONE sync cycle runs at a time, using at most ONE worker thread.
+        tokio::spawn(async move {
+            match engine.run_sync_cycle().await {
                 Ok(sync_stats) => {
                     sched_stats.consecutive_errors.store(0, Ordering::SeqCst);
                     sched_stats
