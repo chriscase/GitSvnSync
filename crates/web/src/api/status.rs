@@ -85,9 +85,12 @@ async fn get_status(
     )
     .await?;
 
-    let status = state
-        .sync_engine
-        .get_status()
+    // Run get_status on a blocking thread to avoid blocking the web server
+    // if the sync engine's DB mutex is held by a running sync cycle.
+    let engine = state.sync_engine.clone();
+    let status = tokio::task::spawn_blocking(move || engine.get_status())
+        .await
+        .map_err(|e| AppError::Internal(format!("spawn_blocking: {}", e)))?
         .map_err(|e| AppError::Internal(format!("failed to get sync status: {}", e)))?;
 
     Ok(Json(StatusResponse {
@@ -149,86 +152,81 @@ async fn get_system_metrics(
     )
     .await?;
 
-    let data_dir = &state.config.daemon.data_dir;
+    // All system metric collection involves blocking I/O (reading /proc,
+    // scanning directories, calling libc::statvfs). Run on a blocking thread
+    // so we never stall the async web server.
+    let state_clone = state.clone();
+    let metrics = tokio::task::spawn_blocking(move || {
+        let data_dir = &state_clone.config.daemon.data_dir;
 
-    // Disk metrics for the data directory.
-    let (disk_free_bytes, disk_total_bytes) = disk_usage(data_dir);
-    let disk_usage_percent = if disk_total_bytes > 0 {
-        ((disk_total_bytes - disk_free_bytes) as f64 / disk_total_bytes as f64) * 100.0
-    } else {
-        0.0
-    };
+        let (disk_free_bytes, disk_total_bytes) = disk_usage(data_dir);
+        let disk_usage_percent = if disk_total_bytes > 0 {
+            ((disk_total_bytes - disk_free_bytes) as f64 / disk_total_bytes as f64) * 100.0
+        } else {
+            0.0
+        };
 
-    // Memory metrics.
-    let (mem_used_bytes, mem_total_bytes) = mem_usage();
-    let mem_usage_percent = if mem_total_bytes > 0 {
-        (mem_used_bytes as f64 / mem_total_bytes as f64) * 100.0
-    } else {
-        0.0
-    };
+        let (mem_used_bytes, mem_total_bytes) = mem_usage();
+        let mem_usage_percent = if mem_total_bytes > 0 {
+            (mem_used_bytes as f64 / mem_total_bytes as f64) * 100.0
+        } else {
+            0.0
+        };
 
-    // CPU load averages.
-    let (cpu_load_1m, cpu_load_5m, cpu_load_15m) = cpu_load();
+        let (cpu_load_1m, cpu_load_5m, cpu_load_15m) = cpu_load();
+        let (git_push_active, git_push_pid, git_push_elapsed_secs) = find_git_push_process();
 
-    // Git push process detection.
-    let (git_push_active, git_push_pid, git_push_elapsed_secs) = find_git_push_process();
+        let git_repo_path = data_dir.join("git-repo");
+        let data_dir_size_bytes = dir_size(&git_repo_path);
 
-    // Data directory (git-repo) size.
-    let git_repo_path = data_dir.join("git-repo");
-    let data_dir_size_bytes = dir_size(&git_repo_path);
+        let (net_bytes_sent, net_bytes_recv) = read_net_bytes();
 
-    // Network I/O from /proc/net/dev
-    let (net_bytes_sent, net_bytes_recv) = read_net_bytes();
-
-    // Compute server-side network rates by diffing with previous snapshot
-    let (net_up_bytes_per_sec, net_down_bytes_per_sec) = {
-        let mut prev = state.prev_net_snapshot.lock().unwrap_or_else(|e| e.into_inner());
-        let now = std::time::Instant::now();
-        let rates = if let Some((prev_sent, prev_recv, prev_time)) = prev.as_ref() {
-            let dt = now.duration_since(*prev_time).as_secs_f64();
-            if dt > 0.5 {
-                let up = (net_bytes_sent.saturating_sub(*prev_sent)) as f64 / dt;
-                let down = (net_bytes_recv.saturating_sub(*prev_recv)) as f64 / dt;
-                (up, down)
+        let (net_up_bytes_per_sec, net_down_bytes_per_sec) = {
+            let mut prev = state_clone.prev_net_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+            let now = std::time::Instant::now();
+            let rates = if let Some((prev_sent, prev_recv, prev_time)) = prev.as_ref() {
+                let dt = now.duration_since(*prev_time).as_secs_f64();
+                if dt > 0.5 {
+                    let up = (net_bytes_sent.saturating_sub(*prev_sent)) as f64 / dt;
+                    let down = (net_bytes_recv.saturating_sub(*prev_recv)) as f64 / dt;
+                    (up, down)
+                } else {
+                    (0.0, 0.0)
+                }
             } else {
                 (0.0, 0.0)
-            }
-        } else {
-            (0.0, 0.0)
+            };
+            *prev = Some((net_bytes_sent, net_bytes_recv, now));
+            rates
         };
-        *prev = Some((net_bytes_sent, net_bytes_recv, now));
-        rates
-    };
 
-    // SVN process detection + import awareness
-    let svn_proc = is_process_running("svn");
-    let import_progress = state.import_progress.read().await;
-    let import_phase = &import_progress.phase;
-    let svn_active = svn_proc || matches!(import_phase, gitsvnsync_core::import::ImportPhase::Importing);
-    // Also detect push from import state
-    let git_push_active = git_push_active || matches!(import_phase, gitsvnsync_core::import::ImportPhase::FinalPush);
-    drop(import_progress);
+        let svn_active = is_process_running("svn");
 
-    Ok(Json(SystemMetrics {
-        disk_free_bytes,
-        disk_total_bytes,
-        disk_usage_percent,
-        mem_used_bytes,
-        mem_total_bytes,
-        mem_usage_percent,
-        cpu_load_1m,
-        cpu_load_5m,
-        cpu_load_15m,
-        git_push_active,
-        git_push_pid,
-        git_push_elapsed_secs,
-        data_dir_size_bytes,
-        net_bytes_sent,
-        net_bytes_recv,
-        net_up_bytes_per_sec,
-        net_down_bytes_per_sec,
-        svn_active,
-    }))
+        SystemMetrics {
+            disk_free_bytes,
+            disk_total_bytes,
+            disk_usage_percent,
+            mem_used_bytes,
+            mem_total_bytes,
+            mem_usage_percent,
+            cpu_load_1m,
+            cpu_load_5m,
+            cpu_load_15m,
+            git_push_active,
+            git_push_pid,
+            git_push_elapsed_secs,
+            data_dir_size_bytes,
+            net_bytes_sent,
+            net_bytes_recv,
+            net_up_bytes_per_sec,
+            net_down_bytes_per_sec,
+            svn_active,
+        }
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("spawn_blocking: {}", e)))?;
+
+    Ok(Json(metrics))
 }
 
 // ---------------------------------------------------------------------------
