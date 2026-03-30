@@ -117,56 +117,57 @@ impl Scheduler {
         });
         let _ = self.ws_broadcast.send(start_msg.to_string());
 
-        // Run the sync cycle
-        match self.sync_engine.run_sync_cycle().await {
-            Ok(stats) => {
-                self.stats.consecutive_errors.store(0, Ordering::SeqCst);
+        // Run the sync cycle in a spawned task so blocking I/O
+        // (libgit2 fetch, svn commands) doesn't block the scheduler
+        // or starve the tokio runtime.
+        let engine = self.sync_engine.clone();
+        let sched_stats = self.stats.clone();
+        let ws = self.ws_broadcast.clone();
+        tokio::spawn(async move {
+            match engine.run_sync_cycle().await {
+                Ok(sync_stats) => {
+                    sched_stats.consecutive_errors.store(0, Ordering::SeqCst);
+                    sched_stats
+                        .total_conflicts
+                        .fetch_add(sync_stats.conflicts_detected as u64, Ordering::SeqCst);
 
-                self.stats
-                    .total_conflicts
-                    .fetch_add(stats.conflicts_detected as u64, Ordering::SeqCst);
+                    info!(
+                        cycle = cycle_num,
+                        svn_to_git = sync_stats.svn_to_git_count,
+                        git_to_svn = sync_stats.git_to_svn_count,
+                        conflicts = sync_stats.conflicts_detected,
+                        auto_resolved = sync_stats.conflicts_auto_resolved,
+                        "sync cycle completed successfully"
+                    );
 
-                info!(
-                    cycle = cycle_num,
-                    svn_to_git = stats.svn_to_git_count,
-                    git_to_svn = stats.git_to_svn_count,
-                    conflicts = stats.conflicts_detected,
-                    auto_resolved = stats.conflicts_auto_resolved,
-                    "sync cycle completed successfully"
-                );
+                    let end_msg = serde_json::json!({
+                        "type": "sync_completed",
+                        "cycle": cycle_num,
+                        "svn_to_git": sync_stats.svn_to_git_count,
+                        "git_to_svn": sync_stats.git_to_svn_count,
+                        "conflicts": sync_stats.conflicts_detected,
+                    });
+                    let _ = ws.send(end_msg.to_string());
+                }
+                Err(e) => {
+                    let errors = sched_stats.total_errors.fetch_add(1, Ordering::SeqCst) + 1;
+                    let consecutive = sched_stats.consecutive_errors.fetch_add(1, Ordering::SeqCst) + 1;
+                    error!(
+                        cycle = cycle_num,
+                        error = %e,
+                        total_errors = errors,
+                        consecutive_errors = consecutive,
+                        "sync cycle failed"
+                    );
 
-                // Broadcast sync completed
-                let end_msg = serde_json::json!({
-                    "type": "sync_completed",
-                    "cycle": cycle_num,
-                    "svn_to_git": stats.svn_to_git_count,
-                    "git_to_svn": stats.git_to_svn_count,
-                    "conflicts": stats.conflicts_detected,
-                    "conflicts_auto_resolved": stats.conflicts_auto_resolved,
-                    "started_at": stats.started_at,
-                    "completed_at": stats.completed_at,
-                });
-                let _ = self.ws_broadcast.send(end_msg.to_string());
+                    let err_msg = serde_json::json!({
+                        "type": "sync_failed",
+                        "cycle": cycle_num,
+                        "error": e.to_string(),
+                    });
+                    let _ = ws.send(err_msg.to_string());
+                }
             }
-            Err(e) => {
-                let errors = self.stats.total_errors.fetch_add(1, Ordering::SeqCst) + 1;
-                let consecutive = self.stats.consecutive_errors.fetch_add(1, Ordering::SeqCst) + 1;
-                error!(
-                    cycle = cycle_num,
-                    error = %e,
-                    total_errors = errors,
-                    consecutive_errors = consecutive,
-                    "sync cycle failed"
-                );
-
-                // Broadcast failure
-                let err_msg = serde_json::json!({
-                    "type": "sync_failed",
-                    "cycle": cycle_num,
-                    "error": e.to_string(),
-                });
-                let _ = self.ws_broadcast.send(err_msg.to_string());
-            }
-        }
+        });
     }
 }
