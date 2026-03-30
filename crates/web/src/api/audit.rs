@@ -70,10 +70,7 @@ async fn list_audit(
         query.offset.unwrap_or(0)
     };
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     let total_count = db
         .count_audit_log()

@@ -64,7 +64,7 @@ pub fn routes() -> Router<Arc<AppState>> {
 async fn auth_info(
     State(state): State<Arc<AppState>>,
 ) -> Json<serde_json::Value> {
-    let db = state.db.lock().unwrap();
+    let db = &state.db;
     let ldap_enabled = db.is_ldap_enabled().unwrap_or(false);
     let ldap_domain = if ldap_enabled {
         db.load_ldap_config().ok().flatten().map(|cfg| {
@@ -85,8 +85,6 @@ async fn auth_info(
     } else {
         None
     };
-    drop(db);
-
     Json(serde_json::json!({
         "ldap_enabled": ldap_enabled,
         "ldap_domain": ldap_domain,
@@ -99,10 +97,7 @@ async fn login(
 ) -> Result<Json<LoginResponse>, AppError> {
     // Check if any users exist in the database (multi-user mode).
     let has_users = {
-        let db = state
-            .db
-            .lock()
-            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+        let db = &state.db;
         db.count_users()
             .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
             > 0
@@ -119,10 +114,7 @@ async fn login(
         // Try LDAP authentication first (if enabled)
         // -------------------------------------------------------------------
         let ldap_result = {
-            let db = state
-                .db
-                .lock()
-                .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+            let db = &state.db;
             let ldap_enabled = db.is_ldap_enabled().unwrap_or(false);
             if ldap_enabled {
                 db.load_ldap_config()
@@ -133,15 +125,29 @@ async fn login(
         };
 
         if let Some(ref ldap_config) = ldap_result {
+            tracing::debug!("login: before LDAP authenticate for '{}'", username);
             tracing::info!("Attempting LDAP auth for '{}' against {}", username, ldap_config.url);
-            match ldap_config.authenticate(username, &body.password).await {
+            // Run LDAP auth on a blocking thread since it does blocking TLS I/O
+            let ldap_auth_result = {
+                let cfg = ldap_config.clone();
+                let u = username.to_string();
+                let p = body.password.clone();
+                tokio::task::spawn_blocking(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap();
+                    rt.block_on(cfg.authenticate(&u, &p))
+                })
+                .await
+                .map_err(|e| AppError::Internal(format!("spawn_blocking: {}", e)))?
+            };
+            match ldap_auth_result {
                 Ok(ldap_user) => {
+                    tracing::debug!("login: LDAP auth succeeded for '{}', provisioning user", username);
                     // LDAP auth succeeded — provision or update local user
                     let (token, expires_at, user_info) = {
-                        let db = state
-                            .db
-                            .lock()
-                            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+                        let db = &state.db;
 
                         let local_user = db
                             .get_user_by_username(username)
@@ -229,6 +235,7 @@ async fn login(
                 }
                 Err(e) => {
                     // LDAP failed — fall through to local auth
+                    tracing::debug!("login: LDAP auth failed, falling through to local auth");
                     tracing::warn!("LDAP auth failed for '{}': {}", username, e);
                 }
             }
@@ -237,12 +244,8 @@ async fn login(
         // -------------------------------------------------------------------
         // Local bcrypt authentication
         // -------------------------------------------------------------------
-        // Scope the db lock so it's dropped before any .await
         let (token, expires_at, user_info) = {
-            let db = state
-                .db
-                .lock()
-                .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+            let db = &state.db;
 
             let user = db
                 .get_user_by_username(username)
@@ -286,7 +289,6 @@ async fn login(
             (token, expires_at, info)
         };
 
-        // Now safe to .await — db lock is dropped
         {
             let mut sessions = state.sessions.write().await;
             sessions.insert(token.clone(), expires_at);
@@ -340,14 +342,8 @@ async fn logout(
     State(state): State<Arc<AppState>>,
     Json(body): Json<LogoutRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Remove from DB sessions first (no .await needed)
-    let _ = {
-        let db = state
-            .db
-            .lock()
-            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
-        db.delete_session(&body.token)
-    };
+    // Remove from DB sessions first
+    let _ = state.db.delete_session(&body.token);
 
     // Remove from in-memory sessions
     {
@@ -370,12 +366,9 @@ async fn verify(
     State(state): State<Arc<AppState>>,
     Json(body): Json<VerifyRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Check DB sessions first (scoped so lock is dropped before .await)
+    // Check DB sessions first
     let db_result = {
-        let db = state
-            .db
-            .lock()
-            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+        let db = &state.db;
         if let Ok(Some(session)) = db.get_session(&body.token) {
             if let Ok(Some(user)) = db.get_user(&session.user_id) {
                 Some(serde_json::json!({
@@ -430,13 +423,9 @@ async fn me(
         .and_then(|h| h.strip_prefix("Bearer "))
         .ok_or_else(|| AppError::Unauthorized("missing or invalid Authorization header".into()))?;
 
-    // Check DB session (scoped so lock is dropped before .await)
+    // Check DB session
     let db_result = {
-        let db = state
-            .db
-            .lock()
-            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
-
+        let db = &state.db;
         if let Ok(Some(session)) = db.get_session(token) {
             if let Ok(Some(user)) = db.get_user(&session.user_id) {
                 Some(serde_json::json!({
@@ -487,15 +476,9 @@ pub async fn validate_session(
 ) -> Result<(), AppError> {
     // If no admin password is configured AND no users exist, skip authentication entirely
     if state.config.web.admin_password.is_none() {
-        let has_users = {
-            let db = state
-                .db
-                .lock()
-                .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
-            db.count_users()
-                .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
-                > 0
-        };
+        let has_users = state.db.count_users()
+            .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
+            > 0;
         if !has_users {
             return Ok(());
         }
@@ -507,10 +490,7 @@ pub async fn validate_session(
 
     // Check DB sessions first
     {
-        let db = state
-            .db
-            .lock()
-            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+        let db = &state.db;
         if let Ok(Some(_session)) = db.get_session(token) {
             // Valid DB session — also prune expired sessions opportunistically
             let _ = db.prune_expired_sessions();
@@ -520,14 +500,13 @@ pub async fn validate_session(
 
     // Fallback to in-memory sessions (backward compat)
     let now = Utc::now();
-    let mut sessions = state.sessions.write().await;
-    sessions.retain(|_, expiry| *expiry > now);
-
+    let sessions = state.sessions.read().await;
     if let Some(expires_at) = sessions.get(token) {
         if *expires_at > now {
             return Ok(());
         }
     }
+    // Don't prune here — let login/logout handle pruning
 
     Err(AppError::Unauthorized("session expired or invalid".into()))
 }
@@ -540,15 +519,9 @@ pub async fn validate_session_with_role(
 ) -> Result<(String, String), AppError> {
     // If no admin password is configured AND no users exist, skip auth
     if state.config.web.admin_password.is_none() {
-        let has_users = {
-            let db = state
-                .db
-                .lock()
-                .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
-            db.count_users()
-                .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
-                > 0
-        };
+        let has_users = state.db.count_users()
+            .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
+            > 0;
         if !has_users {
             return Ok(("legacy".into(), "admin".into()));
         }
@@ -560,10 +533,7 @@ pub async fn validate_session_with_role(
 
     // Check DB sessions first
     {
-        let db = state
-            .db
-            .lock()
-            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+        let db = &state.db;
         if let Ok(Some(session)) = db.get_session(token) {
             if let Ok(Some(user)) = db.get_user(&session.user_id) {
                 return Ok((user.id, user.role));

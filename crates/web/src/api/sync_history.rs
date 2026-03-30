@@ -81,10 +81,7 @@ async fn list_commit_map(
 
     let limit = query.limit.unwrap_or(100).min(500);
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     // Support optional repo_id filtering
     let conn = db.conn();
@@ -135,10 +132,7 @@ async fn list_sync_records(
 
     let limit = query.limit.unwrap_or(100).min(500);
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     let conn = db.conn();
     let (sql, params_list): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(ref rid) = query.repo_id {

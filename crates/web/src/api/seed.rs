@@ -46,10 +46,7 @@ async fn seed_data(
     )
     .await?;
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     let conn = db.conn();
 

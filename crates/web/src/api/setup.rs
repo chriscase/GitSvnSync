@@ -185,10 +185,7 @@ async fn get_setup_config(
 
     let cfg = &state.config;
 
-    // Check which secrets exist in the database (lock the mutex)
-    let db = state.db.lock().map_err(|e| {
-        AppError::Internal(format!("DB lock failed: {}", e))
-    })?;
+    let db = &state.db;
 
     let svn_password_set = db
         .get_state("secret_svn_password")
@@ -213,8 +210,6 @@ async fn get_setup_config(
         .map(|v| !v.is_empty())
         .unwrap_or(false)
         || cfg.web.admin_password.is_some();
-
-    drop(db); // release lock
 
     Ok(Json(SetupConfigResponse {
         svn_url: cfg.svn.url.clone(),
@@ -588,10 +583,7 @@ async fn apply_config(
             }
 
             // Also store in DB for the dashboard to display
-            let db = state
-                .db
-                .lock()
-                .map_err(|e| AppError::Internal(format!("db lock error: {}", e)))?;
+            let db = &state.db;
             let json_val = serde_json::to_string(mappings).unwrap_or_default();
             let now = chrono::Utc::now().to_rfc3339();
             let _ = db.conn().execute(
@@ -603,10 +595,7 @@ async fn apply_config(
 
     // Store secrets in DB (never written to TOML file)
     {
-        let db = state
-            .db
-            .lock()
-            .map_err(|e| AppError::Internal(format!("db lock error: {}", e)))?;
+        let db = &state.db;
         let now = chrono::Utc::now().to_rfc3339();
 
         if let Some(ref password) = body.svn_password {
@@ -718,10 +707,7 @@ async fn start_import(
 
     // Load secrets from DB (fallback for env vars not being set)
     let (db_svn_password, db_git_token) = {
-        let db = state
-            .db
-            .lock()
-            .map_err(|e| AppError::Internal(format!("db lock error: {}", e)))?;
+        let db = &state.db;
         let conn = db.conn();
         let svn_pw: Option<String> = conn
             .query_row(
@@ -903,9 +889,7 @@ async fn import_status(
     // If in-memory progress shows Idle, check the DB for persisted state
     // (e.g. after a daemon restart mid-import).
     if p.phase == ImportPhase::Idle {
-        let db = state.db.lock().map_err(|e| {
-            AppError::Internal(format!("DB lock failed: {}", e))
-        })?;
+        let db = &state.db;
         if let Ok(Some(db_progress)) = db.load_import_progress() {
             if db_progress.phase != ImportPhase::Idle {
                 return Ok(Json(db_progress));

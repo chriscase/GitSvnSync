@@ -31,7 +31,7 @@ use gitsvnsync_core::sync_engine::SyncEngine;
 
 /// Shared application state accessible from all handlers.
 pub struct AppState {
-    pub db: std::sync::Mutex<Database>,
+    pub db: Database,
     pub sync_engine: Arc<SyncEngine>,
     pub config: AppConfig,
     /// Channel for triggering immediate sync cycles.
@@ -65,7 +65,7 @@ impl WebServer {
     ) -> Self {
         let (ws_tx, _) = broadcast::channel(256);
         let state = Arc::new(AppState {
-            db: std::sync::Mutex::new(db),
+            db,
             sync_engine,
             config,
             sync_trigger,

@@ -87,11 +87,18 @@ async fn get_status(
 
     // Run get_status on a blocking thread to avoid blocking the web server
     // if the sync engine's DB mutex is held by a running sync cycle.
+    tracing::debug!("get_status: before spawn_blocking for sync_engine.get_status()");
     let engine = state.sync_engine.clone();
-    let status = tokio::task::spawn_blocking(move || engine.get_status())
+    let status = tokio::task::spawn_blocking(move || {
+        tracing::debug!("get_status: inside spawn_blocking, calling sync_engine.get_status()");
+        let result = engine.get_status();
+        tracing::debug!("get_status: sync_engine.get_status() returned");
+        result
+    })
         .await
         .map_err(|e| AppError::Internal(format!("spawn_blocking: {}", e)))?
         .map_err(|e| AppError::Internal(format!("failed to get sync status: {}", e)))?;
+    tracing::debug!("get_status: spawn_blocking completed successfully");
 
     Ok(Json(StatusResponse {
         state: status.state.to_string(),
@@ -117,10 +124,7 @@ async fn reset_errors(
     )
     .await?;
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     let cleared = db
         .clear_errors()
@@ -155,8 +159,10 @@ async fn get_system_metrics(
     // All system metric collection involves blocking I/O (reading /proc,
     // scanning directories, calling libc::statvfs). Run on a blocking thread
     // so we never stall the async web server.
+    tracing::debug!("get_system_metrics: before spawn_blocking");
     let state_clone = state.clone();
     let metrics = tokio::task::spawn_blocking(move || {
+        tracing::debug!("get_system_metrics: inside spawn_blocking");
         let data_dir = &state_clone.config.daemon.data_dir;
 
         let (disk_free_bytes, disk_total_bytes) = disk_usage(data_dir);
@@ -225,6 +231,7 @@ async fn get_system_metrics(
     })
     .await
     .map_err(|e| AppError::Internal(format!("spawn_blocking: {}", e)))?;
+    tracing::debug!("get_system_metrics: spawn_blocking completed");
 
     Ok(Json(metrics))
 }

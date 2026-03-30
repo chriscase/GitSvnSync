@@ -126,10 +126,7 @@ async fn list_users(
         return Err(AppError::Unauthorized("admin access required".into()));
     }
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     let users = db
         .list_users()
@@ -181,10 +178,7 @@ async fn create_user(
         updated_at: now,
     };
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     db.insert_user(&user)
         .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
@@ -208,10 +202,7 @@ async fn get_user(
         return Err(AppError::Unauthorized("access denied".into()));
     }
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     let user = db
         .get_user(&id)
@@ -253,10 +244,7 @@ async fn update_user(
         }
     }
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     let existing = db
         .get_user(&id)
@@ -307,10 +295,7 @@ async fn disable_user(
         return Err(AppError::Unauthorized("admin access required".into()));
     }
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     db.disable_user(&id)
         .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
@@ -340,10 +325,7 @@ async fn list_credentials(
         return Err(AppError::Unauthorized("access denied".into()));
     }
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     let creds = db
         .list_user_credentials(&id)
@@ -386,10 +368,7 @@ async fn create_credential(
         ));
     }
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     // Get encryption key
     let enc_key = gitsvnsync_core::crypto::get_or_create_encryption_key(&db)
@@ -441,10 +420,7 @@ async fn delete_credential(
         return Err(AppError::Unauthorized("access denied".into()));
     }
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     // Verify the credential belongs to the user
     let cred = db
@@ -521,10 +497,7 @@ async fn get_ldap_config(
         return Err(AppError::Unauthorized("admin access required".into()));
     }
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     let enabled = db.is_ldap_enabled().unwrap_or(false);
     let config = db
@@ -575,10 +548,7 @@ async fn save_ldap_config(
         return Err(AppError::Unauthorized("admin access required".into()));
     }
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     // If no password provided in the request, keep the existing one
     let bind_password = if body.bind_password.as_deref().is_some_and(|p| !p.is_empty()) {
@@ -630,10 +600,7 @@ async fn test_ldap_connection(
     let bind_password = if body.bind_password.as_deref().is_some_and(|p| !p.is_empty()) {
         body.bind_password
     } else {
-        let db = state
-            .db
-            .lock()
-            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+        let db = &state.db;
         db.load_ldap_config()
             .ok()
             .flatten()

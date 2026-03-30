@@ -144,10 +144,7 @@ async fn get_identity_mappings(
     )
     .await?;
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     let value: Option<String> = db
         .get_state("identity_mappings")
@@ -177,10 +174,7 @@ async fn update_identity_mappings(
     let json_str = serde_json::to_string(&body.mappings)
         .map_err(|e| AppError::Internal(format!("serialize mappings: {}", e)))?;
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     db.set_state("identity_mappings", &json_str)
         .map_err(|e| AppError::Internal(format!("db error: {}", e)))?;

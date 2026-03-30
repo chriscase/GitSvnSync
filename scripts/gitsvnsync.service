@@ -21,6 +21,7 @@ ReadOnlyPaths=/etc/gitsvnsync
 PrivateTmp=true
 
 # Environment
+Environment=RUST_LOG=info,gitsvnsync_web=debug
 EnvironmentFile=-/etc/gitsvnsync/env
 
 # Logging

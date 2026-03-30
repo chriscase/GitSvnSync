@@ -175,10 +175,7 @@ async fn list_repos(
     )
     .await?;
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     let repos = db
         .list_repositories()
@@ -248,10 +245,7 @@ async fn create_repo(
         updated_at: now,
     };
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     db.insert_repository(&repo)
         .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
@@ -270,10 +264,7 @@ async fn get_repo(
     )
     .await?;
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     let repo = db
         .get_repository(&id)
@@ -299,10 +290,7 @@ async fn update_repo(
         return Err(AppError::Unauthorized("admin access required".into()));
     }
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     let existing = db
         .get_repository(&id)
@@ -351,10 +339,7 @@ async fn delete_repo(
         return Err(AppError::Unauthorized("admin access required".into()));
     }
 
-    let db = state
-        .db
-        .lock()
-        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
+    let db = &state.db;
 
     // Soft delete: disable the repository rather than removing it.
     let existing = db
@@ -390,11 +375,7 @@ async fn trigger_sync(
 
     // Verify the repository exists.
     {
-        let db = state
-            .db
-            .lock()
-            .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
-
+        let db = &state.db;
         let _repo = db
             .get_repository(&id)
             .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
