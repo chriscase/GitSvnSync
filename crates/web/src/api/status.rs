@@ -3,12 +3,18 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::AppState;
+
+/// Optional query parameters for repo-scoped endpoints.
+#[derive(Debug, Deserialize)]
+struct RepoQuery {
+    repo_id: Option<String>,
+}
 
 /// Health check response.
 #[derive(Serialize)]
@@ -78,6 +84,7 @@ async fn health_check() -> Json<HealthResponse> {
 async fn get_status(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
+    Query(query): Query<RepoQuery>,
 ) -> Result<Json<StatusResponse>, AppError> {
     crate::api::auth::validate_session(
         &state,
@@ -85,8 +92,8 @@ async fn get_status(
     )
     .await?;
 
-    let status = state
-        .sync_engine
+    let engine = state.get_engine(query.repo_id.as_deref()).await;
+    let status = engine
         .get_status()
         .map_err(|e| AppError::Internal(format!("failed to get sync status: {}", e)))?;
 
@@ -202,12 +209,25 @@ async fn get_system_metrics(
 
     // SVN process detection + import awareness
     let svn_proc = is_process_running("svn");
-    let import_progress = state.import_progress.read().await;
-    let import_phase = &import_progress.phase;
-    let svn_active = svn_proc || matches!(import_phase, gitsvnsync_core::import::ImportPhase::Importing);
+    // Check all per-repo import progress entries for active imports
+    let (any_importing, any_final_push) = {
+        let map = state.import_progress.read().await;
+        let mut importing = false;
+        let mut pushing = false;
+        for progress_lock in map.values() {
+            let p = progress_lock.read().await;
+            if matches!(p.phase, gitsvnsync_core::import::ImportPhase::Importing) {
+                importing = true;
+            }
+            if matches!(p.phase, gitsvnsync_core::import::ImportPhase::FinalPush) {
+                pushing = true;
+            }
+        }
+        (importing, pushing)
+    };
+    let svn_active = svn_proc || any_importing;
     // Also detect push from import state
-    let git_push_active = git_push_active || matches!(import_phase, gitsvnsync_core::import::ImportPhase::FinalPush);
-    drop(import_progress);
+    let git_push_active = git_push_active || any_final_push;
 
     Ok(Json(SystemMetrics {
         disk_free_bytes,

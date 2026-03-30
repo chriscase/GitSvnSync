@@ -1,7 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api, type Repository, type User } from '../api';
-import { GitBranch, Plus, Database, Clock } from 'lucide-react';
+import { GitBranch, Plus, Database, Clock, X } from 'lucide-react';
 
 function getStoredUser(): User | null {
   try {
@@ -22,15 +23,74 @@ function formatTimeAgo(isoDate: string): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+const inputClass =
+  'w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent';
+
+const selectClass =
+  'w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent';
+
+interface AddRepoForm {
+  name: string;
+  svn_url: string;
+  svn_branch: string;
+  svn_username: string;
+  git_provider: string;
+  git_api_url: string;
+  git_repo: string;
+  git_branch: string;
+  sync_mode: string;
+  poll_interval_secs: number;
+  lfs_threshold_mb: number;
+  auto_merge: boolean;
+  enabled: boolean;
+}
+
+const defaultForm: AddRepoForm = {
+  name: '',
+  svn_url: '',
+  svn_branch: 'trunk',
+  svn_username: '',
+  git_provider: 'github',
+  git_api_url: 'https://api.github.com',
+  git_repo: '',
+  git_branch: 'main',
+  sync_mode: 'direct',
+  poll_interval_secs: 300,
+  lfs_threshold_mb: 0,
+  auto_merge: false,
+  enabled: true,
+};
+
 export default function Repositories() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const user = getStoredUser();
   const isAdmin = user?.role === 'admin';
+
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [form, setForm] = useState<AddRepoForm>({ ...defaultForm });
 
   const { data: repos, isLoading, isError, error } = useQuery({
     queryKey: ['repos'],
     queryFn: api.getRepos,
   });
+
+  const createMutation = useMutation({
+    mutationFn: (data: Partial<Repository>) => api.createRepo(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['repos'] });
+      setShowAddModal(false);
+      setForm({ ...defaultForm });
+    },
+  });
+
+  function setField<K extends keyof AddRepoForm>(key: K, value: AddRepoForm[K]) {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function handleCreate() {
+    createMutation.mutate(form);
+  }
 
   if (isLoading) {
     return <div className="text-center py-8 text-gray-400">Loading repositories...</div>;
@@ -58,7 +118,7 @@ export default function Repositories() {
         </div>
         {isAdmin && (
           <button
-            onClick={() => navigate('/setup')}
+            onClick={() => setShowAddModal(true)}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors"
           >
             <Plus className="w-4 h-4" />
@@ -73,7 +133,7 @@ export default function Repositories() {
           <Database className="w-12 h-12 text-gray-600 mx-auto mb-4" />
           <p className="text-gray-400 text-lg">No repositories configured.</p>
           <p className="text-gray-500 text-sm mt-1">
-            Click "Add Repository" to get started.
+            Click &quot;Add Repository&quot; to get started.
           </p>
         </div>
       ) : (
@@ -115,6 +175,228 @@ export default function Repositories() {
               </div>
             </button>
           ))}
+        </div>
+      )}
+
+      {/* Add Repository Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 border border-gray-700 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            {/* Modal header */}
+            <div className="flex items-center justify-between p-6 border-b border-gray-700">
+              <h2 className="text-lg font-semibold text-gray-100">Add Repository</h2>
+              <button
+                onClick={() => { setShowAddModal(false); setForm({ ...defaultForm }); createMutation.reset(); }}
+                className="text-gray-400 hover:text-gray-200 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {createMutation.isError && (
+                <div className="bg-red-900/30 border border-red-700 rounded-lg p-3 text-red-300 text-sm">
+                  Failed to create repository: {createMutation.error?.message}
+                </div>
+              )}
+
+              {/* Name */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Repository Name</label>
+                <input
+                  type="text"
+                  className={inputClass}
+                  value={form.name}
+                  onChange={(e) => setField('name', e.target.value)}
+                  placeholder="My Project"
+                />
+              </div>
+
+              {/* SVN Section */}
+              <div>
+                <h3 className="text-sm font-medium text-gray-300 mb-3 flex items-center gap-2">
+                  <Database className="w-4 h-4 text-blue-400" />
+                  SVN Configuration
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">SVN URL</label>
+                    <input
+                      type="text"
+                      className={inputClass}
+                      value={form.svn_url}
+                      onChange={(e) => setField('svn_url', e.target.value)}
+                      placeholder="https://svn.example.com/repo"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Branch</label>
+                    <input
+                      type="text"
+                      className={inputClass}
+                      value={form.svn_branch}
+                      onChange={(e) => setField('svn_branch', e.target.value)}
+                      placeholder="trunk"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-sm text-gray-400 mb-1">Username</label>
+                    <input
+                      type="text"
+                      className={inputClass}
+                      value={form.svn_username}
+                      onChange={(e) => setField('svn_username', e.target.value)}
+                      placeholder="svn-user"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Git Section */}
+              <div>
+                <h3 className="text-sm font-medium text-gray-300 mb-3 flex items-center gap-2">
+                  <GitBranch className="w-4 h-4 text-purple-400" />
+                  Git Configuration
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Provider</label>
+                    <select
+                      className={selectClass}
+                      value={form.git_provider}
+                      onChange={(e) => setField('git_provider', e.target.value)}
+                    >
+                      <option value="github">GitHub</option>
+                      <option value="gitea">Gitea</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">API URL</label>
+                    <input
+                      type="text"
+                      className={inputClass}
+                      value={form.git_api_url}
+                      onChange={(e) => setField('git_api_url', e.target.value)}
+                      placeholder="https://api.github.com"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Repository</label>
+                    <input
+                      type="text"
+                      className={inputClass}
+                      value={form.git_repo}
+                      onChange={(e) => setField('git_repo', e.target.value)}
+                      placeholder="owner/repo"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Default Branch</label>
+                    <input
+                      type="text"
+                      className={inputClass}
+                      value={form.git_branch}
+                      onChange={(e) => setField('git_branch', e.target.value)}
+                      placeholder="main"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Sync Section */}
+              <div>
+                <h3 className="text-sm font-medium text-gray-300 mb-3 flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-green-400" />
+                  Sync Settings
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Sync Mode</label>
+                    <select
+                      className={selectClass}
+                      value={form.sync_mode}
+                      onChange={(e) => setField('sync_mode', e.target.value)}
+                    >
+                      <option value="direct">Direct</option>
+                      <option value="pr">Pull Request</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Poll Interval (seconds)</label>
+                    <input
+                      type="number"
+                      className={inputClass}
+                      value={form.poll_interval_secs}
+                      onChange={(e) => setField('poll_interval_secs', Number(e.target.value))}
+                      min={10}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">LFS Threshold (MB, 0 = disabled)</label>
+                    <input
+                      type="number"
+                      className={inputClass}
+                      value={form.lfs_threshold_mb}
+                      onChange={(e) => setField('lfs_threshold_mb', Number(e.target.value))}
+                      min={0}
+                    />
+                  </div>
+                  <div className="flex items-end gap-3">
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-1">Auto Merge</label>
+                      <button
+                        type="button"
+                        onClick={() => setField('auto_merge', !form.auto_merge)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                          form.auto_merge ? 'bg-blue-600' : 'bg-gray-600'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            form.auto_merge ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-1">Enabled</label>
+                      <button
+                        type="button"
+                        onClick={() => setField('enabled', !form.enabled)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                          form.enabled ? 'bg-green-600' : 'bg-gray-600'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            form.enabled ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal footer */}
+            <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-700">
+              <button
+                onClick={() => { setShowAddModal(false); setForm({ ...defaultForm }); createMutation.reset(); }}
+                className="px-4 py-2 rounded-lg border border-gray-600 text-gray-300 hover:text-white text-sm font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreate}
+                disabled={createMutation.isPending || !form.name.trim()}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                {createMutation.isPending ? 'Creating...' : 'Create Repository'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

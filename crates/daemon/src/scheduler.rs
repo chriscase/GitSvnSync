@@ -1,11 +1,15 @@
 //! Sync scheduler that runs sync cycles on a configurable interval and
 //! supports webhook-triggered immediate syncs.
+//!
+//! Supports multiple repositories: on each tick the scheduler iterates over
+//! all registered engines and spawns a sync cycle for each idle engine.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{broadcast, mpsc, Notify};
+use tokio::sync::{broadcast, mpsc, Notify, RwLock};
 use tokio::time;
 use tracing::{error, info, warn};
 
@@ -33,10 +37,12 @@ impl SchedulerStats {
 /// The sync scheduler.
 ///
 /// Runs sync cycles on a timer and also listens for webhook-triggered
-/// immediate sync requests. The sync engine's own lock prevents concurrent
-/// cycles, so the scheduler simply skips if the engine reports already running.
+/// immediate sync requests. Each tick iterates over all registered engines
+/// and spawns a sync cycle for each idle engine. The sync engine's own lock
+/// prevents concurrent cycles per engine.
 pub struct Scheduler {
-    sync_engine: Arc<SyncEngine>,
+    /// Per-repository sync engines keyed by repository ID.
+    engines: Arc<RwLock<HashMap<String, Arc<SyncEngine>>>>,
     poll_interval: Duration,
     sync_rx: mpsc::Receiver<()>,
     ws_broadcast: broadcast::Sender<String>,
@@ -44,14 +50,15 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
+    /// Create a new scheduler with a map of repository engines.
     pub fn new(
-        sync_engine: Arc<SyncEngine>,
+        engines: HashMap<String, Arc<SyncEngine>>,
         poll_interval: Duration,
         sync_rx: mpsc::Receiver<()>,
         ws_broadcast: broadcast::Sender<String>,
     ) -> Self {
         Self {
-            sync_engine,
+            engines: Arc::new(RwLock::new(engines)),
             poll_interval,
             sync_rx,
             ws_broadcast,
@@ -98,75 +105,91 @@ impl Scheduler {
         info!("scheduler stopped");
     }
 
-    /// Attempt to run a sync cycle. If the engine is already running, skip.
+    /// Attempt to run a sync cycle for all registered engines.
+    /// Engines that are already running are skipped. Each engine runs in its
+    /// own spawned task so that multiple repos sync concurrently.
     async fn maybe_run_cycle(&self, trigger: &str) {
-        // The sync engine has its own atomic lock; check it first.
-        if self.sync_engine.is_running() {
-            warn!(trigger, "skipping sync cycle: previous cycle still running");
-            return;
-        }
-
-        let cycle_num = self.stats.total_cycles.fetch_add(1, Ordering::SeqCst) + 1;
-        info!(cycle = cycle_num, trigger, "starting sync cycle");
-
-        // Broadcast sync started
-        let start_msg = serde_json::json!({
-            "type": "sync_started",
-            "cycle": cycle_num,
-            "trigger": trigger,
-        });
-        let _ = self.ws_broadcast.send(start_msg.to_string());
-
-        // Run the sync cycle
-        match self.sync_engine.run_sync_cycle().await {
-            Ok(stats) => {
-                self.stats.consecutive_errors.store(0, Ordering::SeqCst);
-
-                self.stats
-                    .total_conflicts
-                    .fetch_add(stats.conflicts_detected as u64, Ordering::SeqCst);
-
-                info!(
-                    cycle = cycle_num,
-                    svn_to_git = stats.svn_to_git_count,
-                    git_to_svn = stats.git_to_svn_count,
-                    conflicts = stats.conflicts_detected,
-                    auto_resolved = stats.conflicts_auto_resolved,
-                    "sync cycle completed successfully"
-                );
-
-                // Broadcast sync completed
-                let end_msg = serde_json::json!({
-                    "type": "sync_completed",
-                    "cycle": cycle_num,
-                    "svn_to_git": stats.svn_to_git_count,
-                    "git_to_svn": stats.git_to_svn_count,
-                    "conflicts": stats.conflicts_detected,
-                    "conflicts_auto_resolved": stats.conflicts_auto_resolved,
-                    "started_at": stats.started_at,
-                    "completed_at": stats.completed_at,
-                });
-                let _ = self.ws_broadcast.send(end_msg.to_string());
+        let engines = self.engines.read().await;
+        for (repo_id, engine) in engines.iter() {
+            // The sync engine has its own atomic lock; check it first.
+            if engine.is_running() {
+                warn!(trigger, repo_id, "skipping sync cycle: previous cycle still running");
+                continue;
             }
-            Err(e) => {
-                let errors = self.stats.total_errors.fetch_add(1, Ordering::SeqCst) + 1;
-                let consecutive = self.stats.consecutive_errors.fetch_add(1, Ordering::SeqCst) + 1;
-                error!(
-                    cycle = cycle_num,
-                    error = %e,
-                    total_errors = errors,
-                    consecutive_errors = consecutive,
-                    "sync cycle failed"
-                );
 
-                // Broadcast failure
-                let err_msg = serde_json::json!({
-                    "type": "sync_failed",
-                    "cycle": cycle_num,
-                    "error": e.to_string(),
-                });
-                let _ = self.ws_broadcast.send(err_msg.to_string());
-            }
+            let cycle_num = self.stats.total_cycles.fetch_add(1, Ordering::SeqCst) + 1;
+            info!(cycle = cycle_num, trigger, repo_id, "starting sync cycle");
+
+            // Broadcast sync started
+            let start_msg = serde_json::json!({
+                "type": "sync_started",
+                "cycle": cycle_num,
+                "trigger": trigger,
+                "repo_id": repo_id,
+            });
+            let _ = self.ws_broadcast.send(start_msg.to_string());
+
+            let engine = engine.clone();
+            let repo_id = repo_id.clone();
+            let stats = self.stats.clone();
+            let ws = self.ws_broadcast.clone();
+
+            tokio::spawn(async move {
+                match engine.run_sync_cycle().await {
+                    Ok(sync_stats) => {
+                        stats.consecutive_errors.store(0, Ordering::SeqCst);
+
+                        stats
+                            .total_conflicts
+                            .fetch_add(sync_stats.conflicts_detected as u64, Ordering::SeqCst);
+
+                        info!(
+                            cycle = cycle_num,
+                            repo_id,
+                            svn_to_git = sync_stats.svn_to_git_count,
+                            git_to_svn = sync_stats.git_to_svn_count,
+                            conflicts = sync_stats.conflicts_detected,
+                            auto_resolved = sync_stats.conflicts_auto_resolved,
+                            "sync cycle completed successfully"
+                        );
+
+                        // Broadcast sync completed
+                        let end_msg = serde_json::json!({
+                            "type": "sync_completed",
+                            "cycle": cycle_num,
+                            "repo_id": repo_id,
+                            "svn_to_git": sync_stats.svn_to_git_count,
+                            "git_to_svn": sync_stats.git_to_svn_count,
+                            "conflicts": sync_stats.conflicts_detected,
+                            "conflicts_auto_resolved": sync_stats.conflicts_auto_resolved,
+                            "started_at": sync_stats.started_at,
+                            "completed_at": sync_stats.completed_at,
+                        });
+                        let _ = ws.send(end_msg.to_string());
+                    }
+                    Err(e) => {
+                        let errors = stats.total_errors.fetch_add(1, Ordering::SeqCst) + 1;
+                        let consecutive = stats.consecutive_errors.fetch_add(1, Ordering::SeqCst) + 1;
+                        error!(
+                            cycle = cycle_num,
+                            repo_id,
+                            error = %e,
+                            total_errors = errors,
+                            consecutive_errors = consecutive,
+                            "sync cycle failed"
+                        );
+
+                        // Broadcast failure
+                        let err_msg = serde_json::json!({
+                            "type": "sync_failed",
+                            "cycle": cycle_num,
+                            "repo_id": repo_id,
+                            "error": e.to_string(),
+                        });
+                        let _ = ws.send(err_msg.to_string());
+                    }
+                }
+            });
         }
     }
 }

@@ -65,13 +65,35 @@ export default function Dashboard() {
     return `${Math.floor(hrs / 24)}d ago`;
   };
 
+  const [selectedRepoId, setSelectedRepoId] = useState<string>('all');
+
+  const selectedRepo = selectedRepoId !== 'all'
+    ? repos?.find(r => r.id === selectedRepoId)
+    : null;
+
+  const repoContextLabel = selectedRepo ? selectedRepo.name : 'All Repositories';
+
   const entries = recentActivity?.entries ?? [];
   const records = syncRecords?.entries ?? [];
   const cmEntries = commitMap?.entries ?? [];
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-gray-100">Dashboard</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-gray-100">Dashboard</h1>
+        {repos && repos.length > 1 && (
+          <select
+            value={selectedRepoId}
+            onChange={(e) => setSelectedRepoId(e.target.value)}
+            className="bg-gray-800 border border-gray-600 text-gray-200 rounded-md px-3 py-1.5 text-sm"
+          >
+            <option value="all">All Repositories</option>
+            {repos.map(r => (
+              <option key={r.id} value={r.id}>{r.name}</option>
+            ))}
+          </select>
+        )}
+      </div>
 
       {/* Import Progress Card */}
       <ImportProgressCard />
@@ -115,6 +137,9 @@ export default function Dashboard() {
       )}
 
       {/* Status Cards */}
+      <div className="mb-1">
+        <span className="text-xs text-blue-400">{repoContextLabel}</span>
+      </div>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <StatusCard
           title="Sync State"
@@ -174,6 +199,9 @@ export default function Dashboard() {
       <div className="bg-gray-800 shadow rounded-lg p-6 border border-gray-700">
         <h2 className="text-lg font-semibold text-gray-100 mb-4">
           Sync Position
+          {selectedRepo && (
+            <span className="ml-2 text-sm font-normal text-blue-400">— {selectedRepo.name}</span>
+          )}
         </h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div>
@@ -214,10 +242,18 @@ export default function Dashboard() {
         <div className="p-6 pb-3">
           <h2 className="text-lg font-semibold text-gray-100">
             Recent Sync Records
+            {selectedRepo && (
+              <span className="ml-2 text-sm font-normal text-blue-400">— {selectedRepo.name}</span>
+            )}
           </h2>
           <p className="text-sm text-gray-400 mt-1">
             Individual commits synced between SVN and Git (click to expand)
           </p>
+          {!selectedRepo && repos && repos.length > 1 && (
+            <p className="text-xs text-gray-500 mt-1">
+              Showing data from all repositories. Select a specific repository to filter.
+            </p>
+          )}
         </div>
         {records.length > 0 ? (
           <div className="divide-y divide-gray-700">
@@ -235,6 +271,9 @@ export default function Dashboard() {
         <div className="p-6 pb-3">
           <h2 className="text-lg font-semibold text-gray-100">
             Commit Map (SVN &harr; Git)
+            {selectedRepo && (
+              <span className="ml-2 text-sm font-normal text-blue-400">— {selectedRepo.name}</span>
+            )}
           </h2>
           <p className="text-sm text-gray-400 mt-1">
             Bidirectional mapping between SVN revisions and Git commits
@@ -282,6 +321,9 @@ export default function Dashboard() {
       <div className="bg-gray-800 shadow rounded-lg p-6 border border-gray-700">
         <h2 className="text-lg font-semibold text-gray-100 mb-4">
           Recent Activity
+          {selectedRepo && (
+            <span className="ml-2 text-sm font-normal text-blue-400">— {selectedRepo.name}</span>
+          )}
         </h2>
         {entries.length > 0 ? (
           <div className="space-y-2">

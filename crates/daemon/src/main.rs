@@ -6,6 +6,7 @@
 mod scheduler;
 mod signals;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -245,6 +246,23 @@ async fn main() -> Result<()> {
     ));
     info!("Sync engine initialized");
 
+    // Build per-repository engines map.
+    // For now, store the single default engine. The key comes from the
+    // auto-migrated repository row (if any), otherwise use a constant.
+    let mut engines: HashMap<String, Arc<SyncEngine>> = HashMap::new();
+    // Query repos from the engine's own DB reference to find the repo ID.
+    {
+        let repos = sync_engine.db().list_repositories().unwrap_or_default();
+        if let Some(repo) = repos.first() {
+            engines.insert(repo.id.clone(), sync_engine.clone());
+        }
+    }
+    // Always ensure the default key exists so helpers can find it.
+    engines
+        .entry(gitsvnsync_web::DEFAULT_REPO_KEY.to_string())
+        .or_insert_with(|| sync_engine.clone());
+    info!(count = engines.len(), "engines map initialized");
+
     // Create sync trigger channel (webhook -> scheduler)
     let (sync_tx, sync_rx) = tokio::sync::mpsc::channel::<()>(16);
 
@@ -252,6 +270,7 @@ async fn main() -> Result<()> {
     let web_server = WebServer::new(
         config.clone(),
         web_db,
+        engines.clone(),
         sync_engine.clone(),
         sync_tx.clone(),
         args.config.clone(),
@@ -270,10 +289,10 @@ async fn main() -> Result<()> {
     let shutdown = Arc::new(tokio::sync::Notify::new());
     let scheduler_shutdown = shutdown.clone();
 
-    // Create and start the scheduler
+    // Create and start the scheduler with all engines
     let poll_interval = std::time::Duration::from_secs(config.daemon.poll_interval_secs);
     let mut sched =
-        scheduler::Scheduler::new(sync_engine.clone(), poll_interval, sync_rx, ws_broadcast);
+        scheduler::Scheduler::new(engines, poll_interval, sync_rx, ws_broadcast);
 
     // Start the scheduler in a background task
     let scheduler_handle = tokio::spawn(async move {
