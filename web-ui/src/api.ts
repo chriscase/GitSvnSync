@@ -190,11 +190,7 @@ export const api = {
 
   getHealth: () => fetchJson<{ ok: boolean }>('/status/health'),
 
-  getSystemMetrics: async (): Promise<SystemMetrics> => {
-    const res = await fetch('/api/status/system');
-    if (!res.ok) throw new Error('Failed to fetch system metrics');
-    return res.json();
-  },
+  getSystemMetrics: () => fetchJson<SystemMetrics>('/status/system'),
 
   getConflicts: (status?: string) => {
     const params = new URLSearchParams();
