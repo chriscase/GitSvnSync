@@ -117,23 +117,22 @@ impl Scheduler {
         });
         let _ = self.ws_broadcast.send(start_msg.to_string());
 
-        // Run the sync cycle in a spawned task so blocking I/O
-        // (libgit2 fetch, svn commands) doesn't block the scheduler
-        // or starve the tokio runtime.
+        // Run the sync cycle on a dedicated blocking thread with its own
+        // single-threaded tokio runtime. This completely isolates blocking I/O
+        // (libgit2 network calls, SVN CLI commands) from the main web server
+        // runtime, preventing worker thread starvation.
         let engine = self.sync_engine.clone();
         let sched_stats = self.stats.clone();
         let ws = self.ws_broadcast.clone();
 
-        // Run the sync cycle in a tokio::spawn task. The sync engine
-        // uses tokio::sync::Mutex internally, so it must run on the
-        // same runtime. Blocking I/O (libgit2, CLI commands) will
-        // temporarily occupy a worker thread, but with worker_threads=16
-        // the web server has plenty of capacity.
-        //
-        // The key stability fix: we check is_running() above so at most
-        // ONE sync cycle runs at a time, using at most ONE worker thread.
-        tokio::spawn(async move {
-            match engine.run_sync_cycle().await {
+        tokio::task::spawn_blocking(move || {
+            // Create a lightweight single-threaded runtime for async SVN commands
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to create sync runtime");
+
+            match rt.block_on(engine.run_sync_cycle()) {
                 Ok(sync_stats) => {
                     sched_stats.consecutive_errors.store(0, Ordering::SeqCst);
                     sched_stats
