@@ -34,6 +34,9 @@ export default function Dashboard() {
     queryFn: api.getRepos,
   });
 
+  // Hooks must be called before any early returns
+  const [selectedRepoId, setSelectedRepoId] = useState<string>('all');
+
   if (statusLoading) {
     return <div className="text-center py-8 text-gray-400">Loading...</div>;
   }
@@ -64,8 +67,6 @@ export default function Dashboard() {
     if (hrs < 24) return `${hrs}h ${mins % 60}m ago`;
     return `${Math.floor(hrs / 24)}d ago`;
   };
-
-  const [selectedRepoId, setSelectedRepoId] = useState<string>('all');
 
   const selectedRepo = selectedRepoId !== 'all'
     ? repos?.find(r => r.id === selectedRepoId)
