@@ -333,7 +333,7 @@ async fn cmd_import(config_path: &str, mode: ImportMode) -> Result<()> {
             }
         }
     };
-    let git_client = std::sync::Arc::new(tokio::sync::Mutex::new(git_client));
+    let git_client = std::sync::Arc::new(std::sync::Mutex::new(git_client));
 
     let commit_format = crate::commit_format::CommitFormatter::new(&config.commit_format);
 

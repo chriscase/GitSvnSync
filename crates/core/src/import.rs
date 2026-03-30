@@ -369,7 +369,7 @@ pub struct ImportConfig {
 /// via `ws_broadcast` for the web UI.
 pub async fn run_full_import(
     svn_client: &SvnClient,
-    git_client: &Arc<tokio::sync::Mutex<GitClient>>,
+    git_client: &Arc<std::sync::Mutex<GitClient>>,
     identity_mapper: &IdentityMapper,
     db: &Database,
     file_policy: &FilePolicy,
@@ -414,9 +414,10 @@ pub async fn run_full_import(
 
                 // Install LFS hooks/filters in the repo so `git add` invokes
                 // the clean filter and creates pointer files for tracked patterns.
-                let git_guard = git_client.lock().await;
-                let rp = git_guard.repo_workdir();
-                drop(git_guard);
+                let rp = {
+                    let git_guard = git_client.lock().unwrap();
+                    git_guard.repo_workdir()
+                };
                 match crate::lfs::install_lfs_hooks(&rp) {
                     Ok(()) => {
                         log(
@@ -514,9 +515,10 @@ pub async fn run_full_import(
     )
     .await;
 
-    let git_guard = git_client.lock().await;
-    let repo_path = git_guard.repo_path().to_path_buf();
-    drop(git_guard);
+    let repo_path = {
+        let git_guard = git_client.lock().unwrap();
+        git_guard.repo_path().to_path_buf()
+    };
 
     let mut count = 0u64;
     let mut commits_since_push = 0u64;
@@ -618,29 +620,33 @@ pub async fn run_full_import(
         // invokes the LFS clean filter and stores large files as pointers.
         // libgit2's Index::add_all() bypasses LFS filters entirely.
         let use_cli = lfs_available && copy_stats.lfs_tracked > 0;
-        let git_client_guard = git_client.lock().await;
-        let commit_result = if use_cli {
-            debug!(
-                rev,
-                lfs_count = copy_stats.lfs_tracked,
-                "using git CLI for commit (LFS files present)"
-            );
-            git_client_guard.commit_via_cli(
-                &message,
-                &author_name,
-                &author_email,
-                &import_config.committer_name,
-                &import_config.committer_email,
-            )
-        } else {
-            git_client_guard.commit(
-                &message,
-                &author_name,
-                &author_email,
-                &import_config.committer_name,
-                &import_config.committer_email,
-            )
-        };
+        let (commit_result, push_repo_path) = {
+            let git_client_guard = git_client.lock().unwrap();
+            let rp = git_client_guard.repo_workdir();
+            let result = if use_cli {
+                debug!(
+                    rev,
+                    lfs_count = copy_stats.lfs_tracked,
+                    "using git CLI for commit (LFS files present)"
+                );
+                git_client_guard.commit_via_cli(
+                    &message,
+                    &author_name,
+                    &author_email,
+                    &import_config.committer_name,
+                    &import_config.committer_email,
+                )
+            } else {
+                git_client_guard.commit(
+                    &message,
+                    &author_name,
+                    &author_email,
+                    &import_config.committer_name,
+                    &import_config.committer_email,
+                )
+            };
+            (result, rp)
+        }; // git_client_guard dropped here, before any .await
         match commit_result {
             Ok(oid) => {
                 let sha = oid.to_string();
@@ -683,10 +689,7 @@ pub async fn run_full_import(
                     p.commits_created = count;
                 }
 
-                // IMPORTANT: Drop the git client lock BEFORE attempting push
-                // to avoid deadlock (tokio::sync::Mutex is not reentrant)
-                let repo_path = git_client_guard.repo_workdir();
-                drop(git_client_guard);
+                let repo_path = push_repo_path;
 
                 // Incremental push every PUSH_BATCH_SIZE commits
                 if commits_since_push >= PUSH_BATCH_SIZE {
@@ -811,7 +814,6 @@ pub async fn run_full_import(
             }
             Err(e) => {
                 // Empty commits (property-only revisions) are expected
-                drop(git_client_guard);
                 let msg = format!(
                     "[skip] r{}: no changes to commit ({})",
                     rev,
@@ -863,9 +865,10 @@ pub async fn run_full_import(
             )
             .await;
 
-            let git_guard = git_client.lock().await;
-            let repo_path = git_guard.repo_workdir();
-            drop(git_guard);
+            let repo_path = {
+                let git_guard = git_client.lock().unwrap();
+                git_guard.repo_workdir()
+            };
 
             let is_first_push = {
                 let p = progress.read().await;
@@ -948,11 +951,12 @@ pub async fn run_full_import(
             .ok();
     }
 
-    let git_guard = git_client.lock().await;
-    if let Ok(sha) = git_guard.get_head_sha() {
-        db.set_watermark("git_sha", &sha).ok();
+    {
+        let git_guard = git_client.lock().unwrap();
+        if let Ok(sha) = git_guard.get_head_sha() {
+            db.set_watermark("git_sha", &sha).ok();
+        }
     }
-    drop(git_guard);
 
     // Final audit log
     db.insert_audit_log(

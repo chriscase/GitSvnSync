@@ -811,7 +811,7 @@ async fn start_import(
         .ensure_remote_credentials("origin", git_token.as_deref())
         .map_err(|e| AppError::Internal(format!("failed to set git credentials: {}", e)))?;
 
-    let git_client = Arc::new(tokio::sync::Mutex::new(git_client));
+    let git_client = Arc::new(std::sync::Mutex::new(git_client));
 
     let identity_mapper = IdentityMapper::new(&config.identity)
         .map_err(|e| AppError::Internal(format!("failed to init identity mapper: {}", e)))?;

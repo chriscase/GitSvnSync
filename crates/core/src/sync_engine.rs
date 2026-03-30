@@ -83,7 +83,7 @@ pub struct SyncEngine {
     config: AppConfig,
     db: Database,
     svn_client: SvnClient,
-    git_client: Arc<tokio::sync::Mutex<GitClient>>,
+    git_client: Arc<std::sync::Mutex<GitClient>>,
     identity_mapper: Arc<IdentityMapper>,
     /// Atomic flag preventing concurrent sync cycles.
     running: Arc<AtomicBool>,
@@ -104,7 +104,7 @@ impl SyncEngine {
             config,
             db,
             svn_client,
-            git_client: Arc::new(tokio::sync::Mutex::new(git_client)),
+            git_client: Arc::new(std::sync::Mutex::new(git_client)),
             identity_mapper,
             running: Arc::new(AtomicBool::new(false)),
             started_at: Utc::now(),
@@ -353,7 +353,7 @@ impl SyncEngine {
 
             // Get the git repo path before locking, for apply_diff_to_path.
             let repo_path = {
-                let git = self.git_client.lock().await;
+                let git = self.git_client.lock().unwrap();
                 git.repo_path().to_path_buf()
             };
 
@@ -434,26 +434,26 @@ impl SyncEngine {
                 change.message, SYNC_MARKER, change.revision
             );
 
-            let git = self.git_client.lock().await;
-            let oid = git
-                .commit(
-                    &commit_message,
-                    &git_identity.name,
-                    &git_identity.email,
-                    "gitsvnsync",
-                    "sync@gitsvnsync.local",
-                )
-                .map_err(SyncError::GitError)?;
+            let git_sha = {
+                let git = self.git_client.lock().unwrap();
+                let oid = git
+                    .commit(
+                        &commit_message,
+                        &git_identity.name,
+                        &git_identity.email,
+                        "gitsvnsync",
+                        "sync@gitsvnsync.local",
+                    )
+                    .map_err(SyncError::GitError)?;
 
-            let git_sha = oid.to_string();
+                // 4. Push to remote.
+                let token = self.config.github.token.as_deref();
+                let branch = &self.config.github.default_branch;
+                git.push("origin", branch, token)
+                    .map_err(SyncError::GitError)?;
 
-            // 4. Push to remote.
-            let token = self.config.github.token.as_deref();
-            let branch = &self.config.github.default_branch;
-            git.push("origin", branch, token)
-                .map_err(SyncError::GitError)?;
-
-            drop(git);
+                oid.to_string()
+            };
 
             // 5. Record the sync only after successful write.
             let record = crate::models::SyncRecord {
@@ -516,11 +516,30 @@ impl SyncEngine {
                 .git_to_svn(&change.author_name, &change.author_email)
                 .map_err(SyncError::IdentityError)?;
 
-            // 1. Get changed files from the Git commit.
-            let git = self.git_client.lock().await;
-            let changed_files = git
-                .get_changed_files(&change.sha)
-                .map_err(SyncError::GitError)?;
+            // 1. Get changed files and their contents from the Git commit.
+            //    Lock is scoped in a block so the guard is dropped before any
+            //    .await (std::sync::MutexGuard is !Send).
+            let (_changed_files, file_contents) = {
+                let git = self.git_client.lock().unwrap();
+                let files = git
+                    .get_changed_files(&change.sha)
+                    .map_err(SyncError::GitError)?;
+                // Pre-fetch file contents for A(dd) and M(odify) actions.
+                let contents: Vec<(String, String, Option<Vec<u8>>)> = files
+                    .iter()
+                    .map(|(action, path)| {
+                        let content = if action != "D" {
+                            git.get_file_content_at_commit(&change.sha, path)
+                                .ok()
+                                .flatten()
+                        } else {
+                            None
+                        };
+                        (action.clone(), path.clone(), content)
+                    })
+                    .collect();
+                (files, contents)
+            };
 
             // 2. Prepare an SVN working copy. Use a temporary checkout.
             let svn_wc_dir = tempfile::tempdir()
@@ -534,7 +553,7 @@ impl SyncEngine {
             let mut added_files = Vec::new();
             let mut deleted_files = Vec::new();
 
-            for (action, file_path) in &changed_files {
+            for (action, file_path, content) in &file_contents {
                 let dst = svn_wc_dir.path().join(file_path);
                 match action.as_str() {
                     "D" => {
@@ -543,16 +562,13 @@ impl SyncEngine {
                         }
                     }
                     "A" => {
-                        // Get the file content from the Git commit.
-                        if let Ok(Some(content)) =
-                            git.get_file_content_at_commit(&change.sha, file_path)
-                        {
+                        if let Some(content) = content {
                             if let Some(parent) = dst.parent() {
                                 std::fs::create_dir_all(parent).map_err(|e| {
                                     SyncError::GitError(crate::errors::GitError::IoError(e))
                                 })?;
                             }
-                            std::fs::write(&dst, &content).map_err(|e| {
+                            std::fs::write(&dst, content).map_err(|e| {
                                 SyncError::GitError(crate::errors::GitError::IoError(e))
                             })?;
                             added_files.push(file_path.as_str());
@@ -560,22 +576,19 @@ impl SyncEngine {
                     }
                     _ => {
                         // Modified: overwrite content.
-                        if let Ok(Some(content)) =
-                            git.get_file_content_at_commit(&change.sha, file_path)
-                        {
+                        if let Some(content) = content {
                             if let Some(parent) = dst.parent() {
                                 std::fs::create_dir_all(parent).map_err(|e| {
                                     SyncError::GitError(crate::errors::GitError::IoError(e))
                                 })?;
                             }
-                            std::fs::write(&dst, &content).map_err(|e| {
+                            std::fs::write(&dst, content).map_err(|e| {
                                 SyncError::GitError(crate::errors::GitError::IoError(e))
                             })?;
                         }
                     }
                 }
             }
-            drop(git);
 
             // 4. Stage changes in SVN.
             if !added_files.is_empty() {
@@ -729,7 +742,7 @@ impl SyncEngine {
     }
 
     async fn fetch_git_changes(&self) -> Result<Vec<GitChangeSet>, SyncError> {
-        let git = self.git_client.lock().await;
+        let git = self.git_client.lock().unwrap();
 
         let token = self.config.github.token.as_deref();
         let branch = &self.config.github.default_branch;

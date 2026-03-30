@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tokio::sync::Mutex;
+use std::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use gitsvnsync_core::db::Database;
@@ -157,7 +157,7 @@ impl<'a> InitialImport<'a> {
             .await
             .context("failed to export SVN HEAD")?;
 
-        let git_client = self.git_client.lock().await;
+        let git_client = self.git_client.lock().unwrap();
         let repo_path = git_client.repo_path().to_path_buf();
         drop(git_client);
 
@@ -177,7 +177,7 @@ impl<'a> InitialImport<'a> {
             &chrono::Utc::now().to_rfc3339(),
         );
 
-        let git_client = self.git_client.lock().await;
+        let git_client = self.git_client.lock().unwrap();
         let oid = git_client
             .commit(
                 &message,
@@ -290,7 +290,7 @@ impl<'a> InitialImport<'a> {
             .await
             .context("failed to get SVN log")?;
 
-        let git_client_guard = self.git_client.lock().await;
+        let git_client_guard = self.git_client.lock().unwrap();
         let repo_path = git_client_guard.repo_path().to_path_buf();
         drop(git_client_guard);
 
@@ -358,7 +358,7 @@ impl<'a> InitialImport<'a> {
                 None => (self.config.developer.name.clone(), self.config.developer.email.clone()),
             };
 
-            let git_client = self.git_client.lock().await;
+            let git_client = self.git_client.lock().unwrap();
             match git_client.commit(
                 &message,
                 &author_name,
@@ -392,7 +392,7 @@ impl<'a> InitialImport<'a> {
 
         // Push all at once
         if count > 0 {
-            let git_client = self.git_client.lock().await;
+            let git_client = self.git_client.lock().unwrap();
             let token = self.config.github.token.as_deref();
             git_client
                 .push("origin", &self.config.github.default_branch, token)
@@ -407,7 +407,7 @@ impl<'a> InitialImport<'a> {
                 .ok();
         }
 
-        let git_client = self.git_client.lock().await;
+        let git_client = self.git_client.lock().unwrap();
         if let Ok(sha) = git_client.get_head_sha() {
             self.db.set_watermark("git_sha", &sha).ok();
         }
