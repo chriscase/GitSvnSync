@@ -8,6 +8,10 @@ import ServerMonitor from '../components/ServerMonitor';
 export default function Dashboard() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [selectedRepoId, setSelectedRepoId] = useState<string>('all');
+
+  const activeRepoId = selectedRepoId !== 'all' ? selectedRepoId : undefined;
+
   const { data: status, isLoading: statusLoading, isError, error } = useQuery({
     queryKey: ['status'],
     queryFn: api.getStatus,
@@ -15,27 +19,24 @@ export default function Dashboard() {
   });
 
   const { data: recentActivity } = useQuery({
-    queryKey: ['audit', 'recent'],
-    queryFn: () => api.getAuditLog(20),
+    queryKey: ['audit', 'recent', activeRepoId],
+    queryFn: () => api.getAuditLog(20, undefined, undefined, activeRepoId),
   });
 
   const { data: syncRecords } = useQuery({
-    queryKey: ['sync-records'],
-    queryFn: () => api.getSyncRecords(20),
+    queryKey: ['sync-records', activeRepoId],
+    queryFn: () => api.getSyncRecords(20, activeRepoId),
   });
 
   const { data: commitMap } = useQuery({
-    queryKey: ['commit-map'],
-    queryFn: () => api.getCommitMap(15),
+    queryKey: ['commit-map', activeRepoId],
+    queryFn: () => api.getCommitMap(15, activeRepoId),
   });
 
   const { data: repos } = useQuery({
     queryKey: ['repos'],
     queryFn: api.getRepos,
   });
-
-  // Hooks must be called before any early returns
-  const [selectedRepoId, setSelectedRepoId] = useState<string>('all');
 
   if (statusLoading) {
     return <div className="text-center py-8 text-gray-400">Loading...</div>;
@@ -73,6 +74,8 @@ export default function Dashboard() {
     : null;
 
   const repoContextLabel = selectedRepo ? selectedRepo.name : 'All Repositories';
+
+  const repoName = repos && repos.length === 1 ? repos[0].name : (repos && repos.length > 1 ? 'All' : 'Default');
 
   const entries = recentActivity?.entries ?? [];
   const records = syncRecords?.entries ?? [];
@@ -259,7 +262,7 @@ export default function Dashboard() {
         {records.length > 0 ? (
           <div className="divide-y divide-gray-700">
             {records.map((record) => (
-              <SyncRecordRow key={record.id} record={record} />
+              <SyncRecordRow key={record.id} record={record} repoName={repoName} />
             ))}
           </div>
         ) : (
@@ -285,6 +288,7 @@ export default function Dashboard() {
             <table className="min-w-full divide-y divide-gray-700">
               <thead>
                 <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Repository</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">SVN Rev</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Git SHA</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase">Direction</th>
@@ -296,6 +300,9 @@ export default function Dashboard() {
               <tbody className="divide-y divide-gray-700">
                 {cmEntries.map((cm: CommitMapEntry) => (
                   <tr key={cm.id} className="hover:bg-gray-700/50">
+                    <td className="px-6 py-3">
+                      <RepoBadge name={repoName} />
+                    </td>
                     <td className="px-6 py-3 text-sm font-mono text-blue-400">r{cm.svn_rev}</td>
                     <td className="px-6 py-3 text-sm font-mono text-purple-400 truncate max-w-[200px]">
                       {cm.git_sha.substring(0, 12)}
@@ -334,6 +341,7 @@ export default function Dashboard() {
                 className="flex items-center justify-between py-2 border-b border-gray-700 last:border-0"
               >
                 <div className="flex items-center space-x-3">
+                  <RepoBadge name={repoName} />
                   <SuccessIndicator success={entry.success} />
                   {entry.direction && (
                     <DirectionBadge direction={entry.direction} />
@@ -377,7 +385,7 @@ export default function Dashboard() {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function SyncRecordRow({ record }: { record: SyncRecord }) {
+function SyncRecordRow({ record, repoName }: { record: SyncRecord; repoName: string }) {
   const [expanded, setExpanded] = useState(false);
 
   const statusColor =
@@ -394,6 +402,7 @@ function SyncRecordRow({ record }: { record: SyncRecord }) {
         className="w-full px-6 py-3 flex items-center justify-between hover:bg-gray-700/50 text-left transition-colors"
       >
         <div className="flex items-center space-x-3 min-w-0">
+          <RepoBadge name={repoName} />
           <span className={`text-xs font-bold uppercase ${statusColor}`}>
             {record.status === 'applied' ? '\u2713' : record.status === 'failed' ? '\u2717' : '\u25CB'}
           </span>
@@ -516,6 +525,14 @@ function StatusCard({
       <p className="text-2xl font-bold capitalize text-gray-100">{value}</p>
       {subtitle && <p className="text-xs text-gray-500 mt-1">{subtitle}</p>}
     </div>
+  );
+}
+
+function RepoBadge({ name }: { name: string }) {
+  return (
+    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-900/40 text-blue-300 border border-blue-700/30 truncate max-w-[120px]">
+      {name}
+    </span>
   );
 }
 

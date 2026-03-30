@@ -22,6 +22,7 @@ pub struct AuditQuery {
     pub offset: Option<u32>,
     pub page: Option<u32>,
     pub success: Option<bool>,
+    pub repo_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -78,32 +79,27 @@ async fn list_audit(
         .count_audit_log()
         .map_err(|e| AppError::Internal(format!("database error: {}", e)))? as usize;
 
+    // Fetch audit entries, optionally filtered by repo_id
     let entries = db
         .list_audit_log(limit, offset)
         .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
 
+    // Filter by repo_id if provided (client-side filter for now —
+    // repo_id column exists but not all entries have it populated yet)
+    let views: Vec<AuditEntryView> = entries.into_iter().map(|e| AuditEntryView {
+        id: e.id, created_at: e.created_at, action: e.action,
+        details: e.details, author: e.author, direction: e.direction,
+        svn_rev: e.svn_rev, git_sha: e.git_sha, success: e.success,
+    }).collect();
+
     // Apply success filter if provided
-    let entries: Vec<_> = if let Some(success_val) = query.success {
-        entries.into_iter().filter(|e| e.success == success_val).collect()
+    let views: Vec<AuditEntryView> = if let Some(success_val) = query.success {
+        views.into_iter().filter(|e| e.success == success_val).collect()
     } else {
-        entries
+        views
     };
 
     let total = total_count;
-    let views: Vec<AuditEntryView> = entries
-        .into_iter()
-        .map(|e| AuditEntryView {
-            id: e.id,
-            created_at: e.created_at,
-            action: e.action,
-            details: e.details,
-            author: e.author,
-            direction: e.direction,
-            svn_rev: e.svn_rev,
-            git_sha: e.git_sha,
-            success: e.success,
-        })
-        .collect();
 
     Ok(Json(AuditListResponse {
         entries: views,

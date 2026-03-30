@@ -19,6 +19,7 @@ use crate::AppState;
 #[derive(Deserialize)]
 pub struct HistoryQuery {
     pub limit: Option<u32>,
+    pub repo_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -84,24 +85,37 @@ async fn list_commit_map(
         .db
         .lock()
         .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
-    let entries = db
-        .list_commit_map(limit)
-        .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
 
-    let total = entries.len();
-    let views: Vec<CommitMapEntryView> = entries
-        .into_iter()
-        .map(|e| CommitMapEntryView {
-            id: e.id,
-            svn_rev: e.svn_rev,
-            git_sha: e.git_sha,
-            direction: e.direction,
-            synced_at: e.synced_at,
-            svn_author: e.svn_author,
-            git_author: e.git_author,
-        })
-        .collect();
+    // Support optional repo_id filtering
+    let conn = db.conn();
+    let (sql, views) = if let Some(ref rid) = query.repo_id {
+        let mut stmt = conn.prepare(
+            "SELECT id, svn_rev, git_sha, direction, synced_at, svn_author, git_author
+             FROM commit_map WHERE repo_id = ?1 ORDER BY id DESC LIMIT ?2",
+        ).map_err(|e| AppError::Internal(format!("prepare: {}", e)))?;
+        let rows: Vec<CommitMapEntryView> = stmt.query_map(rusqlite::params![rid, limit], |row| {
+            Ok(CommitMapEntryView {
+                id: row.get(0)?, svn_rev: row.get(1)?, git_sha: row.get(2)?,
+                direction: row.get(3)?, synced_at: row.get(4)?,
+                svn_author: row.get(5)?, git_author: row.get(6)?,
+            })
+        }).map_err(|e| AppError::Internal(format!("query: {}", e)))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| AppError::Internal(format!("row: {}", e)))?;
+        ("filtered".to_string(), rows)
+    } else {
+        let entries = db.list_commit_map(limit)
+            .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
+        let v: Vec<CommitMapEntryView> = entries.into_iter().map(|e| CommitMapEntryView {
+            id: e.id, svn_rev: e.svn_rev, git_sha: e.git_sha,
+            direction: e.direction, synced_at: e.synced_at,
+            svn_author: e.svn_author, git_author: e.git_author,
+        }).collect();
+        ("all".to_string(), v)
+    };
+    let _ = sql;
 
+    let total = views.len();
     Ok(Json(CommitMapResponse {
         entries: views,
         total,
@@ -127,15 +141,25 @@ async fn list_sync_records(
         .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
 
     let conn = db.conn();
-    let mut stmt = conn
-        .prepare(
+    let (sql, params_list): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(ref rid) = query.repo_id {
+        (
             "SELECT id, svn_rev, git_sha, direction, author, message, timestamp, synced_at, status
-             FROM sync_records ORDER BY synced_at DESC LIMIT ?1",
+             FROM sync_records WHERE repo_id = ?1 ORDER BY synced_at DESC LIMIT ?2".to_string(),
+            vec![Box::new(rid.clone()), Box::new(limit)],
         )
+    } else {
+        (
+            "SELECT id, svn_rev, git_sha, direction, author, message, timestamp, synced_at, status
+             FROM sync_records ORDER BY synced_at DESC LIMIT ?1".to_string(),
+            vec![Box::new(limit)],
+        )
+    };
+    let mut stmt = conn.prepare(&sql)
         .map_err(|e| AppError::Internal(format!("prepare error: {}", e)))?;
+    let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_list.iter().map(|b| b.as_ref()).collect();
 
     let entries: Vec<SyncRecordView> = stmt
-        .query_map(rusqlite::params![limit], |row| {
+        .query_map(params_refs.as_slice(), |row| {
             Ok(SyncRecordView {
                 id: row.get(0)?,
                 svn_rev: row.get(1)?,

@@ -456,7 +456,10 @@ export default function RepoDetail() {
       {/* Sync Records */}
       <div className="bg-gray-800 shadow rounded-lg border border-gray-700">
         <div className="p-6 pb-3">
-          <h2 className="text-lg font-semibold text-gray-100">Sync Records</h2>
+          <h2 className="text-lg font-semibold text-gray-100">
+            Sync Records
+            <span className="ml-2 text-sm font-normal text-blue-400">&mdash; {repo.name}</span>
+          </h2>
           <p className="text-sm text-gray-400 mt-1">Recent commits synced for this repository (click to expand)</p>
         </div>
         {records.length > 0 ? (
@@ -473,7 +476,10 @@ export default function RepoDetail() {
       {/* Commit Map */}
       <div className="bg-gray-800 shadow rounded-lg border border-gray-700">
         <div className="p-6 pb-3">
-          <h2 className="text-lg font-semibold text-gray-100">Commit Map (SVN &harr; Git)</h2>
+          <h2 className="text-lg font-semibold text-gray-100">
+            Commit Map (SVN &harr; Git)
+            <span className="ml-2 text-sm font-normal text-blue-400">&mdash; {repo.name}</span>
+          </h2>
           <p className="text-sm text-gray-400 mt-1">Bidirectional mapping between SVN revisions and Git commits</p>
         </div>
         {cmEntries.length > 0 ? (
@@ -517,7 +523,10 @@ export default function RepoDetail() {
       {/* Audit Log (compact) */}
       <div className="bg-gray-800 shadow rounded-lg border border-gray-700">
         <div className="p-6 pb-3">
-          <h2 className="text-lg font-semibold text-gray-100">Recent Audit Log</h2>
+          <h2 className="text-lg font-semibold text-gray-100">
+            Recent Audit Log
+            <span className="ml-2 text-sm font-normal text-blue-400">&mdash; {repo.name}</span>
+          </h2>
           <p className="text-sm text-gray-400 mt-1">Last 10 audit entries for this repository</p>
         </div>
         {auditEntries.length > 0 ? (

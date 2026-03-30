@@ -210,10 +210,11 @@ export const api = {
   deferConflict: (id: string) =>
     fetchJson<{ ok: boolean }>(`/conflicts/${id}/defer`, { method: 'POST' }),
 
-  getAuditLog: (limit = 50, page?: number, success?: boolean) => {
+  getAuditLog: (limit = 50, page?: number, success?: boolean, repoId?: string) => {
     const params = new URLSearchParams({ limit: String(limit) });
     if (page !== undefined) params.append('page', String(page));
     if (success !== undefined) params.append('success', String(success));
+    if (repoId) params.append('repo_id', repoId);
     return fetchJson<AuditListResponse>(`/audit?${params.toString()}`);
   },
 
@@ -240,11 +241,17 @@ export const api = {
 
   getConfig: () => fetchJson<ConfigResponse>('/config'),
 
-  getCommitMap: (limit = 100) =>
-    fetchJson<CommitMapResponse>(`/commit-map?limit=${limit}`),
+  getCommitMap: (limit = 100, repoId?: string) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (repoId) params.append('repo_id', repoId);
+    return fetchJson<CommitMapResponse>(`/commit-map?${params}`);
+  },
 
-  getSyncRecords: (limit = 100) =>
-    fetchJson<SyncRecordResponse>(`/sync-records?limit=${limit}`),
+  getSyncRecords: (limit = 100, repoId?: string) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (repoId) params.append('repo_id', repoId);
+    return fetchJson<SyncRecordResponse>(`/sync-records?${params}`);
+  },
 
   seedData: () =>
     fetchJson<{ ok: boolean; message: string }>('/seed', { method: 'POST' }),
