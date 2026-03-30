@@ -47,7 +47,7 @@ struct Args {
 // Main
 // ---------------------------------------------------------------------------
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -271,26 +271,15 @@ async fn main() -> Result<()> {
     let shutdown = Arc::new(tokio::sync::Notify::new());
     let scheduler_shutdown = shutdown.clone();
 
-    // Create and start the scheduler on a DEDICATED OS THREAD with its own
-    // tokio runtime. This completely isolates the sync engine's blocking I/O
-    // and DB access from the web server's async runtime.
+    // Create and start the scheduler
     let poll_interval = std::time::Duration::from_secs(config.daemon.poll_interval_secs);
-    let scheduler_handle = std::thread::Builder::new()
-        .name("sync-scheduler".into())
-        .spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("failed to create scheduler runtime");
-            let mut sched = scheduler::Scheduler::new(
-                sync_engine.clone(),
-                poll_interval,
-                sync_rx,
-                ws_broadcast,
-            );
-            rt.block_on(sched.run(scheduler_shutdown));
-        })
-        .expect("failed to spawn scheduler thread");
+    let mut sched =
+        scheduler::Scheduler::new(sync_engine.clone(), poll_interval, sync_rx, ws_broadcast);
+
+    // Start the scheduler in a background task
+    let scheduler_handle = tokio::spawn(async move {
+        sched.run(scheduler_shutdown).await;
+    });
 
     // Wait for shutdown signal
     signals::wait_for_shutdown().await;
@@ -300,14 +289,11 @@ async fn main() -> Result<()> {
     // Signal cooperative shutdown to the scheduler
     shutdown.notify_waiters();
 
-    // Wait for the scheduler thread to finish (up to 10s)
-    let join_result = tokio::task::spawn_blocking(move || {
-        scheduler_handle.join()
-    }).await;
-    match join_result {
+    // Wait for the scheduler to finish its current cycle (up to 10s)
+    match tokio::time::timeout(std::time::Duration::from_secs(10), scheduler_handle).await {
         Ok(Ok(())) => info!("scheduler stopped gracefully"),
-        Ok(Err(_)) => warn!("scheduler thread panicked"),
-        Err(e) => warn!("failed to join scheduler: {}", e),
+        Ok(Err(e)) => warn!("scheduler task error: {}", e),
+        Err(_) => warn!("scheduler did not stop within 10s, forcing shutdown"),
     }
 
     // Abort the web server
