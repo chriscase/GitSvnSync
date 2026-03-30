@@ -138,6 +138,49 @@ async fn main() -> Result<()> {
         Err(e) => warn!("Failed to check users table (may not exist yet): {}", e),
     }
 
+    // Auto-migrate existing single-repo config into the repositories table
+    // so that existing deployments continue to work without manual changes.
+    {
+        let repos = db.list_repositories().unwrap_or_default();
+        if repos.is_empty() && !config.svn.url.is_empty() {
+            let now = chrono::Utc::now().to_rfc3339();
+            let provider = match config.github.provider {
+                gitsvnsync_core::config::GitProvider::GitHub => "github",
+                gitsvnsync_core::config::GitProvider::Gitea => "gitea",
+            };
+            let sync_mode = match config.sync.mode {
+                gitsvnsync_core::config::SyncMode::Direct => "direct",
+                gitsvnsync_core::config::SyncMode::Pr => "pr",
+            };
+            let default_repo = gitsvnsync_core::models::Repository {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: config.github.repo.clone(),
+                svn_url: config.svn.url.clone(),
+                svn_branch: config.svn.trunk_path.clone(),
+                svn_username: config.svn.username.clone(),
+                git_provider: provider.to_string(),
+                git_api_url: config.github.api_url.clone(),
+                git_repo: config.github.repo.clone(),
+                git_branch: config.github.default_branch.clone(),
+                sync_mode: sync_mode.to_string(),
+                poll_interval_secs: config.daemon.poll_interval_secs as i64,
+                lfs_threshold_mb: 0,
+                auto_merge: config.sync.auto_merge,
+                enabled: true,
+                created_by: None,
+                created_at: now.clone(),
+                updated_at: now,
+            };
+            match db.insert_repository(&default_repo) {
+                Ok(()) => info!(
+                    "Auto-migrated existing config to repository: {}",
+                    default_repo.name
+                ),
+                Err(e) => warn!("Failed to auto-migrate config to repository: {}", e),
+            }
+        }
+    }
+
     // Initialize SVN client
     let svn_password = config.svn.password.clone().unwrap_or_default();
     let svn_client = SvnClient::new(&config.svn.url, &config.svn.username, &svn_password);

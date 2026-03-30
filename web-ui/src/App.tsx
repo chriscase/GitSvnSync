@@ -11,6 +11,8 @@ import SetupWizard from './pages/SetupWizard';
 import UserSettings from './pages/UserSettings';
 import AdminUsers from './pages/AdminUsers';
 import AdminLdap from './pages/AdminLdap';
+import Repositories from './pages/Repositories';
+import RepoDetail from './pages/RepoDetail';
 
 // ---------------------------------------------------------------------------
 // Splash Screen (React-controlled with minimum display time)
@@ -108,6 +110,8 @@ export default function App() {
             }
           >
             <Route index element={<Dashboard />} />
+            <Route path="repos" element={<Repositories />} />
+            <Route path="repos/:id" element={<RepoDetail />} />
             <Route path="conflicts" element={<Conflicts />} />
             <Route path="conflicts/:id" element={<ConflictDetail />} />
             <Route path="config" element={<Config />} />

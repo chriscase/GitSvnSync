@@ -73,6 +73,9 @@ export default function Layout() {
                 <NavLink to="/" end className={navLinkClass}>
                   Dashboard
                 </NavLink>
+                <NavLink to="/repos" className={navLinkClass}>
+                  Repositories
+                </NavLink>
                 <NavLink to="/conflicts" className={navLinkClass}>
                   Conflicts
                   {status && status.active_conflicts > 0 && (

@@ -339,6 +339,32 @@ pub struct Session {
 }
 
 // ---------------------------------------------------------------------------
+// Repository (multi-repo support)
+// ---------------------------------------------------------------------------
+
+/// A configured repository for multi-repo sync.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Repository {
+    pub id: String,
+    pub name: String,
+    pub svn_url: String,
+    pub svn_branch: String,
+    pub svn_username: String,
+    pub git_provider: String,
+    pub git_api_url: String,
+    pub git_repo: String,
+    pub git_branch: String,
+    pub sync_mode: String,
+    pub poll_interval_secs: i64,
+    pub lfs_threshold_mb: i64,
+    pub auto_merge: bool,
+    pub enabled: bool,
+    pub created_by: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+// ---------------------------------------------------------------------------
 // Personal Branch Mode types
 // ---------------------------------------------------------------------------
 

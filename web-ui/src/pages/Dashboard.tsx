@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { api, type AuditEntry, type SyncRecord, type CommitMapEntry } from '../api';
+import { api, type AuditEntry, type SyncRecord, type CommitMapEntry, type Repository } from '../api';
 import ImportProgressCard from '../components/ImportProgressCard';
 import ServerMonitor from '../components/ServerMonitor';
 
@@ -27,6 +27,11 @@ export default function Dashboard() {
   const { data: commitMap } = useQuery({
     queryKey: ['commit-map'],
     queryFn: () => api.getCommitMap(15),
+  });
+
+  const { data: repos } = useQuery({
+    queryKey: ['repos'],
+    queryFn: api.getRepos,
   });
 
   if (statusLoading) {
@@ -70,6 +75,44 @@ export default function Dashboard() {
 
       {/* Import Progress Card */}
       <ImportProgressCard />
+
+      {/* Repositories Overview */}
+      {repos && repos.length > 0 && (
+        <div className="bg-gray-800/60 border border-gray-700 rounded-lg p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-gray-100">Repositories</h2>
+            <button
+              onClick={() => navigate('/repos')}
+              className="text-sm text-blue-400 hover:text-blue-300 transition-colors"
+            >
+              Manage Repositories &rarr;
+            </button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {repos.map((repo: Repository) => (
+              <button
+                key={repo.id}
+                onClick={() => navigate(`/repos/${repo.id}`)}
+                className="bg-gray-900/60 border border-gray-700 rounded-lg p-3 text-left hover:border-blue-500/50 transition-colors"
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-sm font-semibold text-gray-200 truncate">{repo.name}</span>
+                  <span
+                    className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ml-2 ${
+                      repo.enabled ? 'bg-green-400' : 'bg-gray-500'
+                    }`}
+                    title={repo.enabled ? 'Enabled' : 'Disabled'}
+                  />
+                </div>
+                <p className="text-xs text-gray-500 truncate">{repo.git_repo}</p>
+                <p className="text-xs text-gray-600 mt-1">
+                  Updated {formatTimeAgo(repo.updated_at)}
+                </p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Status Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">

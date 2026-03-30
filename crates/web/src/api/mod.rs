@@ -4,6 +4,7 @@ pub mod audit;
 pub mod auth;
 pub mod config;
 pub mod conflicts;
+pub mod repos;
 pub mod seed;
 pub mod setup;
 pub mod status;

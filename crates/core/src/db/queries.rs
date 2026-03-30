@@ -1687,6 +1687,154 @@ impl Database {
 
         Ok(())
     }
+
+    // -- repositories -------------------------------------------------------
+
+    /// Insert a new repository.
+    pub fn insert_repository(&self, repo: &models::Repository) -> Result<(), DatabaseError> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO repositories (id, name, svn_url, svn_branch, svn_username, git_provider, git_api_url, git_repo, git_branch, sync_mode, poll_interval_secs, lfs_threshold_mb, auto_merge, enabled, created_by, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            params![
+                repo.id,
+                repo.name,
+                repo.svn_url,
+                repo.svn_branch,
+                repo.svn_username,
+                repo.git_provider,
+                repo.git_api_url,
+                repo.git_repo,
+                repo.git_branch,
+                repo.sync_mode,
+                repo.poll_interval_secs,
+                repo.lfs_threshold_mb,
+                repo.auto_merge as i32,
+                repo.enabled as i32,
+                repo.created_by,
+                repo.created_at,
+                repo.updated_at,
+            ],
+        )?;
+        debug!(id = %repo.id, name = %repo.name, "inserted repository");
+        Ok(())
+    }
+
+    /// Get a repository by ID.
+    pub fn get_repository(&self, id: &str) -> Result<Option<models::Repository>, DatabaseError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, svn_url, svn_branch, svn_username, git_provider, git_api_url, git_repo, git_branch, sync_mode, poll_interval_secs, lfs_threshold_mb, auto_merge, enabled, created_by, created_at, updated_at
+             FROM repositories WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![id], |row| {
+            Ok(models::Repository {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                svn_url: row.get(2)?,
+                svn_branch: row.get(3)?,
+                svn_username: row.get(4)?,
+                git_provider: row.get(5)?,
+                git_api_url: row.get(6)?,
+                git_repo: row.get(7)?,
+                git_branch: row.get(8)?,
+                sync_mode: row.get(9)?,
+                poll_interval_secs: row.get(10)?,
+                lfs_threshold_mb: row.get(11)?,
+                auto_merge: row.get::<_, i32>(12)? != 0,
+                enabled: row.get::<_, i32>(13)? != 0,
+                created_by: row.get(14)?,
+                created_at: row.get(15)?,
+                updated_at: row.get(16)?,
+            })
+        })?;
+        match rows.next() {
+            Some(Ok(repo)) => Ok(Some(repo)),
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
+
+    /// List all repositories ordered by name.
+    pub fn list_repositories(&self) -> Result<Vec<models::Repository>, DatabaseError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, svn_url, svn_branch, svn_username, git_provider, git_api_url, git_repo, git_branch, sync_mode, poll_interval_secs, lfs_threshold_mb, auto_merge, enabled, created_by, created_at, updated_at
+             FROM repositories ORDER BY name",
+        )?;
+        let entries = stmt
+            .query_map([], |row| {
+                Ok(models::Repository {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    svn_url: row.get(2)?,
+                    svn_branch: row.get(3)?,
+                    svn_username: row.get(4)?,
+                    git_provider: row.get(5)?,
+                    git_api_url: row.get(6)?,
+                    git_repo: row.get(7)?,
+                    git_branch: row.get(8)?,
+                    sync_mode: row.get(9)?,
+                    poll_interval_secs: row.get(10)?,
+                    lfs_threshold_mb: row.get(11)?,
+                    auto_merge: row.get::<_, i32>(12)? != 0,
+                    enabled: row.get::<_, i32>(13)? != 0,
+                    created_by: row.get(14)?,
+                    created_at: row.get(15)?,
+                    updated_at: row.get(16)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(entries)
+    }
+
+    /// Update a repository's configuration.
+    pub fn update_repository(&self, repo: &models::Repository) -> Result<(), DatabaseError> {
+        let conn = self.conn();
+        let changed = conn.execute(
+            "UPDATE repositories SET name = ?1, svn_url = ?2, svn_branch = ?3, svn_username = ?4, git_provider = ?5, git_api_url = ?6, git_repo = ?7, git_branch = ?8, sync_mode = ?9, poll_interval_secs = ?10, lfs_threshold_mb = ?11, auto_merge = ?12, enabled = ?13, updated_at = ?14
+             WHERE id = ?15",
+            params![
+                repo.name,
+                repo.svn_url,
+                repo.svn_branch,
+                repo.svn_username,
+                repo.git_provider,
+                repo.git_api_url,
+                repo.git_repo,
+                repo.git_branch,
+                repo.sync_mode,
+                repo.poll_interval_secs,
+                repo.lfs_threshold_mb,
+                repo.auto_merge as i32,
+                repo.enabled as i32,
+                repo.updated_at,
+                repo.id,
+            ],
+        )?;
+        if changed == 0 {
+            return Err(DatabaseError::NotFound {
+                entity: "repository".into(),
+                id: repo.id.clone(),
+            });
+        }
+        debug!(id = %repo.id, name = %repo.name, "updated repository");
+        Ok(())
+    }
+
+    /// Delete a repository by ID.
+    pub fn delete_repository(&self, id: &str) -> Result<(), DatabaseError> {
+        let conn = self.conn();
+        let changed = conn.execute("DELETE FROM repositories WHERE id = ?1", params![id])?;
+        if changed == 0 {
+            return Err(DatabaseError::NotFound {
+                entity: "repository".into(),
+                id: id.into(),
+            });
+        }
+        debug!(id, "deleted repository");
+        Ok(())
+    }
 }
 
 /// Parse a datetime string, returning Utc::now() as a fallback if parsing fails.

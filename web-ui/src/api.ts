@@ -286,6 +286,18 @@ export const api = {
       method: 'POST',
     }),
 
+  // Repositories (multi-repo)
+  getRepos: () => fetchJson<Repository[]>('/repos'),
+  createRepo: (data: Partial<Repository>) =>
+    fetchJson<Repository>('/repos', { method: 'POST', body: JSON.stringify(data) }),
+  getRepo: (id: string) => fetchJson<Repository>(`/repos/${id}`),
+  updateRepo: (id: string, data: Partial<Repository>) =>
+    fetchJson<Repository>(`/repos/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteRepo: (id: string) =>
+    fetchJson<void>(`/repos/${id}`, { method: 'DELETE' }),
+  triggerRepoSync: (id: string) =>
+    fetchJson<{ ok: boolean }>(`/repos/${id}/sync`, { method: 'POST' }),
+
   // Auth - public info (no auth required) for login page LDAP hints
   getAuthInfo: async (): Promise<{ ldap_enabled: boolean; ldap_domain: string | null }> => {
     const res = await fetch(`${API_BASE}/auth/info`);
@@ -432,6 +444,26 @@ export interface WizardSetupConfig {
   log_level: string;
   data_dir: string;
   admin_password_set: boolean;
+}
+
+export interface Repository {
+  id: string;
+  name: string;
+  svn_url: string;
+  svn_branch: string;
+  svn_username: string;
+  git_provider: string;
+  git_api_url: string;
+  git_repo: string;
+  git_branch: string;
+  sync_mode: string;
+  poll_interval_secs: number;
+  lfs_threshold_mb: number;
+  auto_merge: boolean;
+  enabled: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ImportStatus {

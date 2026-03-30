@@ -115,6 +115,7 @@ impl WebServer {
             .merge(api::webhooks::routes())
             .merge(api::setup::routes())
             .merge(api::users::routes())
+            .merge(api::repos::routes())
             // WebSocket
             .merge(ws::routes())
             // React SPA (fallback for everything else)
