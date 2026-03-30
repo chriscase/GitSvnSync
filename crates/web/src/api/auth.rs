@@ -127,21 +127,8 @@ async fn login(
         if let Some(ref ldap_config) = ldap_result {
             tracing::debug!("login: before LDAP authenticate for '{}'", username);
             tracing::info!("Attempting LDAP auth for '{}' against {}", username, ldap_config.url);
-            // Run LDAP auth on a blocking thread since it does blocking TLS I/O
-            let ldap_auth_result = {
-                let cfg = ldap_config.clone();
-                let u = username.to_string();
-                let p = body.password.clone();
-                tokio::task::spawn_blocking(move || {
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .unwrap();
-                    rt.block_on(cfg.authenticate(&u, &p))
-                })
-                .await
-                .map_err(|e| AppError::Internal(format!("spawn_blocking: {}", e)))?
-            };
+            // LDAP auth is async (uses tokio-native-tls) — run directly
+            let ldap_auth_result = ldap_config.authenticate(username, &body.password).await;
             match ldap_auth_result {
                 Ok(ldap_user) => {
                     tracing::debug!("login: LDAP auth succeeded for '{}', provisioning user", username);
@@ -256,8 +243,15 @@ async fn login(
                 return Err(AppError::Unauthorized("account is disabled".into()));
             }
 
-            let password_valid = gitsvnsync_core::crypto::verify_password(&body.password, &user.password_hash)
-                .map_err(|e| AppError::Internal(format!("password verification error: {}", e)))?;
+            // bcrypt is intentionally CPU-heavy — run on blocking thread
+            let pw = body.password.clone();
+            let hash = user.password_hash.clone();
+            let password_valid = tokio::task::spawn_blocking(move || {
+                gitsvnsync_core::crypto::verify_password(&pw, &hash)
+            })
+            .await
+            .map_err(|e| AppError::Internal(format!("spawn_blocking: {}", e)))?
+            .map_err(|e| AppError::Internal(format!("password verification error: {}", e)))?;
 
             if !password_valid {
                 return Err(AppError::Unauthorized("invalid username or password".into()));
