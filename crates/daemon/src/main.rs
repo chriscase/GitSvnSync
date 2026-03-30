@@ -47,7 +47,7 @@ struct Args {
 // Main
 // ---------------------------------------------------------------------------
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -259,7 +259,8 @@ async fn main() -> Result<()> {
     let ws_broadcast = web_server.broadcast_sender();
     let listen_addr = config.web.listen.clone();
 
-    // Start web server in background
+    // Start web server — runs on the main tokio runtime directly
+    // (not spawned) to ensure it gets immediate access to worker threads.
     let web_handle = tokio::spawn(async move {
         if let Err(e) = web_server.start(&listen_addr).await {
             error!("Web server error: {}", e);
