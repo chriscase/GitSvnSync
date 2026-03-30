@@ -690,8 +690,7 @@ async fn start_import(
 ) -> Result<Json<ImportActionResponse>, AppError> {
     // Check if already running
     {
-        let progress = state.get_import_progress(None).await;
-        let p = progress.read().await;
+        let p = state.import_progress.read().await;
         if p.phase == ImportPhase::Importing {
             return Ok(Json(ImportActionResponse {
                 ok: false,
@@ -711,8 +710,7 @@ async fn start_import(
 
     // Reset progress
     {
-        let progress = state.get_import_progress(None).await;
-        let mut p = progress.write().await;
+        let mut p = state.import_progress.write().await;
         *p = ImportProgress::default();
         p.phase = ImportPhase::Importing;
         p.started_at = Some(chrono::Utc::now().to_rfc3339());
@@ -833,12 +831,7 @@ async fn start_import(
         message_prefix: None,
     };
 
-    let progress = {
-        let map = state.import_progress.read().await;
-        map.get(crate::DEFAULT_REPO_KEY)
-            .cloned()
-            .unwrap_or_else(|| Arc::new(tokio::sync::RwLock::new(ImportProgress::default())))
-    };
+    let progress = state.import_progress.clone();
     let ws_broadcast = Some(state.ws_broadcast.clone());
 
     // Spawn the import in a background task
@@ -905,8 +898,7 @@ async fn start_import(
 async fn import_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ImportProgress>, AppError> {
-    let progress = state.get_import_progress(None).await;
-    let p = progress.read().await;
+    let p = state.import_progress.read().await;
 
     // If in-memory progress shows Idle, check the DB for persisted state
     // (e.g. after a daemon restart mid-import).
@@ -927,8 +919,7 @@ async fn import_status(
 async fn cancel_import(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ImportActionResponse>, AppError> {
-    let progress = state.get_import_progress(None).await;
-    let mut p = progress.write().await;
+    let mut p = state.import_progress.write().await;
     if p.phase == ImportPhase::Importing {
         p.cancel_requested = true;
         Ok(Json(ImportActionResponse {
