@@ -117,16 +117,14 @@ impl Scheduler {
         });
         let _ = self.ws_broadcast.send(start_msg.to_string());
 
-        // Run the sync cycle on a dedicated blocking thread with its own
-        // single-threaded tokio runtime. This completely isolates blocking I/O
-        // (libgit2 network calls, SVN CLI commands) from the main web server
-        // runtime, preventing worker thread starvation.
+        // Run the sync cycle on a dedicated OS thread with its own tokio
+        // runtime. Using std::thread::spawn (not spawn_blocking) avoids
+        // polluting tokio's blocking thread pool with long-lived runtimes.
         let engine = self.sync_engine.clone();
         let sched_stats = self.stats.clone();
         let ws = self.ws_broadcast.clone();
 
-        tokio::task::spawn_blocking(move || {
-            // Create a lightweight single-threaded runtime for async SVN commands
+        std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
