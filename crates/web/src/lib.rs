@@ -47,6 +47,8 @@ pub struct AppState {
     pub config_path: std::path::PathBuf,
     /// Previous network byte counters for rate calculation.
     pub prev_net_snapshot: std::sync::Mutex<Option<(u64, u64, std::time::Instant)>>,
+    /// Daemon start time for uptime calculation.
+    pub started_at: std::time::Instant,
 }
 
 /// The web server.
@@ -74,6 +76,7 @@ impl WebServer {
             import_progress: Arc::new(tokio::sync::RwLock::new(ImportProgress::default())),
             config_path,
             prev_net_snapshot: std::sync::Mutex::new(None),
+            started_at: std::time::Instant::now(),
         });
         Self { state }
     }
