@@ -81,9 +81,13 @@ impl Scheduler {
                     info!("scheduler received shutdown signal");
                     break;
                 }
-                // Regular polling interval
+                // Regular polling interval — DISABLED until blocking I/O
+                // (libgit2 fetch, std::process::Command for SVN) is converted
+                // to async. The blocking calls saturate all tokio worker threads
+                // and hang the web server. Manual sync via API still works.
                 _ = interval.tick() => {
-                    self.maybe_run_cycle("scheduled").await;
+                    // self.maybe_run_cycle("scheduled").await;
+                    // Auto-sync disabled for stability. Use POST /api/repos/:id/sync
                 }
                 // Webhook-triggered immediate sync
                 Some(()) = self.sync_rx.recv() => {
