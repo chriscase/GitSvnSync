@@ -662,7 +662,7 @@ impl Database {
 
     /// Insert an audit entry from a model struct.
     pub fn insert_audit_entry(&self, entry: &models::AuditEntry) -> Result<i64, DatabaseError> {
-        self.insert_audit_log(
+        let id = self.insert_audit_log(
             &entry.action,
             None,
             None,
@@ -670,7 +670,23 @@ impl Database {
             None,
             Some(&entry.details),
             entry.success,
-        )
+        )?;
+        // Prune old entries to prevent unbounded growth
+        self.prune_audit_log(1000).ok();
+        Ok(id)
+    }
+
+    /// Delete audit log entries beyond the most recent `keep` rows.
+    pub fn prune_audit_log(&self, keep: u32) -> Result<u64, DatabaseError> {
+        let conn = self.conn();
+        let deleted = conn.execute(
+            "DELETE FROM audit_log WHERE id NOT IN (SELECT id FROM audit_log ORDER BY id DESC LIMIT ?1)",
+            params![keep],
+        )?;
+        if deleted > 0 {
+            debug!(deleted, keep, "pruned audit_log entries");
+        }
+        Ok(deleted as u64)
     }
 
     /// List recent audit-log entries with optional offset for pagination.
