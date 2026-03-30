@@ -186,7 +186,7 @@ export default function ServerMonitor() {
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
                       <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500" />
                     </span>
-                    <span className="text-blue-300">SVN Export</span>
+                    <span className="text-blue-300">SVN Active</span>
                   </span>
                 ) : (netRate.up > 1024 || netRate.down > 1024) ? (
                   <span className="text-cyan-300">Active</span>

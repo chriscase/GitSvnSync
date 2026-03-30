@@ -134,6 +134,11 @@ impl Scheduler {
             let stats = self.stats.clone();
             let ws = self.ws_broadcast.clone();
 
+            // Spawn the sync cycle. It runs async but contains blocking I/O
+            // (std::process::Command for svn/git). Tokio's spawn uses the
+            // multi-thread runtime so blocking calls on one thread don't
+            // prevent other tasks from running — as long as the runtime has
+            // enough worker threads (default = num_cpus).
             tokio::spawn(async move {
                 match engine.run_sync_cycle().await {
                     Ok(sync_stats) => {
