@@ -81,13 +81,9 @@ impl Scheduler {
                     info!("scheduler received shutdown signal");
                     break;
                 }
-                // Regular polling interval — DISABLED until blocking I/O
-                // (libgit2 fetch, std::process::Command for SVN) is converted
-                // to async. The blocking calls saturate all tokio worker threads
-                // and hang the web server. Manual sync via API still works.
+                // Regular polling interval
                 _ = interval.tick() => {
-                    // self.maybe_run_cycle("scheduled").await;
-                    // Auto-sync disabled for stability. Use POST /api/repos/:id/sync
+                    self.maybe_run_cycle("scheduled").await;
                 }
                 // Webhook-triggered immediate sync
                 Some(()) = self.sync_rx.recv() => {
@@ -127,8 +123,16 @@ impl Scheduler {
         let engine = self.sync_engine.clone();
         let sched_stats = self.stats.clone();
         let ws = self.ws_broadcast.clone();
-        tokio::spawn(async move {
-            match engine.run_sync_cycle().await {
+
+        // Run the sync cycle on the blocking thread pool so that libgit2
+        // and std::process::Command calls don't starve the tokio async
+        // runtime (which serves the web UI). We grab the runtime handle
+        // first, then spawn_blocking, then block_on inside the blocking
+        // thread to drive the async sync cycle.
+        let rt_handle = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            let result = rt_handle.block_on(engine.run_sync_cycle());
+            match result {
                 Ok(sync_stats) => {
                     sched_stats.consecutive_errors.store(0, Ordering::SeqCst);
                     sched_stats
