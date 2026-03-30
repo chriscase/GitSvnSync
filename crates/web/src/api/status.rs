@@ -85,32 +85,33 @@ async fn get_status(
     )
     .await?;
 
-    // Run get_status on a blocking thread to avoid blocking the web server
-    // if the sync engine's DB mutex is held by a running sync cycle.
-    tracing::debug!("get_status: before spawn_blocking for sync_engine.get_status()");
-    let engine = state.sync_engine.clone();
-    let status = tokio::task::spawn_blocking(move || {
-        tracing::debug!("get_status: inside spawn_blocking, calling sync_engine.get_status()");
-        let result = engine.get_status();
-        tracing::debug!("get_status: sync_engine.get_status() returned");
-        result
-    })
-        .await
-        .map_err(|e| AppError::Internal(format!("spawn_blocking: {}", e)))?
-        .map_err(|e| AppError::Internal(format!("failed to get sync status: {}", e)))?;
-    tracing::debug!("get_status: spawn_blocking completed successfully");
+    // Read status directly from the WEB DB connection, NOT via the sync
+    // engine (which has its own DB connection that may be locked by sync).
+    let db = &state.db;
+    let state_str = db.get_state("sync_state").unwrap_or(None).unwrap_or_else(|| "idle".into());
+    let last_sync_str = db.get_state("last_sync_at").unwrap_or(None);
+    let last_sync_at = last_sync_str.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.to_rfc3339()));
+    let last_svn_rev = db.get_state("last_svn_rev").unwrap_or(None).and_then(|s| s.parse::<i64>().ok())
+        .or_else(|| db.get_last_svn_revision().ok().flatten());
+    let last_git_hash = db.get_state("last_git_hash").unwrap_or(None).and_then(|s| if s.is_empty() { None } else { Some(s) })
+        .or_else(|| db.get_last_git_hash().ok().flatten());
+    let total_syncs = db.count_sync_records().unwrap_or(0);
+    let total_conflicts = db.count_all_conflicts().unwrap_or(0);
+    let active_conflicts = db.count_active_conflicts().unwrap_or(0);
+    let total_errors = db.count_errors().unwrap_or(0);
+    let last_error_at = db.get_state("last_error_at").unwrap_or(None);
 
     Ok(Json(StatusResponse {
-        state: status.state.to_string(),
-        last_sync_at: status.last_sync_at.map(|t| t.to_rfc3339()),
-        last_svn_revision: status.last_svn_revision,
-        last_git_hash: status.last_git_hash,
-        total_syncs: status.total_syncs,
-        total_conflicts: status.total_conflicts,
-        active_conflicts: status.active_conflicts,
-        total_errors: status.total_errors,
-        last_error_at: status.last_error_at,
-        uptime_secs: status.uptime_secs,
+        state: state_str,
+        last_sync_at,
+        last_svn_revision: last_svn_rev,
+        last_git_hash,
+        total_syncs,
+        total_conflicts,
+        active_conflicts,
+        total_errors,
+        last_error_at,
+        uptime_secs: 0, // TODO: track in AppState
     }))
 }
 
