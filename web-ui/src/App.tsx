@@ -70,16 +70,20 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  const [showSplash, setShowSplash] = useState(true);
+  // Only show splash on first visit per browser session — not on 401 redirects
+  const alreadyShown = sessionStorage.getItem('splash_shown') === '1';
+  const [showSplash, setShowSplash] = useState(!alreadyShown);
   const [fadeOut, setFadeOut] = useState(false);
 
   useEffect(() => {
+    if (!showSplash) return;
+    sessionStorage.setItem('splash_shown', '1');
     const timer = setTimeout(() => {
       setFadeOut(true);
       setTimeout(() => setShowSplash(false), 400);
     }, 2000);
     return () => clearTimeout(timer);
-  }, []);
+  }, [showSplash]);
 
   return (
     <>

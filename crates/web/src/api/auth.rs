@@ -56,6 +56,41 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/verify", post(verify))
         .route("/api/auth/me", get(me))
+        .route("/api/auth/info", get(auth_info))
+}
+
+/// Public (no auth) endpoint returning login page context: whether LDAP is
+/// enabled and the domain so users know which credentials to enter.
+async fn auth_info(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let db = state.db.lock().unwrap();
+    let ldap_enabled = db.is_ldap_enabled().unwrap_or(false);
+    let ldap_domain = if ldap_enabled {
+        db.load_ldap_config().ok().flatten().map(|cfg| {
+            // Extract domain from base_dn: "dc=mgc,dc=mentorg,dc=com" → "mgc.mentorg.com"
+            cfg.base_dn
+                .split(',')
+                .filter_map(|part| {
+                    let part = part.trim();
+                    if part.to_lowercase().starts_with("dc=") {
+                        Some(part[3..].to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(".")
+        })
+    } else {
+        None
+    };
+    drop(db);
+
+    Json(serde_json::json!({
+        "ldap_enabled": ldap_enabled,
+        "ldap_domain": ldap_domain,
+    }))
 }
 
 async fn login(

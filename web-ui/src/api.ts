@@ -286,12 +286,25 @@ export const api = {
       method: 'POST',
     }),
 
-  // Auth - multi-user login (backward compatible with single-password mode)
-  login: (username: string, password: string) =>
-    fetchJson<LoginResponse>('/auth/login', {
+  // Auth - public info (no auth required) for login page LDAP hints
+  getAuthInfo: async (): Promise<{ ldap_enabled: boolean; ldap_domain: string | null }> => {
+    const res = await fetch(`${API_BASE}/auth/info`);
+    return res.json();
+  },
+
+  // Auth - multi-user login with real error messages
+  login: async (username: string, password: string): Promise<LoginResponse> => {
+    const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
-    }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({ error: 'Login failed' }));
+      throw new Error(data.error || `Login failed (${res.status})`);
+    }
+    return res.json();
+  },
 
   logout: () => {
     const token = localStorage.getItem('session_token');
