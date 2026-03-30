@@ -117,20 +117,16 @@ impl Scheduler {
         });
         let _ = self.ws_broadcast.send(start_msg.to_string());
 
-        // Run the sync cycle on a dedicated OS thread with its own tokio
-        // runtime. Using std::thread::spawn (not spawn_blocking) avoids
-        // polluting tokio's blocking thread pool with long-lived runtimes.
+        // Run the sync cycle directly on the main tokio runtime. The sync
+        // engine's DB is separate from the web DB, so there's no mutex
+        // contention. The only blocking I/O is libgit2 (brief) and SVN CLI
+        // (async via tokio::process::Command).
         let engine = self.sync_engine.clone();
         let sched_stats = self.stats.clone();
         let ws = self.ws_broadcast.clone();
 
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("failed to create sync runtime");
-
-            match rt.block_on(engine.run_sync_cycle()) {
+        tokio::spawn(async move {
+            match engine.run_sync_cycle().await {
                 Ok(sync_stats) => {
                     sched_stats.consecutive_errors.store(0, Ordering::SeqCst);
                     sched_stats
