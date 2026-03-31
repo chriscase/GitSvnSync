@@ -74,6 +74,16 @@ impl Database {
     /// Prefer using the typed query methods on [`Database`] over raw SQL
     /// whenever possible.
     ///
+    /// # Deadlock hazard
+    ///
+    /// The returned `MutexGuard` holds a `std::sync::Mutex` lock, which is
+    /// **NOT re-entrant**. While you hold this guard, you must NOT call any
+    /// other `Database` method (e.g. `self.get_repository()`,
+    /// `self.list_commit_map()`) because those methods internally call
+    /// `self.conn()` — the thread will deadlock permanently, and because
+    /// all web requests share this mutex via `validate_session`, the entire
+    /// server will freeze.
+    ///
     /// If the Mutex is poisoned (a previous holder panicked), the lock is
     /// recovered rather than propagating a panic.
     pub fn conn(&self) -> MutexGuard<'_, Connection> {

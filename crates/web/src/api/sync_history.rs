@@ -1,4 +1,18 @@
 //! Sync history and commit-map API endpoints.
+//!
+//! # Mutex safety
+//!
+//! `Database::conn()` returns a `MutexGuard<Connection>` (std::sync::Mutex).
+//! **std::sync::Mutex is NOT re-entrant.** If you hold a `MutexGuard` and
+//! then call any `db.*()` query method (which internally calls `self.conn()`),
+//! the thread will deadlock permanently. Because all authenticated handlers
+//! go through `validate_session` → `db.get_session()` → `self.conn()`, a
+//! single deadlocked thread holding the mutex freezes the entire web server.
+//!
+//! Safe patterns:
+//!   - Use `db.*()` helper methods (they acquire and release internally).
+//!   - OR call `db.conn()` and use the returned `Connection` directly.
+//!   - NEVER mix: do not call `db.*()` while a `db.conn()` guard is alive.
 
 use std::sync::Arc;
 
@@ -83,9 +97,13 @@ async fn list_commit_map(
 
     let db = &state.db;
 
-    // Support optional repo_id filtering
-    let conn = db.conn();
-    let (sql, views) = if let Some(ref rid) = query.repo_id {
+    // IMPORTANT: Do NOT hoist `db.conn()` above this `if`. The `else` branch
+    // calls `db.list_commit_map()` which internally acquires the same mutex.
+    // Holding a MutexGuard while calling a db.*() method is an instant deadlock
+    // (std::sync::Mutex is not re-entrant). This was the root cause of the
+    // "repo detail page freezes the entire server" bug — see module doc.
+    let views: Vec<CommitMapEntryView> = if let Some(ref rid) = query.repo_id {
+        let conn = db.conn();
         let mut stmt = conn.prepare(
             "SELECT id, svn_rev, git_sha, direction, synced_at, svn_author, git_author
              FROM commit_map WHERE repo_id = ?1 ORDER BY id DESC LIMIT ?2",
@@ -99,18 +117,16 @@ async fn list_commit_map(
         }).map_err(|e| AppError::Internal(format!("query: {}", e)))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| AppError::Internal(format!("row: {}", e)))?;
-        ("filtered".to_string(), rows)
+        rows
     } else {
         let entries = db.list_commit_map(limit)
             .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
-        let v: Vec<CommitMapEntryView> = entries.into_iter().map(|e| CommitMapEntryView {
+        entries.into_iter().map(|e| CommitMapEntryView {
             id: e.id, svn_rev: e.svn_rev, git_sha: e.git_sha,
             direction: e.direction, synced_at: e.synced_at,
             svn_author: e.svn_author, git_author: e.git_author,
-        }).collect();
-        ("all".to_string(), v)
+        }).collect()
     };
-    let _ = sql;
 
     let total = views.len();
     Ok(Json(CommitMapResponse {

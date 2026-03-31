@@ -194,6 +194,7 @@ async fn build_test_server_full() -> (
         .merge(api::auth::routes())
         .merge(api::repos::routes())
         .merge(api::audit::routes())
+        .merge(api::sync_history::routes())
         .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -1141,5 +1142,78 @@ async fn test_no_resource_leak_after_many_requests() {
             rss_growth_kb,
             rss_growth_kb as f64 / 1024.0
         );
+    }
+}
+
+/// Regression test for the re-entrant Mutex deadlock in `list_commit_map`.
+///
+/// Root cause: the handler called `db.conn()` (holding the MutexGuard) then
+/// called `db.list_commit_map()` in the `else` branch (no repo_id), which
+/// internally called `self.conn()` on the same non-reentrant std::sync::Mutex.
+/// This permanently deadlocked the thread, and because all authenticated
+/// requests share the same mutex via validate_session, the entire server froze.
+///
+/// This test reproduces the exact frontend request pattern that triggers it:
+/// the React RepoDetail page fires /api/commit-map?limit=15 WITHOUT repo_id
+/// concurrently with 5 other endpoints.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_commit_map_no_repo_id_does_not_deadlock() {
+    let (addr, _state, _server, _tmp) = build_test_server_full().await;
+    let base_url = format!("http://{}", addr);
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .unwrap();
+
+    // Run 10 rounds of 6 concurrent requests matching the exact frontend
+    // pattern. Before the fix, the FIRST round deadlocked the server.
+    for round in 0..10 {
+        let mut handles = Vec::new();
+
+        // The critical request: /api/commit-map WITHOUT repo_id hits the
+        // else branch that previously called db.list_commit_map() while
+        // holding a MutexGuard from db.conn().
+        let c = client.clone();
+        let u = base_url.clone();
+        handles.push(tokio::spawn(async move {
+            c.get(format!("{}/api/commit-map?limit=15", u))
+                .send()
+                .await
+        }));
+
+        // The other 5 endpoints the frontend fires concurrently.
+        for endpoint in &[
+            "/api/status/health",
+            "/api/status",
+            "/api/sync-records?limit=20",
+            "/api/audit?limit=10",
+            "/api/status/system",
+        ] {
+            let c = client.clone();
+            let url = format!("{}{}", base_url, endpoint);
+            handles.push(tokio::spawn(async move { c.get(&url).send().await }));
+        }
+
+        for (i, h) in handles.into_iter().enumerate() {
+            let result = h.await.expect("task panicked");
+            assert!(
+                result.is_ok(),
+                "round {} request {} timed out or failed: {:?} — \
+                 server likely deadlocked on re-entrant db.conn() mutex",
+                round,
+                i,
+                result.err()
+            );
+            let resp = result.unwrap();
+            assert_eq!(
+                resp.status().as_u16(),
+                200,
+                "round {} request {} returned {} — expected 200",
+                round,
+                i,
+                resp.status()
+            );
+        }
     }
 }
