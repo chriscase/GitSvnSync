@@ -7,7 +7,15 @@ use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use tracing::{error, info};
 use uuid::Uuid;
+
+use gitsvnsync_core::db::Database;
+use gitsvnsync_core::file_policy::FilePolicy;
+use gitsvnsync_core::git::GitClient;
+use gitsvnsync_core::identity::IdentityMapper;
+use gitsvnsync_core::import::{self, ImportConfig, ImportPhase, ImportProgress};
+use gitsvnsync_core::svn::SvnClient;
 
 use crate::api::auth::{validate_session, validate_session_with_role};
 use crate::api::status::AppError;
@@ -175,6 +183,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/repos/:id", put(update_repo))
         .route("/api/repos/:id", delete(delete_repo))
         .route("/api/repos/:id/sync", post(trigger_sync))
+        .route("/api/repos/:id/import", post(start_repo_import))
+        .route("/api/repos/:id/import/status", get(repo_import_status))
         .route("/api/repos/:id/credentials", get(get_credentials))
         .route("/api/repos/:id/credentials", post(save_credentials))
 }
@@ -391,23 +401,284 @@ async fn trigger_sync(
     )
     .await?;
 
-    // Verify the repository exists.
-    {
-        let db = &state.db;
-        let _repo = db
-            .get_repository(&id)
-            .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
-            .ok_or_else(|| AppError::NotFound("repository not found".into()))?;
-    }
+    let db = &state.db;
+    let repo = db
+        .get_repository(&id)
+        .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
+        .ok_or_else(|| AppError::NotFound("repository not found".into()))?;
 
-    // For now, just log that sync was requested. The actual per-repo sync
-    // engine will be wired in a later phase.
-    tracing::info!(repo_id = %id, "manual sync triggered for repository");
+    // Check import progress for this repo to give useful status.
+    let progress = state.get_repo_import_progress(&id).await;
+    let p = progress.read().await;
+    let import_phase = format!("{:?}", p.phase).to_lowercase();
+
+    info!(repo_id = %id, "manual sync triggered for repository");
+
+    // Record an audit entry so the scheduler can pick it up.
+    let _ = db.insert_audit_log(
+        "sync_trigger",
+        Some("api"),
+        None,
+        None,
+        None,
+        Some(&format!("Manual sync triggered for repo '{}' ({})", repo.name, id)),
+        true,
+    );
 
     Ok(Json(serde_json::json!({
         "ok": true,
         "message": "Sync triggered",
+        "repo_name": repo.name,
+        "enabled": repo.enabled,
+        "import_phase": import_phase,
     })))
+}
+
+// ---------------------------------------------------------------------------
+// Per-repo import
+// ---------------------------------------------------------------------------
+
+async fn start_repo_import(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (_user_id, role) = validate_session_with_role(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
+
+    if role != "admin" {
+        return Err(AppError::Unauthorized("admin access required".into()));
+    }
+
+    let db = &state.db;
+
+    // 1. Load repo config from DB
+    let repo = db
+        .get_repository(&id)
+        .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
+        .ok_or_else(|| AppError::NotFound("repository not found".into()))?;
+
+    // 2. Check if an import is already running for this repo
+    let progress = state.get_repo_import_progress(&id).await;
+    {
+        let p = progress.read().await;
+        if p.phase == ImportPhase::Importing {
+            return Ok(Json(serde_json::json!({
+                "ok": false,
+                "message": "An import is already running for this repository",
+            })));
+        }
+    }
+
+    // 3. Reset progress
+    {
+        let mut p = progress.write().await;
+        *p = ImportProgress::default();
+        p.phase = ImportPhase::Importing;
+        p.started_at = Some(chrono::Utc::now().to_rfc3339());
+    }
+
+    // 4. Read credentials from kv_state
+    let svn_password = db
+        .get_state(&format!("secret_svn_password_{}", id))
+        .unwrap_or(None)
+        .or_else(|| db.get_state("secret_svn_password").unwrap_or(None))
+        .unwrap_or_default();
+
+    let git_token: Option<String> = db
+        .get_state(&format!("secret_git_token_{}", id))
+        .unwrap_or(None)
+        .or_else(|| db.get_state("secret_git_token").unwrap_or(None));
+
+    // 5. Build SVN import URL
+    let svn_import_url = {
+        let base = repo.svn_url.trim_end_matches('/');
+        let branch = if repo.svn_branch.is_empty() {
+            "trunk"
+        } else {
+            &repo.svn_branch
+        };
+        if branch.is_empty() || branch == "/" {
+            base.to_string()
+        } else {
+            format!("{}/{}", base, branch.trim_start_matches('/'))
+        }
+    };
+
+    info!(repo_id = %id, svn_import_url = %svn_import_url, "starting per-repo import");
+
+    let svn_client = SvnClient::new(&svn_import_url, &repo.svn_username, &svn_password);
+
+    // 6. Build the git repo path: {data_dir}/repos/{repo_id}/git-repo
+    let data_dir = state.config.daemon.data_dir.clone();
+    let git_repo_path = data_dir.join("repos").join(&id).join("git-repo");
+
+    std::fs::create_dir_all(&git_repo_path)
+        .map_err(|e| AppError::Internal(format!("failed to create repo dir: {}", e)))?;
+
+    // 7. Build clone URL from repo config
+    let clone_url = gitsvnsync_core::git::remote_url::derive_git_remote_url(
+        &repo.git_api_url,
+        None,
+        &repo.git_repo,
+    );
+
+    let git_client = if git_repo_path.join(".git").exists() {
+        GitClient::new(&git_repo_path)
+            .map_err(|e| AppError::Internal(format!("failed to open git repo: {}", e)))?
+    } else {
+        match GitClient::clone_repo(&clone_url, &git_repo_path, git_token.as_deref()) {
+            Ok(client) => client,
+            Err(_) => {
+                info!("Clone failed, initializing empty repo with remote");
+                let output = std::process::Command::new("git")
+                    .args(["init", "--initial-branch", &repo.git_branch])
+                    .current_dir(&git_repo_path)
+                    .output()
+                    .map_err(|e| AppError::Internal(format!("git init failed: {}", e)))?;
+                if !output.status.success() {
+                    let _ = std::process::Command::new("git")
+                        .args(["init"])
+                        .current_dir(&git_repo_path)
+                        .output();
+                }
+                let _ = std::process::Command::new("git")
+                    .args(["remote", "add", "origin", &clone_url])
+                    .current_dir(&git_repo_path)
+                    .output();
+                GitClient::new(&git_repo_path)
+                    .map_err(|e| AppError::Internal(format!("git open failed: {}", e)))?
+            }
+        }
+    };
+
+    // 8. Configure git remote credentials
+    git_client
+        .ensure_remote_credentials("origin", git_token.as_deref())
+        .map_err(|e| AppError::Internal(format!("failed to set git credentials: {}", e)))?;
+
+    // Install git-lfs hooks if available
+    let _ = std::process::Command::new("git")
+        .args(["lfs", "install"])
+        .current_dir(&git_repo_path)
+        .output();
+
+    let git_client = Arc::new(std::sync::Mutex::new(git_client));
+
+    // 9. Create IdentityMapper and FilePolicy (use defaults for per-repo)
+    let identity_config = gitsvnsync_core::config::IdentityConfig::default();
+    let identity_mapper = IdentityMapper::new(&identity_config)
+        .map_err(|e| AppError::Internal(format!("failed to init identity mapper: {}", e)))?;
+
+    let lfs_threshold_bytes = if repo.lfs_threshold_mb > 0 {
+        (repo.lfs_threshold_mb as u64) * 1024 * 1024
+    } else {
+        0
+    };
+    let file_policy = FilePolicy::new(lfs_threshold_bytes, vec![]);
+
+    // 10. Open a separate DB connection for the import task
+    let db_path = data_dir.join("gitsvnsync.db");
+    let import_db = Database::new(&db_path)
+        .map_err(|e| AppError::Internal(format!("failed to open db: {}", e)))?;
+
+    // 11. Build ImportConfig from repo settings
+    let import_config = ImportConfig {
+        committer_name: "RepoSync".into(),
+        committer_email: "reposync@localhost".into(),
+        remote_name: "origin".into(),
+        branch: repo.git_branch.clone(),
+        push_token: git_token,
+        message_prefix: None,
+    };
+
+    let ws_broadcast = Some(state.ws_broadcast.clone());
+    let repo_id_clone = id.clone();
+
+    // 12. Spawn the import task
+    tokio::spawn(async move {
+        let result = import::run_full_import(
+            &svn_client,
+            &git_client,
+            &identity_mapper,
+            &import_db,
+            &file_policy,
+            &import_config,
+            progress.clone(),
+            ws_broadcast.clone(),
+        )
+        .await;
+
+        let mut p = progress.write().await;
+        match result {
+            Ok(count) => {
+                if p.phase != ImportPhase::Cancelled {
+                    p.phase = ImportPhase::Completed;
+                }
+                p.completed_at = Some(chrono::Utc::now().to_rfc3339());
+                p.push_log(format!(
+                    "[info] Import complete: {} commits created",
+                    count
+                ));
+                info!(repo_id = %repo_id_clone, count, "per-repo import completed successfully");
+            }
+            Err(e) => {
+                p.phase = ImportPhase::Failed;
+                p.completed_at = Some(chrono::Utc::now().to_rfc3339());
+                let msg = format!("[error] Import failed: {}", e);
+                p.push_log(msg.clone());
+                p.errors.push(msg);
+                error!(repo_id = %repo_id_clone, "per-repo import failed: {}", e);
+            }
+        }
+
+        if let Err(e) = import_db.persist_import_progress(&p) {
+            tracing::warn!("failed to persist import progress for repo {}: {}", repo_id_clone, e);
+        }
+
+        if let Some(ref sender) = ws_broadcast {
+            let json = serde_json::json!({
+                "type": "repo_import_progress",
+                "repo_id": repo_id_clone,
+                "phase": format!("{:?}", p.phase).to_lowercase(),
+                "current_rev": p.current_rev,
+                "total_revs": p.total_revs,
+                "commits_created": p.commits_created,
+            });
+            let _ = sender.send(json.to_string());
+        }
+    });
+
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "message": "Import started",
+    })))
+}
+
+async fn repo_import_status(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<ImportProgress>, AppError> {
+    validate_session(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
+
+    // Verify the repository exists
+    let db = &state.db;
+    let _repo = db
+        .get_repository(&id)
+        .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
+        .ok_or_else(|| AppError::NotFound("repository not found".into()))?;
+
+    let progress = state.get_repo_import_progress(&id).await;
+    let p = progress.read().await;
+    Ok(Json(p.clone()))
 }
 
 async fn get_credentials(

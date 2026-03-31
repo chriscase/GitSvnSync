@@ -364,7 +364,7 @@ export default function SetupWizard() {
             )}
           </div>
           <div className="flex items-center space-x-3">
-            <button onClick={() => navigate('/login')} className="px-5 py-2.5 text-gray-400 hover:text-gray-200 text-sm font-medium transition-colors">
+            <button onClick={() => navigate(step === 0 ? '/login' : '/')} className="px-5 py-2.5 text-gray-400 hover:text-gray-200 text-sm font-medium transition-colors">
               {step === 0 ? 'Skip to Login' : 'Exit to Dashboard'}
             </button>
             {step < STEPS.length - 2 && (

@@ -29,6 +29,8 @@ use gitsvnsync_core::db::Database;
 use gitsvnsync_core::import::ImportProgress;
 use gitsvnsync_core::sync_engine::SyncEngine;
 
+use std::collections::HashMap;
+
 /// Shared application state accessible from all handlers.
 pub struct AppState {
     pub db: Database,
@@ -47,6 +49,29 @@ pub struct AppState {
     pub config_path: std::path::PathBuf,
     /// Previous network byte counters for rate calculation.
     pub prev_net_snapshot: std::sync::Mutex<Option<(u64, u64, std::time::Instant)>>,
+    /// Per-repo import progress tracking (repo_id -> progress).
+    pub repo_import_progress:
+        tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::RwLock<ImportProgress>>>>,
+}
+
+impl AppState {
+    /// Get or create the import progress tracker for a specific repository.
+    pub async fn get_repo_import_progress(
+        &self,
+        repo_id: &str,
+    ) -> Arc<tokio::sync::RwLock<ImportProgress>> {
+        {
+            let map = self.repo_import_progress.read().await;
+            if let Some(progress) = map.get(repo_id) {
+                return progress.clone();
+            }
+        }
+        let mut map = self.repo_import_progress.write().await;
+        // Double-check after acquiring write lock.
+        map.entry(repo_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::RwLock::new(ImportProgress::default())))
+            .clone()
+    }
 }
 
 /// The web server.
@@ -75,6 +100,7 @@ impl WebServer {
             import_progress,
             config_path,
             prev_net_snapshot: std::sync::Mutex::new(None),
+            repo_import_progress: tokio::sync::RwLock::new(HashMap::new()),
         });
         Self { state }
     }

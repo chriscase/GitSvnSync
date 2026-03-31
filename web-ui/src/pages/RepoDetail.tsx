@@ -108,21 +108,21 @@ export default function RepoDetail() {
   // Sync records
   const { data: syncRecords } = useQuery({
     queryKey: ['sync-records', id],
-    queryFn: () => api.getSyncRecords(20),
+    queryFn: () => api.getSyncRecords(20, id),
     enabled: !!id,
   });
 
   // Commit map
   const { data: commitMap } = useQuery({
     queryKey: ['commit-map', id],
-    queryFn: () => api.getCommitMap(15),
+    queryFn: () => api.getCommitMap(15, id),
     enabled: !!id,
   });
 
   // Audit log
   const { data: auditLog } = useQuery({
     queryKey: ['audit', id],
-    queryFn: () => api.getAuditLog(10),
+    queryFn: () => api.getAuditLog(10, undefined, undefined, id),
     enabled: !!id,
   });
 
