@@ -413,6 +413,20 @@ async fn main() -> Result<()> {
     // Abort the web server
     web_handle.abort();
 
+    // Checkpoint the SQLite WAL to prevent corruption on unclean exit.
+    // Open a fresh connection since the original db/web_db were moved into AppState.
+    info!("checkpointing SQLite WAL...");
+    let db_path = config.daemon.data_dir.join("gitsvnsync.db");
+    match rusqlite::Connection::open(&db_path) {
+        Ok(conn) => {
+            match conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+                Ok(_) => info!("WAL checkpoint completed successfully"),
+                Err(e) => warn!("WAL checkpoint failed: {}", e),
+            }
+        }
+        Err(e) => warn!("could not open DB for WAL checkpoint: {}", e),
+    }
+
     info!("GitSvnSync daemon stopped.");
     Ok(())
 }
