@@ -416,8 +416,15 @@ impl Scheduler {
                 }
             };
 
+            // Override global config with per-repo settings.
+            // The trunk_path must be empty because the branch path is already
+            // baked into the SVN URL (svn_url + svn_branch).
+            let mut repo_config = self.app_config.clone();
+            repo_config.svn.trunk_path = String::new();
+            repo_config.svn.layout = gitsvnsync_core::config::SvnLayout::Custom;
+
             let mut engine = SyncEngine::new(
-                self.app_config.clone(),
+                repo_config,
                 engine_db,
                 svn_client,
                 git_client,
