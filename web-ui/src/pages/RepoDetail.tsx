@@ -34,10 +34,12 @@ type EditForm = {
   svn_url: string;
   svn_branch: string;
   svn_username: string;
+  svn_password: string;
   git_provider: string;
   git_api_url: string;
   git_repo: string;
   git_branch: string;
+  git_token: string;
   sync_mode: string;
   poll_interval_secs: number;
   lfs_threshold_mb: number;
@@ -50,10 +52,12 @@ function repoToForm(repo: Repository): EditForm {
     svn_url: repo.svn_url,
     svn_branch: repo.svn_branch,
     svn_username: repo.svn_username,
+    svn_password: '',
     git_provider: repo.git_provider,
     git_api_url: repo.git_api_url,
     git_repo: repo.git_repo,
     git_branch: repo.git_branch,
+    git_token: '',
     sync_mode: repo.sync_mode,
     poll_interval_secs: repo.poll_interval_secs,
     lfs_threshold_mb: repo.lfs_threshold_mb,
@@ -80,6 +84,10 @@ export default function RepoDetail() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [expandedAuditGroups, setExpandedAuditGroups] = useState<Set<number>>(new Set());
   const [expandedDetails, setExpandedDetails] = useState<Set<number>>(new Set());
+  const [svnTestResult, setSvnTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [gitTestResult, setGitTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [svnTesting, setSvnTesting] = useState(false);
+  const [gitTesting, setGitTesting] = useState(false);
 
   const { data: repo, isLoading, isError, error } = useQuery({
     queryKey: ['repo', id],
@@ -113,6 +121,13 @@ export default function RepoDetail() {
   const { data: auditLog } = useQuery({
     queryKey: ['audit', id],
     queryFn: () => api.getAuditLog(10),
+    enabled: !!id,
+  });
+
+  // Credential status
+  const { data: credStatus } = useQuery({
+    queryKey: ['repo-credentials', id],
+    queryFn: () => api.getRepoCredentials(id!),
     enabled: !!id,
   });
 
@@ -179,9 +194,59 @@ export default function RepoDetail() {
     setForm(null);
   }
 
-  function handleSave() {
+  async function handleSave() {
     if (!form) return;
-    updateMutation.mutate(form);
+    // Save repo config (exclude credential fields)
+    const { svn_password, git_token, ...repoData } = form;
+    updateMutation.mutate(repoData);
+    // Save credentials if provided
+    if (svn_password || git_token) {
+      const credData: { svn_password?: string; git_token?: string } = {};
+      if (svn_password) credData.svn_password = svn_password;
+      if (git_token) credData.git_token = git_token;
+      try {
+        await api.saveRepoCredentials(id!, credData);
+        queryClient.invalidateQueries({ queryKey: ['repo-credentials', id] });
+      } catch (e) {
+        // update mutation error will show in UI
+      }
+    }
+  }
+
+  async function handleTestSvn() {
+    if (!form) return;
+    setSvnTesting(true);
+    setSvnTestResult(null);
+    try {
+      const result = await api.testSvnConnection({
+        url: form.svn_url,
+        username: form.svn_username,
+        password: form.svn_password || undefined,
+      });
+      setSvnTestResult(result);
+    } catch (e: any) {
+      setSvnTestResult({ ok: false, message: e.message });
+    } finally {
+      setSvnTesting(false);
+    }
+  }
+
+  async function handleTestGit() {
+    if (!form) return;
+    setGitTesting(true);
+    setGitTestResult(null);
+    try {
+      const result = await api.testGitConnection({
+        api_url: form.git_api_url,
+        repo: form.git_repo,
+        provider: form.git_provider,
+      });
+      setGitTestResult(result);
+    } catch (e: any) {
+      setGitTestResult({ ok: false, message: e.message });
+    } finally {
+      setGitTesting(false);
+    }
   }
 
   function setField<K extends keyof EditForm>(key: K, value: EditForm[K]) {
@@ -311,6 +376,29 @@ export default function RepoDetail() {
                 <FieldInput label="SVN URL" value={form.svn_url} onChange={(v) => setField('svn_url', v)} />
                 <FieldInput label="Branch" value={form.svn_branch} onChange={(v) => setField('svn_branch', v)} />
                 <FieldInput label="Username" value={form.svn_username} onChange={(v) => setField('svn_username', v)} />
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">SVN Password</label>
+                  <input
+                    type="password"
+                    className={inputClass}
+                    value={form.svn_password}
+                    onChange={(e) => setField('svn_password', e.target.value)}
+                    placeholder={credStatus?.svn_password_set ? '\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF (saved)' : 'Enter password'}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleTestSvn}
+                  disabled={svnTesting}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium border border-blue-600 text-blue-300 hover:bg-blue-900/30 disabled:opacity-50 transition-colors"
+                >
+                  {svnTesting ? 'Testing...' : 'Test SVN Connection'}
+                </button>
+                {svnTestResult && (
+                  <div className={`text-xs px-2 py-1.5 rounded ${svnTestResult.ok ? 'bg-green-900/30 text-green-300' : 'bg-red-900/30 text-red-300'}`}>
+                    {svnTestResult.message}
+                  </div>
+                )}
               </>
             ) : (
               <>
@@ -318,6 +406,7 @@ export default function RepoDetail() {
                 <ConfigRow label="URL" value={repo.svn_url} />
                 <ConfigRow label="Branch" value={repo.svn_branch} />
                 <ConfigRow label="Username" value={repo.svn_username} />
+                <ConfigRow label="Password" value={credStatus?.svn_password_set ? '\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF (saved)' : 'Not set'} />
               </>
             )}
           </div>
@@ -344,6 +433,29 @@ export default function RepoDetail() {
                 <FieldInput label="API URL" value={form.git_api_url} onChange={(v) => setField('git_api_url', v)} />
                 <FieldInput label="Repository" value={form.git_repo} onChange={(v) => setField('git_repo', v)} placeholder="owner/repo" />
                 <FieldInput label="Default Branch" value={form.git_branch} onChange={(v) => setField('git_branch', v)} />
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">Git Token</label>
+                  <input
+                    type="password"
+                    className={inputClass}
+                    value={form.git_token}
+                    onChange={(e) => setField('git_token', e.target.value)}
+                    placeholder={credStatus?.git_token_set ? '\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF (saved)' : 'Enter token'}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleTestGit}
+                  disabled={gitTesting}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium border border-purple-600 text-purple-300 hover:bg-purple-900/30 disabled:opacity-50 transition-colors"
+                >
+                  {gitTesting ? 'Testing...' : 'Test Git Connection'}
+                </button>
+                {gitTestResult && (
+                  <div className={`text-xs px-2 py-1.5 rounded ${gitTestResult.ok ? 'bg-green-900/30 text-green-300' : 'bg-red-900/30 text-red-300'}`}>
+                    {gitTestResult.message}
+                  </div>
+                )}
               </>
             ) : (
               <>
@@ -351,6 +463,7 @@ export default function RepoDetail() {
                 <ConfigRow label="API URL" value={repo.git_api_url} />
                 <ConfigRow label="Repository" value={repo.git_repo} />
                 <ConfigRow label="Branch" value={repo.git_branch} />
+                <ConfigRow label="Token" value={credStatus?.git_token_set ? '\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF\u25CF (saved)' : 'Not set'} />
               </>
             )}
           </div>

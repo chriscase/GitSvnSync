@@ -88,6 +88,8 @@ pub struct SyncEngine {
     /// Atomic flag preventing concurrent sync cycles.
     running: Arc<AtomicBool>,
     started_at: chrono::DateTime<Utc>,
+    /// Optional repo ID for per-repo credential and watermark keys.
+    repo_id: Option<String>,
 }
 
 impl SyncEngine {
@@ -108,6 +110,21 @@ impl SyncEngine {
             identity_mapper,
             running: Arc::new(AtomicBool::new(false)),
             started_at: Utc::now(),
+            repo_id: None,
+        }
+    }
+
+    /// Set the repository ID for per-repo credential and watermark keys.
+    pub fn set_repo_id(&mut self, id: String) {
+        self.repo_id = Some(id);
+    }
+
+    /// Return the kv_state key for the last SVN revision watermark.
+    /// Uses per-repo key if repo_id is set, otherwise global key.
+    fn svn_rev_key(&self) -> String {
+        match &self.repo_id {
+            Some(rid) => format!("last_svn_rev_{}", rid),
+            None => "last_svn_rev".to_string(),
         }
     }
 
@@ -221,7 +238,7 @@ impl SyncEngine {
 
         let last_svn_rev = match self
             .db
-            .get_state("last_svn_rev")
+            .get_state(&self.svn_rev_key())
             .map_err(SyncError::DatabaseError)?
         {
             Some(s) => s.parse::<i64>().ok(),
@@ -479,7 +496,7 @@ impl SyncEngine {
             // Update the SVN watermark.
             let _ = self
                 .db
-                .set_state("last_svn_rev", &change.revision.to_string());
+                .set_state(&self.svn_rev_key(), &change.revision.to_string());
 
             count += 1;
 
@@ -696,7 +713,7 @@ impl SyncEngine {
         // versions.
         let mut last_rev = match self
             .db
-            .get_state("last_svn_rev")
+            .get_state(&self.svn_rev_key())
             .map_err(SyncError::DatabaseError)?
         {
             Some(s) => s.parse::<i64>().unwrap_or(0),
@@ -717,7 +734,7 @@ impl SyncEngine {
                     detected_rev = detected,
                     "Auto-detected last synced revision from existing git history"
                 );
-                let _ = self.db.set_state("last_svn_rev", &detected.to_string());
+                let _ = self.db.set_state(&self.svn_rev_key(), &detected.to_string());
                 last_rev = detected;
             }
         }
@@ -908,24 +925,58 @@ impl SyncEngine {
     // -----------------------------------------------------------------------
 
     /// Re-read SVN password and Git token from the DB so that credentials
-    /// saved via the Setup Wizard take effect without a daemon restart.
+    /// saved via the repo detail page take effect without a daemon restart.
+    /// Tries per-repo keys first (secret_svn_password_{repo_id}), then falls
+    /// back to global keys for backward compatibility.
     fn reload_credentials(&self) {
-        // SVN password
-        if let Ok(Some(pw)) = self.db.get_state("secret_svn_password") {
-            if !pw.is_empty() {
-                let mut svn = self.svn_client.lock().unwrap();
-                svn.set_password(pw);
-                debug!("reloaded SVN password from database");
-            }
+        // SVN password — per-repo key first, then global
+        let svn_pw = self
+            .repo_id
+            .as_ref()
+            .and_then(|rid| {
+                self.db
+                    .get_state(&format!("secret_svn_password_{}", rid))
+                    .ok()
+                    .flatten()
+                    .filter(|v| !v.is_empty())
+            })
+            .or_else(|| {
+                self.db
+                    .get_state("secret_svn_password")
+                    .ok()
+                    .flatten()
+                    .filter(|v| !v.is_empty())
+            });
+
+        if let Some(pw) = svn_pw {
+            let mut svn = self.svn_client.lock().unwrap();
+            svn.set_password(pw);
+            debug!("reloaded SVN password from database");
         }
 
-        // Git token — update the remote URL with embedded credentials.
-        if let Ok(Some(token)) = self.db.get_state("secret_git_token") {
-            if !token.is_empty() {
-                let git = self.git_client.lock().unwrap();
-                let _ = git.ensure_remote_credentials("origin", Some(&token));
-                debug!("reloaded Git token from database");
-            }
+        // Git token — per-repo key first, then global
+        let git_tok = self
+            .repo_id
+            .as_ref()
+            .and_then(|rid| {
+                self.db
+                    .get_state(&format!("secret_git_token_{}", rid))
+                    .ok()
+                    .flatten()
+                    .filter(|v| !v.is_empty())
+            })
+            .or_else(|| {
+                self.db
+                    .get_state("secret_git_token")
+                    .ok()
+                    .flatten()
+                    .filter(|v| !v.is_empty())
+            });
+
+        if let Some(token) = git_tok {
+            let git = self.git_client.lock().unwrap();
+            let _ = git.ensure_remote_credentials("origin", Some(&token));
+            debug!("reloaded Git token from database");
         }
     }
 

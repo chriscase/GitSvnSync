@@ -34,10 +34,12 @@ interface AddRepoForm {
   svn_url: string;
   svn_branch: string;
   svn_username: string;
+  svn_password: string;
   git_provider: string;
   git_api_url: string;
   git_repo: string;
   git_branch: string;
+  git_token: string;
   sync_mode: string;
   poll_interval_secs: number;
   lfs_threshold_mb: number;
@@ -50,10 +52,12 @@ const defaultForm: AddRepoForm = {
   svn_url: '',
   svn_branch: 'trunk',
   svn_username: '',
+  svn_password: '',
   git_provider: 'github',
   git_api_url: 'https://api.github.com',
   git_repo: '',
   git_branch: 'main',
+  git_token: '',
   sync_mode: 'direct',
   poll_interval_secs: 300,
   lfs_threshold_mb: 0,
@@ -69,6 +73,10 @@ export default function Repositories() {
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [form, setForm] = useState<AddRepoForm>({ ...defaultForm });
+  const [svnTestResult, setSvnTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [gitTestResult, setGitTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [svnTesting, setSvnTesting] = useState(false);
+  const [gitTesting, setGitTesting] = useState(false);
 
   const { data: repos, isLoading, isError, error } = useQuery({
     queryKey: ['repos'],
@@ -76,11 +84,24 @@ export default function Repositories() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: Partial<Repository>) => api.createRepo(data),
+    mutationFn: async (data: AddRepoForm) => {
+      const { svn_password, git_token, ...repoData } = data;
+      const created = await api.createRepo(repoData);
+      // Save credentials for the newly created repo
+      if (svn_password || git_token) {
+        const credData: { svn_password?: string; git_token?: string } = {};
+        if (svn_password) credData.svn_password = svn_password;
+        if (git_token) credData.git_token = git_token;
+        await api.saveRepoCredentials(created.id, credData);
+      }
+      return created;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['repos'] });
       setShowAddModal(false);
       setForm({ ...defaultForm });
+      setSvnTestResult(null);
+      setGitTestResult(null);
     },
   });
 
@@ -90,6 +111,40 @@ export default function Repositories() {
 
   function handleCreate() {
     createMutation.mutate(form);
+  }
+
+  async function handleTestSvn() {
+    setSvnTesting(true);
+    setSvnTestResult(null);
+    try {
+      const result = await api.testSvnConnection({
+        url: form.svn_url,
+        username: form.svn_username,
+        password: form.svn_password || undefined,
+      });
+      setSvnTestResult(result);
+    } catch (e: any) {
+      setSvnTestResult({ ok: false, message: e.message });
+    } finally {
+      setSvnTesting(false);
+    }
+  }
+
+  async function handleTestGit() {
+    setGitTesting(true);
+    setGitTestResult(null);
+    try {
+      const result = await api.testGitConnection({
+        api_url: form.git_api_url,
+        repo: form.git_repo,
+        provider: form.git_provider,
+      });
+      setGitTestResult(result);
+    } catch (e: any) {
+      setGitTestResult({ ok: false, message: e.message });
+    } finally {
+      setGitTesting(false);
+    }
   }
 
   if (isLoading) {
@@ -239,7 +294,7 @@ export default function Repositories() {
                       placeholder="trunk"
                     />
                   </div>
-                  <div className="md:col-span-2">
+                  <div>
                     <label className="block text-sm text-gray-400 mb-1">Username</label>
                     <input
                       type="text"
@@ -248,6 +303,31 @@ export default function Repositories() {
                       onChange={(e) => setField('svn_username', e.target.value)}
                       placeholder="svn-user"
                     />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Password</label>
+                    <input
+                      type="password"
+                      className={inputClass}
+                      value={form.svn_password}
+                      onChange={(e) => setField('svn_password', e.target.value)}
+                      placeholder="Enter SVN password"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <button
+                      type="button"
+                      onClick={handleTestSvn}
+                      disabled={svnTesting || !form.svn_url}
+                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium border border-blue-600 text-blue-300 hover:bg-blue-900/30 disabled:opacity-50 transition-colors"
+                    >
+                      {svnTesting ? 'Testing...' : 'Test SVN Connection'}
+                    </button>
+                    {svnTestResult && (
+                      <span className={`ml-3 text-xs ${svnTestResult.ok ? 'text-green-300' : 'text-red-300'}`}>
+                        {svnTestResult.message}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -299,6 +379,31 @@ export default function Repositories() {
                       onChange={(e) => setField('git_branch', e.target.value)}
                       placeholder="main"
                     />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-sm text-gray-400 mb-1">Git Token</label>
+                    <input
+                      type="password"
+                      className={inputClass}
+                      value={form.git_token}
+                      onChange={(e) => setField('git_token', e.target.value)}
+                      placeholder="Enter Git API token"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <button
+                      type="button"
+                      onClick={handleTestGit}
+                      disabled={gitTesting || !form.git_repo}
+                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium border border-purple-600 text-purple-300 hover:bg-purple-900/30 disabled:opacity-50 transition-colors"
+                    >
+                      {gitTesting ? 'Testing...' : 'Test Git Connection'}
+                    </button>
+                    {gitTestResult && (
+                      <span className={`ml-3 text-xs ${gitTestResult.ok ? 'text-green-300' : 'text-red-300'}`}>
+                        {gitTestResult.message}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>

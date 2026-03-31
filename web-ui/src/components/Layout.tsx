@@ -84,14 +84,8 @@ export default function Layout() {
                     </span>
                   )}
                 </NavLink>
-                <NavLink to="/config" className={navLinkClass}>
-                  Configuration
-                </NavLink>
                 <NavLink to="/audit" className={navLinkClass}>
                   Audit Log
-                </NavLink>
-                <NavLink to="/setup" className={navLinkClass}>
-                  Setup
                 </NavLink>
                 <NavLink to="/settings" className={navLinkClass}>
                   Settings

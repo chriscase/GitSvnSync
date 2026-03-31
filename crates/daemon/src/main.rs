@@ -236,13 +236,20 @@ async fn main() -> Result<()> {
     info!("Identity mapper initialized");
 
     // Initialize sync engine
-    let sync_engine = Arc::new(SyncEngine::new(
+    let mut engine = SyncEngine::new(
         config.clone(),
         db,
         svn_client,
         git_client,
         identity_mapper,
-    ));
+    );
+    // Set repo_id from the first enabled repository for per-repo keys
+    if let Ok(repos) = engine.db().list_repositories() {
+        if let Some(repo) = repos.into_iter().find(|r| r.enabled) {
+            engine.set_repo_id(repo.id);
+        }
+    }
+    let sync_engine = Arc::new(engine);
     info!("Sync engine initialized");
 
     // Create sync trigger channel (webhook -> scheduler)

@@ -303,6 +303,13 @@ export const api = {
     fetchJson<void>(`/repos/${id}`, { method: 'DELETE' }),
   triggerRepoSync: (id: string) =>
     fetchJson<{ ok: boolean }>(`/repos/${id}/sync`, { method: 'POST' }),
+  getRepoCredentials: (id: string) =>
+    fetchJson<{ svn_password_set: boolean; git_token_set: boolean }>(`/repos/${id}/credentials`),
+  saveRepoCredentials: (id: string, data: { svn_password?: string; git_token?: string }) =>
+    fetchJson<{ ok: boolean }>(`/repos/${id}/credentials`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   // Auth - public info (no auth required) for login page LDAP hints
   getAuthInfo: async (): Promise<{ ldap_enabled: boolean; ldap_domain: string | null }> => {

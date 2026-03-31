@@ -7,7 +7,6 @@ import ConflictDetail from './pages/ConflictDetail';
 import Config from './pages/Config';
 import AuditLog from './pages/AuditLog';
 import Login from './pages/Login';
-import SetupWizard from './pages/SetupWizard';
 import UserSettings from './pages/UserSettings';
 import AdminUsers from './pages/AdminUsers';
 import AdminLdap from './pages/AdminLdap';
@@ -100,7 +99,7 @@ export default function App() {
       <div style={{ opacity: showSplash ? 0 : 1, transition: 'opacity 0.3s ease-in' }}>
         <Routes>
           <Route path="/login" element={<Login />} />
-          <Route path="/setup" element={<SetupWizard />} />
+          <Route path="/setup" element={<Navigate to="/repos" replace />} />
           <Route
             path="/"
             element={

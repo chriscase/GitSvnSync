@@ -151,6 +151,22 @@ impl From<gitsvnsync_core::models::Repository> for RepoDetail {
 // Routes
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Credential request / response types
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct SaveCredentialsRequest {
+    svn_password: Option<String>,
+    git_token: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CredentialStatus {
+    svn_password_set: bool,
+    git_token_set: bool,
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/repos", get(list_repos))
@@ -159,6 +175,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/repos/:id", put(update_repo))
         .route("/api/repos/:id", delete(delete_repo))
         .route("/api/repos/:id/sync", post(trigger_sync))
+        .route("/api/repos/:id/credentials", get(get_credentials))
+        .route("/api/repos/:id/credentials", post(save_credentials))
 }
 
 // ---------------------------------------------------------------------------
@@ -390,4 +408,118 @@ async fn trigger_sync(
         "ok": true,
         "message": "Sync triggered",
     })))
+}
+
+async fn get_credentials(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<CredentialStatus>, AppError> {
+    validate_session(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
+
+    let db = &state.db;
+
+    // Verify repo exists
+    let _repo = db
+        .get_repository(&id)
+        .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
+        .ok_or_else(|| AppError::NotFound("repository not found".into()))?;
+
+    let svn_key = format!("secret_svn_password_{}", id);
+    let git_key = format!("secret_git_token_{}", id);
+
+    let svn_set = db
+        .get_state(&svn_key)
+        .unwrap_or(None)
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    let git_set = db
+        .get_state(&git_key)
+        .unwrap_or(None)
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+
+    // Fall back to global keys for repos that were migrated from single-repo config
+    let svn_set = svn_set
+        || db
+            .get_state("secret_svn_password")
+            .unwrap_or(None)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
+    let git_set = git_set
+        || db
+            .get_state("secret_git_token")
+            .unwrap_or(None)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
+
+    Ok(Json(CredentialStatus {
+        svn_password_set: svn_set,
+        git_token_set: git_set,
+    }))
+}
+
+async fn save_credentials(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<SaveCredentialsRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (_user_id, role) = validate_session_with_role(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
+
+    if role != "admin" {
+        return Err(AppError::Unauthorized("admin access required".into()));
+    }
+
+    let db = &state.db;
+
+    // Verify repo exists
+    let _repo = db
+        .get_repository(&id)
+        .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
+        .ok_or_else(|| AppError::NotFound("repository not found".into()))?;
+
+    let now = Utc::now().to_rfc3339();
+
+    if let Some(ref password) = body.svn_password {
+        if !password.is_empty() {
+            let key = format!("secret_svn_password_{}", id);
+            let _ = db.conn().execute(
+                "INSERT OR REPLACE INTO kv_state (key, value, updated_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params![key, password, now],
+            );
+            // Also update global key for backward compat with current sync engine
+            let _ = db.conn().execute(
+                "INSERT OR REPLACE INTO kv_state (key, value, updated_at) VALUES ('secret_svn_password', ?1, ?2)",
+                rusqlite::params![password, now],
+            );
+            tracing::info!(repo_id = %id, "SVN password stored for repository");
+        }
+    }
+
+    if let Some(ref token) = body.git_token {
+        if !token.is_empty() {
+            let key = format!("secret_git_token_{}", id);
+            let _ = db.conn().execute(
+                "INSERT OR REPLACE INTO kv_state (key, value, updated_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params![key, token, now],
+            );
+            // Also update global key for backward compat
+            let _ = db.conn().execute(
+                "INSERT OR REPLACE INTO kv_state (key, value, updated_at) VALUES ('secret_git_token', ?1, ?2)",
+                rusqlite::params![token, now],
+            );
+            tracing::info!(repo_id = %id, "Git token stored for repository");
+        }
+    }
+
+    Ok(Json(serde_json::json!({ "ok": true })))
 }

@@ -637,22 +637,11 @@ async fn apply_config(
         }
     }
 
-    // Write config file atomically
-    let tmp_path = state.config_path.with_extension("toml.tmp");
-    if let Err(e) = std::fs::write(&tmp_path, &toml_content) {
-        return Ok(Json(ApplyConfigResponse {
-            ok: false,
-            message: format!("Failed to write config: {}", e),
-            warnings,
-        }));
-    }
-    if let Err(e) = std::fs::rename(&tmp_path, &state.config_path) {
-        return Ok(Json(ApplyConfigResponse {
-            ok: false,
-            message: format!("Failed to save config: {}", e),
-            warnings,
-        }));
-    }
+    // NOTE: TOML file is no longer overwritten by the API.  The TOML file
+    // should only contain daemon bootstrap settings (data_dir, listen address,
+    // log level) and is managed manually.  All repo config is stored in the
+    // repositories table and kv_state.
+    info!("Setup apply: TOML overwrite skipped (config saved to DB only)");
 
     // LFS check
     if body.lfs_threshold.unwrap_or(0) > 0 {
@@ -669,7 +658,7 @@ async fn apply_config(
         }
     }
 
-    info!(path = %state.config_path.display(), "Configuration saved via setup wizard");
+    info!("Configuration applied (credentials saved to DB)");
 
     Ok(Json(ApplyConfigResponse {
         ok: true,
