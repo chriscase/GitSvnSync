@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { api, type Repository, type User, type SyncStatus, type SyncRecord, type CommitMapEntry, type AuditEntry } from '../api';
@@ -78,6 +78,8 @@ export default function RepoDetail() {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<EditForm | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [expandedAuditGroups, setExpandedAuditGroups] = useState<Set<number>>(new Set());
+  const [expandedDetails, setExpandedDetails] = useState<Set<number>>(new Set());
 
   const { data: repo, isLoading, isError, error } = useQuery({
     queryKey: ['repo', id],
@@ -150,6 +152,22 @@ export default function RepoDetail() {
     },
   });
 
+  const auditEntries = auditLog?.entries ?? [];
+
+  function groupAuditEntries(items: AuditEntry[]): { key: number; entries: AuditEntry[] }[] {
+    const groups: { key: number; entries: AuditEntry[] }[] = [];
+    for (const entry of items) {
+      const last = groups[groups.length - 1];
+      if (last && last.entries[0].action === entry.action && last.entries[0].success === entry.success) {
+        last.entries.push(entry);
+      } else {
+        groups.push({ key: entry.id, entries: [entry] });
+      }
+    }
+    return groups;
+  }
+  const auditGroups = groupAuditEntries(auditEntries);
+
   function startEdit() {
     if (!repo) return;
     setForm(repoToForm(repo));
@@ -184,7 +202,6 @@ export default function RepoDetail() {
 
   const records = syncRecords?.entries ?? [];
   const cmEntries = commitMap?.entries ?? [];
-  const auditEntries = auditLog?.entries ?? [];
 
   return (
     <div className="space-y-6">
@@ -529,7 +546,7 @@ export default function RepoDetail() {
           </h2>
           <p className="text-sm text-gray-400 mt-1">Last 10 audit entries for this repository</p>
         </div>
-        {auditEntries.length > 0 ? (
+        {auditGroups.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-700">
               <thead>
@@ -542,27 +559,86 @@ export default function RepoDetail() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-700">
-                {auditEntries.map((entry: AuditEntry) => (
-                  <tr key={entry.id} className="hover:bg-gray-700/50">
-                    <td className="px-6 py-3">
-                      {entry.success ? (
-                        <CheckCircle className="w-4 h-4 text-green-400" />
-                      ) : (
-                        <AlertTriangle className="w-4 h-4 text-red-400" />
-                      )}
-                    </td>
-                    <td className="px-6 py-3">
-                      <ActionBadge action={entry.action} />
-                    </td>
-                    <td className="px-6 py-3 text-sm text-gray-300">{entry.author ?? '-'}</td>
-                    <td className="px-6 py-3 text-sm text-gray-400 truncate max-w-[300px]">
-                      {entry.details || entry.action}
-                    </td>
-                    <td className="px-6 py-3 text-sm text-gray-500">
-                      {new Date(entry.created_at).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
+                {auditGroups.map((group) => {
+                  const latest = group.entries[0];
+                  const isGroup = group.entries.length > 1;
+                  const isGrpExpanded = expandedAuditGroups.has(group.key);
+                  const isDetExpanded = expandedDetails.has(latest.id);
+                  const detailText = latest.details || latest.action;
+                  const isLong = detailText.length > 80;
+                  return (
+                    <React.Fragment key={group.key}>
+                      <tr
+                        className={`hover:bg-gray-700/50 ${isGroup ? 'cursor-pointer' : ''}`}
+                        onClick={() => {
+                          if (!isGroup) return;
+                          setExpandedAuditGroups(prev => {
+                            const next = new Set(prev);
+                            if (next.has(group.key)) next.delete(group.key); else next.add(group.key);
+                            return next;
+                          });
+                        }}
+                      >
+                        <td className="px-6 py-3">
+                          <div className="flex items-center space-x-1">
+                            {isGroup && <span className="text-gray-500 text-xs">{isGrpExpanded ? '\u25BE' : '\u25B8'}</span>}
+                            {latest.success ? (
+                              <CheckCircle className="w-4 h-4 text-green-400" />
+                            ) : (
+                              <AlertTriangle className="w-4 h-4 text-red-400" />
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-3">
+                          <div className="flex items-center space-x-2">
+                            <ActionBadge action={latest.action} />
+                            {isGroup && (
+                              <span className="text-xs bg-gray-600 text-gray-300 rounded-full px-2 py-0.5">
+                                &times;{group.entries.length}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-3 text-sm text-gray-300">{latest.author ?? '-'}</td>
+                        <td className="px-6 py-3 text-sm text-gray-400">
+                          <div>
+                            <span
+                              className={isLong ? 'cursor-pointer hover:text-gray-200' : ''}
+                              onClick={(e) => {
+                                if (!isLong) return;
+                                e.stopPropagation();
+                                setExpandedDetails(prev => {
+                                  const next = new Set(prev);
+                                  if (next.has(latest.id)) next.delete(latest.id); else next.add(latest.id);
+                                  return next;
+                                });
+                              }}
+                            >
+                              {isDetExpanded ? detailText : (isLong ? `${detailText.substring(0, 80)}...` : detailText)}
+                            </span>
+                            {isDetExpanded && (
+                              <pre className="mt-2 p-3 bg-gray-900 rounded text-xs font-mono text-gray-300 whitespace-pre-wrap break-words max-w-lg">
+                                {detailText}
+                              </pre>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-3 text-sm text-gray-500">
+                          {new Date(latest.created_at).toLocaleString()}
+                        </td>
+                      </tr>
+                      {isGroup && isGrpExpanded && group.entries.slice(1).map((entry: AuditEntry) => (
+                        <tr key={entry.id} className="bg-gray-900/40">
+                          <td className="px-6 py-2"></td>
+                          <td className="px-6 py-2"><ActionBadge action={entry.action} /></td>
+                          <td className="px-6 py-2 text-sm text-gray-400">{entry.author ?? '-'}</td>
+                          <td className="px-6 py-2 text-sm text-gray-500 truncate max-w-[300px]">{entry.details || entry.action}</td>
+                          <td className="px-6 py-2 text-sm text-gray-600">{new Date(entry.created_at).toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

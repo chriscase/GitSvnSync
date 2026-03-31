@@ -55,6 +55,16 @@ impl SvnClient {
         &self.url
     }
 
+    /// Update the password at runtime (credential hot-reload from DB).
+    pub fn set_password(&mut self, password: impl Into<String>) {
+        self.password = password.into();
+    }
+
+    /// Update the username at runtime (credential hot-reload from DB).
+    pub fn set_username(&mut self, username: impl Into<String>) {
+        self.username = username.into();
+    }
+
     #[instrument(skip(self), fields(url = %self.url))]
     pub async fn info(&self) -> Result<SvnInfo, SvnError> {
         let output = self.run_svn(&["info", "--xml", &self.url]).await?;

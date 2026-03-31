@@ -9,6 +9,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [selectedRepoId, setSelectedRepoId] = useState<string>('all');
+  const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
 
   const activeRepoId = selectedRepoId !== 'all' ? selectedRepoId : undefined;
 
@@ -80,6 +81,21 @@ export default function Dashboard() {
   const entries = recentActivity?.entries ?? [];
   const records = syncRecords?.entries ?? [];
   const cmEntries = commitMap?.entries ?? [];
+
+  // Group consecutive audit entries with same (action, success) for collapsed display
+  function groupEntries(items: AuditEntry[]): { key: number; entries: AuditEntry[] }[] {
+    const groups: { key: number; entries: AuditEntry[] }[] = [];
+    for (const entry of items) {
+      const last = groups[groups.length - 1];
+      if (last && last.entries[0].action === entry.action && last.entries[0].success === entry.success) {
+        last.entries.push(entry);
+      } else {
+        groups.push({ key: entry.id, entries: [entry] });
+      }
+    }
+    return groups;
+  }
+  const auditGroups = groupEntries(entries);
 
   return (
     <div className="space-y-6">
@@ -333,42 +349,74 @@ export default function Dashboard() {
             <span className="ml-2 text-sm font-normal text-blue-400">— {selectedRepo.name}</span>
           )}
         </h2>
-        {entries.length > 0 ? (
-          <div className="space-y-2">
-            {entries.map((entry: AuditEntry) => (
-              <div
-                key={entry.id}
-                className="flex items-center justify-between py-2 border-b border-gray-700 last:border-0"
-              >
-                <div className="flex items-center space-x-3">
-                  <RepoBadge name={repoName} />
-                  <SuccessIndicator success={entry.success} />
-                  {entry.direction && (
-                    <DirectionBadge direction={entry.direction} />
-                  )}
-                  <ActionBadge action={entry.action} />
-                  <span className="text-sm text-gray-200 truncate max-w-xl lg:max-w-2xl">
-                    {entry.details || entry.action}
-                  </span>
-                  {entry.author && (
-                    <span className="text-sm text-gray-400">by {entry.author}</span>
+        {auditGroups.length > 0 ? (
+          <div className="space-y-1">
+            {auditGroups.map((group) => {
+              const latest = group.entries[0];
+              const isGroup = group.entries.length > 1;
+              const isExpanded = expandedGroups.has(group.key);
+              return (
+                <div key={group.key}>
+                  <div
+                    className={`flex items-center justify-between py-2 border-b border-gray-700 last:border-0 ${isGroup ? 'cursor-pointer hover:bg-gray-700/30' : ''}`}
+                    onClick={() => {
+                      if (!isGroup) return;
+                      setExpandedGroups(prev => {
+                        const next = new Set(prev);
+                        if (next.has(group.key)) next.delete(group.key); else next.add(group.key);
+                        return next;
+                      });
+                    }}
+                  >
+                    <div className="flex items-center space-x-3">
+                      {isGroup && (
+                        <span className="text-gray-500 w-4">{isExpanded ? '\u25BE' : '\u25B8'}</span>
+                      )}
+                      <RepoBadge name={repoName} />
+                      <SuccessIndicator success={latest.success} />
+                      {latest.direction && <DirectionBadge direction={latest.direction} />}
+                      <ActionBadge action={latest.action} />
+                      {isGroup && (
+                        <span className="text-xs bg-gray-600 text-gray-300 rounded-full px-2 py-0.5">
+                          &times;{group.entries.length}
+                        </span>
+                      )}
+                      <span className="text-sm text-gray-200 truncate max-w-xl lg:max-w-2xl" title={latest.details || latest.action}>
+                        {latest.details || latest.action}
+                      </span>
+                      {latest.author && (
+                        <span className="text-sm text-gray-400">by {latest.author}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center space-x-3 flex-shrink-0">
+                      {latest.svn_rev && (
+                        <span className="text-xs font-mono text-blue-400">r{latest.svn_rev}</span>
+                      )}
+                      {latest.git_sha && (
+                        <span className="text-xs font-mono text-purple-400">
+                          {latest.git_sha.substring(0, 8)}
+                        </span>
+                      )}
+                      <span className="text-xs text-gray-500">
+                        {new Date(latest.created_at).toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                  {isGroup && isExpanded && (
+                    <div className="ml-8 border-l-2 border-gray-700 pl-4 space-y-1">
+                      {group.entries.slice(1).map((entry: AuditEntry) => (
+                        <div key={entry.id} className="flex items-center justify-between py-1.5 text-sm text-gray-400">
+                          <span className="truncate max-w-xl">{entry.details || entry.action}</span>
+                          <span className="text-xs text-gray-500 flex-shrink-0 ml-3">
+                            {new Date(entry.created_at).toLocaleString()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
-                <div className="flex items-center space-x-3 flex-shrink-0">
-                  {entry.svn_rev && (
-                    <span className="text-xs font-mono text-blue-400">r{entry.svn_rev}</span>
-                  )}
-                  {entry.git_sha && (
-                    <span className="text-xs font-mono text-purple-400">
-                      {entry.git_sha.substring(0, 8)}
-                    </span>
-                  )}
-                  <span className="text-xs text-gray-500">
-                    {new Date(entry.created_at).toLocaleString()}
-                  </span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <p className="text-gray-400 text-sm">No activity yet</p>
