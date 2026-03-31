@@ -456,7 +456,10 @@ impl SyncEngine {
                 change.message, SYNC_MARKER, change.revision
             );
 
-            let git_sha = {
+            // Wrap commit+push in block_in_place so the synchronous git
+            // CLI call doesn't block the tokio async runtime (which would
+            // make the web UI unresponsive during pushes).
+            let git_sha = tokio::task::block_in_place(|| {
                 let git = self.git_client.lock().unwrap();
                 let oid = git
                     .commit(
@@ -474,8 +477,8 @@ impl SyncEngine {
                 git.push("origin", branch, token)
                     .map_err(SyncError::GitError)?;
 
-                oid.to_string()
-            };
+                Ok::<_, SyncError>(oid.to_string())
+            })?;
 
             // 5. Record the sync only after successful write.
             let record = crate::models::SyncRecord {

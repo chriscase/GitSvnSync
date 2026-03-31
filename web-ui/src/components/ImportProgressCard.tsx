@@ -120,10 +120,10 @@ export default function ImportProgressCard() {
             <p className="text-xs text-gray-500 mt-1">No import history</p>
           </div>
           <a
-            href="/setup"
+            href="/repos"
             className="flex items-center space-x-1 text-sm text-blue-400 hover:text-blue-300 transition-colors"
           >
-            <span>Run Setup</span>
+            <span>Manage Repos</span>
             <ArrowRight className="w-4 h-4" />
           </a>
         </div>
@@ -155,7 +155,7 @@ export default function ImportProgressCard() {
           <StatCell label="LFS Files" value={`${status.lfs_unique_count}`} />
         </div>
         <a
-          href="/setup"
+          href="/"
           className="flex items-center justify-center space-x-1 text-sm text-blue-400 hover:text-blue-300 transition-colors"
         >
           <span>View Full Import</span>
@@ -238,7 +238,7 @@ export default function ImportProgressCard() {
 
       {/* Link */}
       <a
-        href="/setup"
+        href="/"
         className="flex items-center justify-center space-x-1 text-sm text-blue-400 hover:text-blue-300 transition-colors"
       >
         <span>View Full Import</span>

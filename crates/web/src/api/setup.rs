@@ -935,17 +935,48 @@ async fn reset_and_reimport(
         return Err(AppError::Unauthorized("admin access required".into()));
     }
 
-    // Check if already running
+    // If an import is already running, cancel it and wait for it to stop.
     {
-        let p = state.import_progress.read().await;
-        if matches!(
-            p.phase,
-            ImportPhase::Importing | ImportPhase::Connecting | ImportPhase::Verifying | ImportPhase::FinalPush
-        ) {
-            return Ok(Json(ImportActionResponse {
-                ok: false,
-                message: "An import is already running".into(),
-            }));
+        let is_active = {
+            let p = state.import_progress.read().await;
+            matches!(
+                p.phase,
+                ImportPhase::Importing
+                    | ImportPhase::Connecting
+                    | ImportPhase::Verifying
+                    | ImportPhase::FinalPush
+            )
+        };
+
+        if is_active {
+            info!("cancelling running import before reset");
+            {
+                let mut p = state.import_progress.write().await;
+                p.cancel_requested = true;
+            }
+
+            // Poll until the import stops (max 30 seconds)
+            let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(30);
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                let phase = state.import_progress.read().await.phase.clone();
+                if matches!(
+                    phase,
+                    ImportPhase::Idle
+                        | ImportPhase::Completed
+                        | ImportPhase::Failed
+                        | ImportPhase::Cancelled
+                ) {
+                    info!(?phase, "previous import stopped");
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return Ok(Json(ImportActionResponse {
+                        ok: false,
+                        message: "Timed out waiting for running import to cancel".into(),
+                    }));
+                }
+            }
         }
     }
 
