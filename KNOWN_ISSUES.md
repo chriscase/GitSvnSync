@@ -12,9 +12,12 @@
 - **Fixed**: Added `POST /api/repos/:id/import` endpoint
 - **Validated**: Sandbox import completed 250/250 commits via per-repo endpoint
 
-### 3. Sync trigger is stubbed
-- `POST /api/repos/:id/sync` only logs, doesn't actually run sync
-- **Fix**: Wire to sync engine or at minimum return useful status
+### 3. Scheduler only syncs global repo, not per-repo
+- The scheduler runs one global SyncEngine from the TOML config
+- Sandbox and other repos don't get automatic sync — only the TOML-configured repo does
+- `POST /api/repos/:id/sync` returns status but doesn't create a per-repo SyncEngine
+- **Fix needed**: Scheduler should iterate over all enabled repos, create SyncEngine per repo, run sync cycle for each
+- **Workaround**: Use per-repo import endpoint for initial sync
 
 ### 4. Setup Wizard overwrites TOML config
 - Saving the wizard regenerates the entire TOML file, destroying data_dir, watermarks, and other settings

@@ -380,6 +380,10 @@ async fn main() -> Result<()> {
     let shutdown = Arc::new(tokio::sync::Notify::new());
     let scheduler_shutdown = shutdown.clone();
 
+    // Open a third DB connection for the scheduler's per-repo sync cycles.
+    let scheduler_db =
+        Database::new(&db_path).context("failed to open scheduler database connection")?;
+
     // Create and start the scheduler
     let poll_interval = std::time::Duration::from_secs(config.daemon.poll_interval_secs);
     let mut sched = scheduler::Scheduler::new(
@@ -388,6 +392,8 @@ async fn main() -> Result<()> {
         sync_rx,
         ws_broadcast,
         import_progress,
+        scheduler_db,
+        config.clone(),
     );
 
     // Start the scheduler in a background task
