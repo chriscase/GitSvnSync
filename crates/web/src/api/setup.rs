@@ -32,6 +32,7 @@ use crate::AppState;
 pub struct TestSvnRequest {
     pub url: String,
     pub username: String,
+    pub password: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -259,8 +260,15 @@ async fn test_svn_connection(
         }));
     }
 
+    let mut args = vec!["info", "--non-interactive", "--username", &username];
+    let password = body.password.as_deref().unwrap_or("");
+    if !password.is_empty() {
+        args.push("--password");
+        args.push(password);
+    }
+    args.push(&url);
     let result = tokio::process::Command::new("svn")
-        .args(["info", "--non-interactive", "--username", &username, &url])
+        .args(&args)
         .output()
         .await;
 

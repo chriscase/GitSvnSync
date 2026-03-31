@@ -174,9 +174,12 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 
   const res = await fetch(`${API_BASE}${url}`, { ...options, headers });
   if (res.status === 401) {
-    localStorage.removeItem('session_token');
-    window.location.href = '/login';
-    throw new Error('Unauthorized');
+    // Don't redirect if we're on the setup page — let the user finish
+    if (!window.location.pathname.startsWith('/setup')) {
+      localStorage.removeItem('session_token');
+      window.location.href = '/login';
+    }
+    throw new Error('Session expired — please log in again');
   }
   if (!res.ok) {
     const text = await res.text();
@@ -256,7 +259,7 @@ export const api = {
   seedData: () =>
     fetchJson<{ ok: boolean; message: string }>('/seed', { method: 'POST' }),
 
-  testSvnConnection: (data: { url: string; username: string }) =>
+  testSvnConnection: (data: { url: string; username: string; password?: string }) =>
     fetchJson<{ ok: boolean; message: string }>('/setup/test-svn', {
       method: 'POST',
       body: JSON.stringify(data),

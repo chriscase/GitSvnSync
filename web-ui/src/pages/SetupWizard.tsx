@@ -275,7 +275,7 @@ export default function SetupWizard() {
       const payload = {
         svn_url: data.svn_url,
         svn_username: data.svn_username,
-        svn_password: svnPasswordDirty && data.svn_password ? data.svn_password : undefined,
+        svn_password: data.svn_password || undefined,
         svn_password_env: data.svn_password_env || undefined,
         svn_layout: data.svn_layout,
         svn_trunk_path: data.svn_trunk_path,
@@ -284,7 +284,7 @@ export default function SetupWizard() {
         git_provider: data.git_provider,
         git_api_url: data.git_api_url,
         git_repo: data.git_repo,
-        git_token: gitTokenDirty && data.git_token ? data.git_token : undefined,
+        git_token: data.git_token || undefined,
         git_token_env: data.git_token_env || undefined,
         git_default_branch: data.git_default_branch,
         sync_mode: data.sync_mode,
@@ -795,7 +795,7 @@ function SvnStep({
 
       <div className="border-t border-gray-700 pt-5">
         <TestConnectionButton
-          onTest={() => api.testSvnConnection({ url: data.svn_url, username: data.svn_username })}
+          onTest={() => api.testSvnConnection({ url: data.svn_url, username: data.svn_username, password: data.svn_password || undefined })}
         />
       </div>
     </div>
