@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use rusqlite::params;
-use tracing::debug;
+use tracing::{debug, info};
 use uuid::Uuid;
 
 use super::Database;
@@ -1849,6 +1849,26 @@ impl Database {
             });
         }
         debug!(id, "deleted repository");
+        Ok(())
+    }
+
+    /// Clear all sync data (commit_map, sync_records, audit_log, conflicts,
+    /// watermarks, import_progress, etc.) while preserving repository config,
+    /// users, sessions, and credentials.
+    pub fn clear_sync_data(&self) -> Result<(), DatabaseError> {
+        let conn = self.conn();
+        conn.execute_batch(
+            "DELETE FROM commit_map;
+             DELETE FROM sync_records;
+             DELETE FROM audit_log;
+             DELETE FROM conflicts;
+             DELETE FROM watermarks;
+             DELETE FROM pr_sync_log;
+             DELETE FROM import_progress;
+             DELETE FROM sync_state;
+             DELETE FROM kv_state WHERE key LIKE 'last_%' OR key LIKE 'sync_%';",
+        )?;
+        info!("cleared all sync data from database");
         Ok(())
     }
 }

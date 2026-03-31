@@ -62,6 +62,7 @@ impl WebServer {
         sync_engine: Arc<SyncEngine>,
         sync_trigger: tokio::sync::mpsc::Sender<()>,
         config_path: std::path::PathBuf,
+        import_progress: Arc<tokio::sync::RwLock<ImportProgress>>,
     ) -> Self {
         let (ws_tx, _) = broadcast::channel(256);
         let state = Arc::new(AppState {
@@ -71,7 +72,7 @@ impl WebServer {
             sync_trigger,
             ws_broadcast: ws_tx,
             sessions: tokio::sync::RwLock::new(std::collections::HashMap::new()),
-            import_progress: Arc::new(tokio::sync::RwLock::new(ImportProgress::default())),
+            import_progress,
             config_path,
             prev_net_snapshot: std::sync::Mutex::new(None),
         });

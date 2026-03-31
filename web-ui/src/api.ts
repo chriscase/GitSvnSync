@@ -292,6 +292,11 @@ export const api = {
       method: 'POST',
     }),
 
+  resetAndReimport: () =>
+    fetchJson<{ ok: boolean; message: string }>('/setup/reset-reimport', {
+      method: 'POST',
+    }),
+
   // Repositories (multi-repo)
   getRepos: () => fetchJson<Repository[]>('/repos'),
   createRepo: (data: Partial<Repository>) =>

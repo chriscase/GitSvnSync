@@ -82,6 +82,8 @@ export default function RepoDetail() {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<EditForm | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showReimportConfirm, setShowReimportConfirm] = useState(false);
+  const [reimportConfirmText, setReimportConfirmText] = useState('');
   const [expandedAuditGroups, setExpandedAuditGroups] = useState<Set<number>>(new Set());
   const [expandedDetails, setExpandedDetails] = useState<Set<number>>(new Set());
   const [svnTestResult, setSvnTestResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -164,6 +166,15 @@ export default function RepoDetail() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['repos'] });
       navigate('/repos');
+    },
+  });
+
+  const reimportMutation = useMutation({
+    mutationFn: () => api.resetAndReimport(),
+    onSuccess: () => {
+      setShowReimportConfirm(false);
+      setReimportConfirmText('');
+      queryClient.invalidateQueries({ queryKey: ['repo', id] });
     },
   });
 
@@ -763,21 +774,38 @@ export default function RepoDetail() {
       {/* Server Monitor */}
       <ServerMonitor />
 
-      {/* Delete button - admin only */}
+      {/* Danger Zone - admin only */}
       {isAdmin && (
         <div className="border-t border-gray-700 pt-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-sm font-medium text-red-400">Danger Zone</h3>
-              <p className="text-sm text-gray-500 mt-1">Permanently remove this repository configuration.</p>
+          <h3 className="text-sm font-medium text-red-400 mb-4">Danger Zone</h3>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-300 font-medium">Reset & Reimport</p>
+                <p className="text-sm text-gray-500 mt-0.5">Wipe the Git repository and re-sync all SVN history from the beginning.</p>
+              </div>
+              <button
+                onClick={() => setShowReimportConfirm(true)}
+                disabled={reimportMutation.isPending}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-yellow-700 text-yellow-400 hover:bg-yellow-900/30 text-sm font-medium transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Reset & Reimport
+              </button>
             </div>
-            <button
-              onClick={() => setShowDeleteConfirm(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-red-700 text-red-400 hover:bg-red-900/30 text-sm font-medium transition-colors"
-            >
-              <Trash2 className="w-4 h-4" />
-              Delete Repository
-            </button>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-300 font-medium">Delete Repository</p>
+                <p className="text-sm text-gray-500 mt-0.5">Permanently remove this repository configuration.</p>
+              </div>
+              <button
+                onClick={() => setShowDeleteConfirm(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-red-700 text-red-400 hover:bg-red-900/30 text-sm font-medium transition-colors"
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete Repository
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -808,6 +836,48 @@ export default function RepoDetail() {
                 className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-medium transition-colors"
               >
                 {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset & Reimport confirmation modal */}
+      {showReimportConfirm && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 border border-gray-700 rounded-lg p-6 max-w-md w-full shadow-xl">
+            <h3 className="text-lg font-semibold text-gray-100 mb-2">Reset & Reimport</h3>
+            <p className="text-sm text-gray-400 mb-2">
+              This will <span className="text-red-400 font-semibold">wipe the entire Git repository</span> and re-sync all SVN history from revision 0. The remote repository will be force-pushed with a clean slate.
+            </p>
+            <p className="text-sm text-gray-400 mb-4">
+              Type <span className="font-mono text-yellow-300">{repo.name}</span> to confirm:
+            </p>
+            <input
+              type="text"
+              className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:border-transparent mb-4"
+              value={reimportConfirmText}
+              onChange={(e) => setReimportConfirmText(e.target.value)}
+              placeholder={repo.name}
+            />
+            {reimportMutation.isError && (
+              <div className="bg-red-900/30 border border-red-700 rounded-lg p-3 text-red-300 text-sm mb-4">
+                Failed: {reimportMutation.error?.message}
+              </div>
+            )}
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => { setShowReimportConfirm(false); setReimportConfirmText(''); reimportMutation.reset(); }}
+                className="px-4 py-2 rounded-lg border border-gray-600 text-gray-300 hover:text-white text-sm font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => reimportMutation.mutate()}
+                disabled={reimportMutation.isPending || reimportConfirmText !== repo.name}
+                className="px-4 py-2 rounded-lg bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 text-white text-sm font-medium transition-colors"
+              >
+                {reimportMutation.isPending ? 'Resetting...' : 'Reset & Reimport'}
               </button>
             </div>
           </div>

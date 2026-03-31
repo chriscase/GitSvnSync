@@ -5,10 +5,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{broadcast, mpsc, Notify};
+use tokio::sync::{broadcast, mpsc, Notify, RwLock};
 use tokio::time;
 use tracing::{error, info, warn};
 
+use gitsvnsync_core::import::{ImportPhase, ImportProgress};
 use gitsvnsync_core::sync_engine::SyncEngine;
 
 /// Tracks aggregate statistics across sync cycles.
@@ -41,6 +42,7 @@ pub struct Scheduler {
     sync_rx: mpsc::Receiver<()>,
     ws_broadcast: broadcast::Sender<String>,
     stats: Arc<SchedulerStats>,
+    import_progress: Arc<RwLock<ImportProgress>>,
 }
 
 impl Scheduler {
@@ -49,6 +51,7 @@ impl Scheduler {
         poll_interval: Duration,
         sync_rx: mpsc::Receiver<()>,
         ws_broadcast: broadcast::Sender<String>,
+        import_progress: Arc<RwLock<ImportProgress>>,
     ) -> Self {
         Self {
             sync_engine,
@@ -56,6 +59,7 @@ impl Scheduler {
             sync_rx,
             ws_broadcast,
             stats: Arc::new(SchedulerStats::new()),
+            import_progress,
         }
     }
 
@@ -98,8 +102,25 @@ impl Scheduler {
         info!("scheduler stopped");
     }
 
-    /// Attempt to run a sync cycle. If the engine is already running, skip.
+    /// Attempt to run a sync cycle. If the engine is already running or an
+    /// import is in progress, skip.
     async fn maybe_run_cycle(&self, trigger: &str) {
+        // Skip sync cycles while an import is active to avoid concurrent
+        // git repo access ("file changed before we could read it" errors).
+        {
+            let phase = self.import_progress.read().await.phase.clone();
+            if !matches!(
+                phase,
+                ImportPhase::Idle
+                    | ImportPhase::Completed
+                    | ImportPhase::Failed
+                    | ImportPhase::Cancelled
+            ) {
+                info!(trigger, ?phase, "skipping sync cycle: import in progress");
+                return;
+            }
+        }
+
         // The sync engine has its own atomic lock; check it first.
         if self.sync_engine.is_running() {
             warn!(trigger, "skipping sync cycle: previous cycle still running");

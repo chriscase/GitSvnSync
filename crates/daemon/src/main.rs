@@ -255,6 +255,12 @@ async fn main() -> Result<()> {
     // Create sync trigger channel (webhook -> scheduler)
     let (sync_tx, sync_rx) = tokio::sync::mpsc::channel::<()>(16);
 
+    // Create shared import progress — shared between web server and scheduler
+    // so the scheduler can pause sync cycles during an active import.
+    let import_progress = std::sync::Arc::new(tokio::sync::RwLock::new(
+        gitsvnsync_core::import::ImportProgress::default(),
+    ));
+
     // Initialize web server
     let web_server = WebServer::new(
         config.clone(),
@@ -262,6 +268,7 @@ async fn main() -> Result<()> {
         sync_engine.clone(),
         sync_tx.clone(),
         args.config.clone(),
+        import_progress.clone(),
     );
     let ws_broadcast = web_server.broadcast_sender();
     let listen_addr = config.web.listen.clone();
@@ -280,8 +287,13 @@ async fn main() -> Result<()> {
 
     // Create and start the scheduler
     let poll_interval = std::time::Duration::from_secs(config.daemon.poll_interval_secs);
-    let mut sched =
-        scheduler::Scheduler::new(sync_engine.clone(), poll_interval, sync_rx, ws_broadcast);
+    let mut sched = scheduler::Scheduler::new(
+        sync_engine.clone(),
+        poll_interval,
+        sync_rx,
+        ws_broadcast,
+        import_progress,
+    );
 
     // Start the scheduler in a background task
     let scheduler_handle = tokio::spawn(async move {

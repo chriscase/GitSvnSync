@@ -21,6 +21,7 @@ use gitsvnsync_core::identity::IdentityMapper;
 use gitsvnsync_core::import::{self, ImportConfig, ImportProgress, ImportPhase};
 use gitsvnsync_core::svn::SvnClient;
 
+use crate::api::auth::validate_session_with_role;
 use crate::api::status::AppError;
 use crate::AppState;
 
@@ -169,6 +170,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/setup/import", post(start_import))
         .route("/api/setup/import/status", get(import_status))
         .route("/api/setup/import/cancel", post(cancel_import))
+        .route("/api/setup/reset-reimport", post(reset_and_reimport))
 }
 
 // ---------------------------------------------------------------------------
@@ -685,15 +687,6 @@ async fn start_import(
         }
     }
 
-    // Load config from file
-    let config_content = std::fs::read_to_string(&state.config_path)
-        .map_err(|e| AppError::Internal(format!("failed to read config: {}", e)))?;
-    let mut config: AppConfig = toml::from_str(&config_content)
-        .map_err(|e| AppError::Internal(format!("failed to parse config: {}", e)))?;
-    config
-        .resolve_env_vars()
-        .map_err(|e| AppError::Internal(format!("failed to resolve env vars: {}", e)))?;
-
     // Reset progress
     {
         let mut p = state.import_progress.write().await;
@@ -702,175 +695,7 @@ async fn start_import(
         p.started_at = Some(chrono::Utc::now().to_rfc3339());
     }
 
-    // Load secrets from DB (fallback for env vars not being set)
-    let (db_svn_password, db_git_token) = {
-        let db = &state.db;
-        let conn = db.conn();
-        let svn_pw: Option<String> = conn
-            .query_row(
-                "SELECT value FROM kv_state WHERE key = 'secret_svn_password'",
-                [],
-                |row| row.get(0),
-            )
-            .ok();
-        let git_tok: Option<String> = conn
-            .query_row(
-                "SELECT value FROM kv_state WHERE key = 'secret_git_token'",
-                [],
-                |row| row.get(0),
-            )
-            .ok();
-        (svn_pw, git_tok)
-    };
-
-    // Build clients — prefer env var secrets, fall back to DB secrets
-    let svn_password = config
-        .svn
-        .password
-        .clone()
-        .or(db_svn_password)
-        .unwrap_or_default();
-    // Append trunk_path to SVN URL so export targets the correct branch/trunk,
-    // not the repository root.  e.g. ".../edmsls" + "/branches/SLS/sls_engr_trunk"
-    let svn_import_url = {
-        let base = config.svn.url.trim_end_matches('/');
-        let trunk = if config.svn.trunk_path.is_empty() { "trunk" } else { &config.svn.trunk_path };
-        if trunk.is_empty() || trunk == "/" {
-            base.to_string()
-        } else {
-            format!("{}/{}", base, trunk.trim_start_matches('/'))
-        }
-    };
-    info!(svn_import_url = %svn_import_url, "SVN import URL (repo root + trunk path)");
-    let svn_client = SvnClient::new(&svn_import_url, &config.svn.username, &svn_password);
-
-    // Resolve git token — prefer env var, fall back to DB secret
-    let git_token = config.github.token.clone().or(db_git_token);
-
-    let git_repo_path = config.daemon.data_dir.join("git-repo");
-
-    // Ensure data dir exists
-    std::fs::create_dir_all(&config.daemon.data_dir)
-        .map_err(|e| AppError::Internal(format!("failed to create data dir: {}", e)))?;
-
-    // Init or open Git repo
-    let git_client = if git_repo_path.join(".git").exists() {
-        GitClient::new(&git_repo_path)
-            .map_err(|e| AppError::Internal(format!("failed to open git repo: {}", e)))?
-    } else {
-        // Create a fresh git repo with the remote configured
-        let clone_url = config.github.clone_url();
-        match GitClient::clone_repo(&clone_url, &git_repo_path, git_token.as_deref()) {
-            Ok(client) => client,
-            Err(_) => {
-                // Clone failed (empty repo or unreachable) — init locally and set remote
-                info!("Clone failed, initializing empty repo with remote");
-                std::fs::create_dir_all(&git_repo_path)
-                    .map_err(|e| AppError::Internal(format!("failed to create git repo dir: {}", e)))?;
-                let output = std::process::Command::new("git")
-                    .args(["init", "--initial-branch", &config.github.default_branch])
-                    .current_dir(&git_repo_path)
-                    .output()
-                    .map_err(|e| AppError::Internal(format!("git init failed: {}", e)))?;
-                if !output.status.success() {
-                    // Fallback for older git without --initial-branch
-                    let _ = std::process::Command::new("git")
-                        .args(["init"])
-                        .current_dir(&git_repo_path)
-                        .output();
-                }
-                let _ = std::process::Command::new("git")
-                    .args(["remote", "add", "origin", &clone_url])
-                    .current_dir(&git_repo_path)
-                    .output();
-                GitClient::new(&git_repo_path)
-                    .map_err(|e| AppError::Internal(format!("failed to open initialized git repo: {}", e)))?
-            }
-        }
-    };
-
-    // Ensure credentials are embedded in the remote URL
-    git_client
-        .ensure_remote_credentials("origin", git_token.as_deref())
-        .map_err(|e| AppError::Internal(format!("failed to set git credentials: {}", e)))?;
-
-    let git_client = Arc::new(std::sync::Mutex::new(git_client));
-
-    let identity_mapper = IdentityMapper::new(&config.identity)
-        .map_err(|e| AppError::Internal(format!("failed to init identity mapper: {}", e)))?;
-
-    let file_policy = FilePolicy::from(&config.sync);
-
-    let db_path = config.daemon.data_dir.join("gitsvnsync.db");
-    let import_db = Database::new(&db_path)
-        .map_err(|e| AppError::Internal(format!("failed to open db: {}", e)))?;
-
-    let import_config = ImportConfig {
-        committer_name: "RepoSync".into(),
-        committer_email: "reposync@localhost".into(),
-        remote_name: "origin".into(),
-        branch: config.github.default_branch.clone(),
-        push_token: git_token,
-        message_prefix: None,
-    };
-
-    let progress = state.import_progress.clone();
-    let ws_broadcast = Some(state.ws_broadcast.clone());
-
-    // Spawn the import in a background task
-    tokio::spawn(async move {
-        let result = import::run_full_import(
-            &svn_client,
-            &git_client,
-            &identity_mapper,
-            &import_db,
-            &file_policy,
-            &import_config,
-            progress.clone(),
-            ws_broadcast.clone(),
-        )
-        .await;
-
-        let mut p = progress.write().await;
-        match result {
-            Ok(count) => {
-                if p.phase != ImportPhase::Cancelled {
-                    p.phase = ImportPhase::Completed;
-                }
-                p.completed_at = Some(chrono::Utc::now().to_rfc3339());
-                p.push_log(format!(
-                    "[info] Import complete: {} commits created",
-                    count
-                ));
-                info!(count, "import completed successfully");
-            }
-            Err(e) => {
-                p.phase = ImportPhase::Failed;
-                p.completed_at = Some(chrono::Utc::now().to_rfc3339());
-                let msg = format!("[error] Import failed: {}", e);
-                p.push_log(msg.clone());
-                p.errors.push(msg);
-                error!("import failed: {}", e);
-            }
-        }
-
-        // Persist final state to DB
-        if let Err(e) = import_db.persist_import_progress(&p) {
-            tracing::warn!("failed to persist final import progress: {}", e);
-        }
-
-        // Send final broadcast
-        if let Some(ref sender) = ws_broadcast {
-            let json = serde_json::json!({
-                "type": "import_progress",
-                "phase": format!("{:?}", p.phase).to_lowercase(),
-                "current_rev": p.current_rev,
-                "total_revs": p.total_revs,
-                "commits_created": p.commits_created,
-            });
-            let _ = sender.send(json.to_string());
-        }
-    });
+    spawn_import_task(&state).await?;
 
     Ok(Json(ImportActionResponse {
         ok: true,
@@ -913,4 +738,342 @@ async fn cancel_import(
             message: "No import is currently running".into(),
         }))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Shared import helper
+// ---------------------------------------------------------------------------
+
+/// Resolve config, build clients, and spawn the background import task.
+/// Used by both `start_import` and `reset_and_reimport`.
+async fn spawn_import_task(state: &Arc<AppState>) -> Result<(), AppError> {
+    // Load config from file
+    let config_content = std::fs::read_to_string(&state.config_path)
+        .map_err(|e| AppError::Internal(format!("failed to read config: {}", e)))?;
+    let mut config: AppConfig = toml::from_str(&config_content)
+        .map_err(|e| AppError::Internal(format!("failed to parse config: {}", e)))?;
+    config
+        .resolve_env_vars()
+        .map_err(|e| AppError::Internal(format!("failed to resolve env vars: {}", e)))?;
+
+    // Load secrets from DB
+    let (db_svn_password, db_git_token) = {
+        let db = &state.db;
+        let conn = db.conn();
+        let svn_pw: Option<String> = conn
+            .query_row(
+                "SELECT value FROM kv_state WHERE key = 'secret_svn_password'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        let git_tok: Option<String> = conn
+            .query_row(
+                "SELECT value FROM kv_state WHERE key = 'secret_git_token'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        (svn_pw, git_tok)
+    };
+
+    // Build clients
+    let svn_password = config
+        .svn
+        .password
+        .clone()
+        .or(db_svn_password)
+        .unwrap_or_default();
+    let svn_import_url = {
+        let base = config.svn.url.trim_end_matches('/');
+        let trunk = if config.svn.trunk_path.is_empty() {
+            "trunk"
+        } else {
+            &config.svn.trunk_path
+        };
+        if trunk.is_empty() || trunk == "/" {
+            base.to_string()
+        } else {
+            format!("{}/{}", base, trunk.trim_start_matches('/'))
+        }
+    };
+    info!(svn_import_url = %svn_import_url, "SVN import URL");
+    let svn_client = SvnClient::new(&svn_import_url, &config.svn.username, &svn_password);
+
+    let git_token = config.github.token.clone().or(db_git_token);
+    let git_repo_path = config.daemon.data_dir.join("git-repo");
+
+    std::fs::create_dir_all(&config.daemon.data_dir)
+        .map_err(|e| AppError::Internal(format!("failed to create data dir: {}", e)))?;
+
+    let git_client = if git_repo_path.join(".git").exists() {
+        GitClient::new(&git_repo_path)
+            .map_err(|e| AppError::Internal(format!("failed to open git repo: {}", e)))?
+    } else {
+        let clone_url = config.github.clone_url();
+        match GitClient::clone_repo(&clone_url, &git_repo_path, git_token.as_deref()) {
+            Ok(client) => client,
+            Err(_) => {
+                info!("Clone failed, initializing empty repo with remote");
+                std::fs::create_dir_all(&git_repo_path)
+                    .map_err(|e| AppError::Internal(format!("mkdir failed: {}", e)))?;
+                let output = std::process::Command::new("git")
+                    .args(["init", "--initial-branch", &config.github.default_branch])
+                    .current_dir(&git_repo_path)
+                    .output()
+                    .map_err(|e| AppError::Internal(format!("git init failed: {}", e)))?;
+                if !output.status.success() {
+                    let _ = std::process::Command::new("git")
+                        .args(["init"])
+                        .current_dir(&git_repo_path)
+                        .output();
+                }
+                let _ = std::process::Command::new("git")
+                    .args(["remote", "add", "origin", &clone_url])
+                    .current_dir(&git_repo_path)
+                    .output();
+                GitClient::new(&git_repo_path)
+                    .map_err(|e| AppError::Internal(format!("git open failed: {}", e)))?
+            }
+        }
+    };
+
+    git_client
+        .ensure_remote_credentials("origin", git_token.as_deref())
+        .map_err(|e| AppError::Internal(format!("failed to set git credentials: {}", e)))?;
+
+    let git_client = Arc::new(std::sync::Mutex::new(git_client));
+    let identity_mapper = IdentityMapper::new(&config.identity)
+        .map_err(|e| AppError::Internal(format!("failed to init identity mapper: {}", e)))?;
+    let file_policy = FilePolicy::from(&config.sync);
+    let db_path = config.daemon.data_dir.join("gitsvnsync.db");
+    let import_db = Database::new(&db_path)
+        .map_err(|e| AppError::Internal(format!("failed to open db: {}", e)))?;
+
+    let import_config = ImportConfig {
+        committer_name: "RepoSync".into(),
+        committer_email: "reposync@localhost".into(),
+        remote_name: "origin".into(),
+        branch: config.github.default_branch.clone(),
+        push_token: git_token,
+        message_prefix: None,
+    };
+
+    let progress = state.import_progress.clone();
+    let ws_broadcast = Some(state.ws_broadcast.clone());
+
+    tokio::spawn(async move {
+        let result = import::run_full_import(
+            &svn_client,
+            &git_client,
+            &identity_mapper,
+            &import_db,
+            &file_policy,
+            &import_config,
+            progress.clone(),
+            ws_broadcast.clone(),
+        )
+        .await;
+
+        let mut p = progress.write().await;
+        match result {
+            Ok(count) => {
+                if p.phase != ImportPhase::Cancelled {
+                    p.phase = ImportPhase::Completed;
+                }
+                p.completed_at = Some(chrono::Utc::now().to_rfc3339());
+                p.push_log(format!(
+                    "[info] Import complete: {} commits created",
+                    count
+                ));
+                info!(count, "import completed successfully");
+            }
+            Err(e) => {
+                p.phase = ImportPhase::Failed;
+                p.completed_at = Some(chrono::Utc::now().to_rfc3339());
+                let msg = format!("[error] Import failed: {}", e);
+                p.push_log(msg.clone());
+                p.errors.push(msg);
+                error!("import failed: {}", e);
+            }
+        }
+
+        if let Err(e) = import_db.persist_import_progress(&p) {
+            tracing::warn!("failed to persist final import progress: {}", e);
+        }
+
+        if let Some(ref sender) = ws_broadcast {
+            let json = serde_json::json!({
+                "type": "import_progress",
+                "phase": format!("{:?}", p.phase).to_lowercase(),
+                "current_rev": p.current_rev,
+                "total_revs": p.total_revs,
+                "commits_created": p.commits_created,
+            });
+            let _ = sender.send(json.to_string());
+        }
+    });
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Reset & Reimport
+// ---------------------------------------------------------------------------
+
+async fn reset_and_reimport(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<ImportActionResponse>, AppError> {
+    // Admin only
+    let (_user_id, role) = validate_session_with_role(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
+    if role != "admin" {
+        return Err(AppError::Unauthorized("admin access required".into()));
+    }
+
+    // Check if already running
+    {
+        let p = state.import_progress.read().await;
+        if matches!(
+            p.phase,
+            ImportPhase::Importing | ImportPhase::Connecting | ImportPhase::Verifying | ImportPhase::FinalPush
+        ) {
+            return Ok(Json(ImportActionResponse {
+                ok: false,
+                message: "An import is already running".into(),
+            }));
+        }
+    }
+
+    // Set phase to Connecting immediately — this pauses the scheduler
+    {
+        let mut p = state.import_progress.write().await;
+        *p = ImportProgress::default();
+        p.phase = ImportPhase::Connecting;
+        p.started_at = Some(chrono::Utc::now().to_rfc3339());
+        p.push_log("[info] Reset & Reimport: starting...".into());
+    }
+
+    // Load config to find paths and git remote info
+    let config_content = std::fs::read_to_string(&state.config_path)
+        .map_err(|e| AppError::Internal(format!("failed to read config: {}", e)))?;
+    let mut config: AppConfig = toml::from_str(&config_content)
+        .map_err(|e| AppError::Internal(format!("failed to parse config: {}", e)))?;
+    config
+        .resolve_env_vars()
+        .map_err(|e| AppError::Internal(format!("failed to resolve env vars: {}", e)))?;
+
+    let git_repo_path = config.daemon.data_dir.join("git-repo");
+    let git_token = {
+        let db = &state.db;
+        config
+            .github
+            .token
+            .clone()
+            .or_else(|| {
+                db.conn()
+                    .query_row(
+                        "SELECT value FROM kv_state WHERE key = 'secret_git_token'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .ok()
+            })
+            .unwrap_or_default()
+    };
+
+    // 1. Wipe local git repo
+    {
+        let mut p = state.import_progress.write().await;
+        p.push_log("[info] Deleting local git repository...".into());
+    }
+    if git_repo_path.exists() {
+        std::fs::remove_dir_all(&git_repo_path)
+            .map_err(|e| AppError::Internal(format!("failed to delete git repo: {}", e)))?;
+    }
+    info!("deleted local git repo at {}", git_repo_path.display());
+
+    // 2. Create fresh empty repo and force-push to remote
+    {
+        let mut p = state.import_progress.write().await;
+        p.push_log("[info] Creating empty git repository and resetting remote...".into());
+    }
+    std::fs::create_dir_all(&git_repo_path)
+        .map_err(|e| AppError::Internal(format!("mkdir failed: {}", e)))?;
+    let branch = &config.github.default_branch;
+    let clone_url = format!(
+        "https://x-access-token:{}@{}",
+        git_token,
+        config
+            .github
+            .clone_url()
+            .trim_start_matches("https://")
+    );
+
+    // git init + empty commit + force push
+    let init_cmds = [
+        vec!["init", "--initial-branch", branch],
+        vec!["commit", "--allow-empty", "-m", "Reset for full SVN reimport"],
+        vec!["remote", "add", "origin", &clone_url],
+        vec!["push", "--force", "origin", branch],
+    ];
+    for args in &init_cmds {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&git_repo_path)
+            .output()
+            .map_err(|e| AppError::Internal(format!("git {} failed: {}", args[0], e)))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // git init may fail with --initial-branch on older git, retry without
+            if args[0] == "init" {
+                let _ = std::process::Command::new("git")
+                    .args(["init"])
+                    .current_dir(&git_repo_path)
+                    .output();
+            } else {
+                let msg = format!("git {} failed: {}", args[0], stderr);
+                let mut p = state.import_progress.write().await;
+                p.phase = ImportPhase::Failed;
+                p.push_log(format!("[error] {}", msg));
+                return Ok(Json(ImportActionResponse {
+                    ok: false,
+                    message: msg,
+                }));
+            }
+        }
+    }
+    info!("force-pushed empty commit to remote");
+
+    // 3. Clear DB sync data
+    {
+        let mut p = state.import_progress.write().await;
+        p.push_log("[info] Clearing sync data from database...".into());
+    }
+    state
+        .db
+        .clear_sync_data()
+        .map_err(|e| AppError::Internal(format!("failed to clear sync data: {}", e)))?;
+
+    // 4. Delete the git repo again so spawn_import_task can create it fresh
+    //    (it expects either .git to exist or not — we need a clean state)
+    std::fs::remove_dir_all(&git_repo_path).ok();
+
+    // 5. Reset progress for import phase and spawn import
+    {
+        let mut p = state.import_progress.write().await;
+        p.phase = ImportPhase::Importing;
+        p.push_log("[info] Starting full SVN import from revision 0...".into());
+    }
+
+    spawn_import_task(&state).await?;
+
+    Ok(Json(ImportActionResponse {
+        ok: true,
+        message: "Reset and reimport started".into(),
+    }))
 }
