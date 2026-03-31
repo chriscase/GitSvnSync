@@ -7,10 +7,10 @@
 - **Fixed**: Backend already had `?repo_id=` support. Frontend RepoDetail.tsx now passes `id` to all API calls
 - **Note**: Dashboard aggregate view still shows all repos (by design) — could use dropdown filter
 
-### 2. Import is global, not per-repo
-- `POST /api/setup/import` reads from global TOML config
-- Cannot trigger import for a specific repository from the Repositories page
-- **Fix**: Add `POST /api/repos/:id/import` endpoint (in progress)
+### 2. ~~Import is global, not per-repo~~ FIXED
+- ~~Cannot trigger import for a specific repository~~
+- **Fixed**: Added `POST /api/repos/:id/import` endpoint
+- **Validated**: Sandbox import completed 250/250 commits via per-repo endpoint
 
 ### 3. Sync trigger is stubbed
 - `POST /api/repos/:id/sync` only logs, doesn't actually run sync
@@ -22,12 +22,12 @@
 - "Exit to Dashboard" used to navigate to /login (partially fixed)
 - **Fix**: Remove wizard dependency, manage repos via /repos page only
 
-### 5. Watermark auto-detection reads wrong table
-- Sync engine reads `last_svn_rev` from `kv_state`
-- But watermarks are also in `watermarks` table
-- On fresh DB, starts from rev 0 and creates duplicate commits
-- Auto-detection function exists but may not write back to correct key
-- **Fix**: Ensure detect_last_svn_rev_from_git() writes to `kv_state` correctly
+### 5. Watermark auto-detection reads wrong table — IN PROGRESS
+- Sync engine reads `last_svn_rev` from `kv_state` which gets wiped
+- **Fixing**: Moving watermarks to `repositories` table columns (last_svn_rev, last_git_sha)
+- **Fixing**: Dual-write to both repo table and kv_state for backward compat
+- **Fixing**: Auto-detect from git history on startup when watermark is 0
+- **Fixing**: Remove TOML generation from apply_config that destroys config
 
 ## UX Issues
 
@@ -36,9 +36,10 @@
 - No "Test Connection" buttons on repo detail or add-repo modal
 - Credentials can only be set via API or broken wizard
 
-### 7. Dashboard repo filter doesn't filter data
-- The repo dropdown exists but sync records, commit map, and audit log show unfiltered data
-- **Fix**: Pass repo_id to API calls when filter is selected
+### 7. ~~Dashboard repo filter doesn't filter data~~ FIXED
+- ~~Sync records, commit map, and audit log showed unfiltered data~~
+- **Fixed**: Dashboard already passes `activeRepoId` to all API calls with proper query keys
+- **Note**: Need to verify visually via Chrome agent
 
 ### 8. Server Monitor shows "Loading metrics..." until auth
 - The `/api/status/system` endpoint requires auth but ServerMonitor doesn't always have the token

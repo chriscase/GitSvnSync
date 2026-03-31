@@ -362,6 +362,22 @@ pub struct Repository {
     pub created_by: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub last_svn_rev: i64,
+    #[serde(default)]
+    pub last_git_sha: String,
+    #[serde(default)]
+    pub last_sync_at: Option<String>,
+    #[serde(default = "default_sync_status")]
+    pub sync_status: String,
+    #[serde(default)]
+    pub total_syncs: i64,
+    #[serde(default)]
+    pub total_errors: i64,
+}
+
+fn default_sync_status() -> String {
+    "idle".to_string()
 }
 
 // ---------------------------------------------------------------------------

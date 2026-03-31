@@ -396,164 +396,11 @@ async fn test_git_connection(
 // Apply configuration
 // ---------------------------------------------------------------------------
 
-fn generate_toml(data: &ApplyConfigRequest) -> String {
-    let mut lines = Vec::new();
-
-    lines.push("[daemon]".into());
-    lines.push(format!(
-        "poll_interval_secs = {}",
-        data.daemon_poll_interval.unwrap_or(60)
-    ));
-    lines.push(format!(
-        "log_level = \"{}\"",
-        data.daemon_log_level.as_deref().unwrap_or("info")
-    ));
-    lines.push(format!(
-        "data_dir = \"{}\"",
-        data.daemon_data_dir
-            .as_deref()
-            .unwrap_or("/var/lib/gitsvnsync")
-    ));
-
-    lines.push(String::new());
-    lines.push("[svn]".into());
-    lines.push(format!("url = \"{}\"", data.svn_url));
-    lines.push(format!("username = \"{}\"", data.svn_username));
-    if let Some(ref pe) = data.svn_password_env {
-        if !pe.is_empty() {
-            lines.push(format!("password_env = \"{}\"", pe));
-        }
-    }
-    lines.push(format!(
-        "layout = \"{}\"",
-        data.svn_layout.as_deref().unwrap_or("standard")
-    ));
-    lines.push(format!(
-        "trunk_path = \"{}\"",
-        data.svn_trunk_path.as_deref().unwrap_or("trunk")
-    ));
-    if let Some(ref bp) = data.svn_branches_path {
-        if !bp.is_empty() {
-            lines.push(format!("branches_path = \"{}\"", bp));
-        }
-    }
-    if let Some(ref tp) = data.svn_tags_path {
-        if !tp.is_empty() {
-            lines.push(format!("tags_path = \"{}\"", tp));
-        }
-    }
-
-    lines.push(String::new());
-    lines.push("[github]".into());
-    lines.push(format!("api_url = \"{}\"", data.git_api_url));
-    lines.push(format!("repo = \"{}\"", data.git_repo));
-    // token_env is optional if the user provides the actual token via the GUI
-    let token_env = data.git_token_env.as_deref().unwrap_or("GIT_TOKEN");
-    lines.push(format!("token_env = \"{}\"", token_env));
-    lines.push(format!(
-        "default_branch = \"{}\"",
-        data.git_default_branch.as_deref().unwrap_or("main")
-    ));
-    if let Some(ref p) = data.git_provider {
-        if p != "github" {
-            lines.push(format!("provider = \"{}\"", p));
-        }
-    }
-
-    // Identity
-    let has_identity = data.identity_email_domain.is_some()
-        || data.identity_mapping_file.is_some();
-    if has_identity {
-        lines.push(String::new());
-        lines.push("[identity]".into());
-        if let Some(ref ed) = data.identity_email_domain {
-            if !ed.is_empty() {
-                lines.push(format!("email_domain = \"{}\"", ed));
-            }
-        }
-        if let Some(ref mf) = data.identity_mapping_file {
-            if !mf.is_empty() {
-                lines.push(format!("mapping_file = \"{}\"", mf));
-            }
-        }
-    }
-
-    lines.push(String::new());
-    lines.push("[web]".into());
-    lines.push(format!(
-        "listen = \"{}\"",
-        data.web_listen.as_deref().unwrap_or("0.0.0.0:8080")
-    ));
-    lines.push("auth_mode = \"simple\"".into());
-    if let Some(ref ape) = data.web_admin_password_env {
-        if !ape.is_empty() {
-            lines.push(format!("admin_password_env = \"{}\"", ape));
-        }
-    }
-
-    lines.push(String::new());
-    lines.push("[sync]".into());
-    lines.push(format!(
-        "mode = \"{}\"",
-        data.sync_mode.as_deref().unwrap_or("direct")
-    ));
-    lines.push(format!(
-        "auto_merge = {}",
-        data.sync_auto_merge.unwrap_or(true)
-    ));
-    lines.push(format!(
-        "sync_tags = {}",
-        data.sync_tags.unwrap_or(true)
-    ));
-
-    // File policy fields
-    if let Some(mfs) = data.max_file_size {
-        if mfs > 0 {
-            lines.push(format!("max_file_size = {}", mfs));
-        }
-    }
-    if let Some(lt) = data.lfs_threshold {
-        if lt > 0 {
-            lines.push(format!("lfs_threshold = {}", lt));
-        }
-    }
-    if let Some(ref lp) = data.lfs_patterns {
-        if !lp.is_empty() {
-            let patterns: Vec<String> = lp.iter().map(|p| format!("\"{}\"", p)).collect();
-            lines.push(format!("lfs_patterns = [{}]", patterns.join(", ")));
-        }
-    }
-    if let Some(ref ip) = data.ignore_patterns {
-        if !ip.is_empty() {
-            let patterns: Vec<String> = ip.iter().map(|p| format!("\"{}\"", p)).collect();
-            lines.push(format!("ignore_patterns = [{}]", patterns.join(", ")));
-        }
-    }
-
-    lines.push(String::new());
-    lines.join("\n")
-}
-
 async fn apply_config(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ApplyConfigRequest>,
 ) -> Result<Json<ApplyConfigResponse>, AppError> {
     let mut warnings = Vec::new();
-
-    // Generate TOML from structured data
-    let toml_content = generate_toml(&body);
-
-    // Validate by parsing
-    match toml::from_str::<AppConfig>(&toml_content) {
-        Ok(_) => {}
-        Err(e) => {
-            return Ok(Json(ApplyConfigResponse {
-                ok: false,
-                message: format!("Generated config is invalid: {}", e),
-                warnings: vec![],
-            }));
-        }
-    }
 
     // Write identity mapping file if mappings are provided
     if let Some(ref mappings) = body.identity_mappings {
@@ -639,11 +486,71 @@ async fn apply_config(
         }
     }
 
-    // NOTE: TOML file is no longer overwritten by the API.  The TOML file
-    // should only contain daemon bootstrap settings (data_dir, listen address,
-    // log level) and is managed manually.  All repo config is stored in the
-    // repositories table and kv_state.
-    info!("Setup apply: TOML overwrite skipped (config saved to DB only)");
+    // Upsert repository row in the DB (TOML file is never written by the API).
+    {
+        let db = &state.db;
+        let now = chrono::Utc::now().to_rfc3339();
+        let provider = body.git_provider.as_deref().unwrap_or("github");
+        let sync_mode = body.sync_mode.as_deref().unwrap_or("direct");
+        let git_branch = body.git_default_branch.as_deref().unwrap_or("main");
+        let poll_secs = body.daemon_poll_interval.unwrap_or(60) as i64;
+        let lfs_mb = body.lfs_threshold.unwrap_or(0) as i64;
+        let auto_merge = body.sync_auto_merge.unwrap_or(true);
+
+        // Check if a default repository already exists (update it), otherwise create one.
+        let existing_repos = db.list_repositories().unwrap_or_default();
+        if let Some(existing) = existing_repos.into_iter().next() {
+            let updated = gitsvnsync_core::models::Repository {
+                svn_url: body.svn_url.clone(),
+                svn_branch: body.svn_trunk_path.clone().unwrap_or_default(),
+                svn_username: body.svn_username.clone(),
+                git_provider: provider.to_string(),
+                git_api_url: body.git_api_url.clone(),
+                git_repo: body.git_repo.clone(),
+                git_branch: git_branch.to_string(),
+                sync_mode: sync_mode.to_string(),
+                poll_interval_secs: poll_secs,
+                lfs_threshold_mb: lfs_mb,
+                auto_merge,
+                updated_at: now,
+                ..existing
+            };
+            match db.update_repository(&updated) {
+                Ok(()) => info!(id = %updated.id, "Updated repository from setup wizard"),
+                Err(e) => warnings.push(format!("Failed to update repository: {}", e)),
+            }
+        } else {
+            let new_repo = gitsvnsync_core::models::Repository {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: body.git_repo.clone(),
+                svn_url: body.svn_url.clone(),
+                svn_branch: body.svn_trunk_path.clone().unwrap_or_default(),
+                svn_username: body.svn_username.clone(),
+                git_provider: provider.to_string(),
+                git_api_url: body.git_api_url.clone(),
+                git_repo: body.git_repo.clone(),
+                git_branch: git_branch.to_string(),
+                sync_mode: sync_mode.to_string(),
+                poll_interval_secs: poll_secs,
+                lfs_threshold_mb: lfs_mb,
+                auto_merge,
+                enabled: true,
+                created_by: None,
+                created_at: now.clone(),
+                updated_at: now,
+                last_svn_rev: 0,
+                last_git_sha: String::new(),
+                last_sync_at: None,
+                sync_status: "idle".to_string(),
+                total_syncs: 0,
+                total_errors: 0,
+            };
+            match db.insert_repository(&new_repo) {
+                Ok(()) => info!(id = %new_repo.id, name = %new_repo.name, "Created repository from setup wizard"),
+                Err(e) => warnings.push(format!("Failed to create repository: {}", e)),
+            }
+        }
+    }
 
     // LFS check
     if body.lfs_threshold.unwrap_or(0) > 0 {

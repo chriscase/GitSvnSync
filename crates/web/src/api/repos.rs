@@ -271,6 +271,12 @@ async fn create_repo(
         created_by: Some(user_id),
         created_at: now.clone(),
         updated_at: now,
+        last_svn_rev: 0,
+        last_git_sha: String::new(),
+        last_sync_at: None,
+        sync_status: "idle".to_string(),
+        total_syncs: 0,
+        total_errors: 0,
     };
 
     let db = &state.db;
@@ -344,6 +350,12 @@ async fn update_repo(
         created_by: existing.created_by,
         created_at: existing.created_at,
         updated_at: now,
+        last_svn_rev: existing.last_svn_rev,
+        last_git_sha: existing.last_git_sha,
+        last_sync_at: existing.last_sync_at,
+        sync_status: existing.sync_status,
+        total_syncs: existing.total_syncs,
+        total_errors: existing.total_errors,
     };
 
     db.update_repository(&updated)

@@ -123,9 +123,14 @@ impl SyncEngine {
     /// Uses per-repo key if repo_id is set, otherwise global key.
     fn svn_rev_key(&self) -> String {
         match &self.repo_id {
-            Some(rid) => format!("last_svn_rev_{}", rid),
-            None => "last_svn_rev".to_string(),
+            Some(rid) if !rid.is_empty() => format!("last_svn_rev_{}", rid),
+            _ => "last_svn_rev".to_string(),
         }
+    }
+
+    /// Return the effective repo_id if set and non-empty, for repo-table watermark operations.
+    fn effective_repo_id(&self) -> Option<&str> {
+        self.repo_id.as_deref().filter(|id| !id.is_empty())
     }
 
     /// Return a reference to the database.
@@ -204,6 +209,14 @@ impl SyncEngine {
         let _ = self.db.set_state("sync_state", final_state);
         let _ = self.db.set_state("last_sync_at", &Utc::now().to_rfc3339());
         stats.completed_at = Some(Utc::now().to_rfc3339());
+
+        // Update per-repo sync status and error count
+        if let Some(rid) = self.effective_repo_id() {
+            let _ = self.db.update_repo_sync_status(rid, final_state);
+            if result.is_err() {
+                let _ = self.db.increment_repo_error_count(rid);
+            }
+        }
 
         // Audit log
         let audit = if result.is_ok() {
@@ -496,10 +509,14 @@ impl SyncEngine {
                 .insert_sync_record(&record)
                 .map_err(SyncError::DatabaseError)?;
 
-            // Update the SVN watermark.
+            // Update the SVN watermark (dual-write: kv_state + repo table).
             let _ = self
                 .db
                 .set_state(&self.svn_rev_key(), &change.revision.to_string());
+            if let Some(rid) = self.effective_repo_id() {
+                let _ = self.db.update_repo_watermark(rid, change.revision, &git_sha);
+                let _ = self.db.increment_repo_sync_count(rid);
+            }
 
             count += 1;
 
@@ -674,8 +691,12 @@ impl SyncEngine {
                 .insert_sync_record(&record)
                 .map_err(SyncError::DatabaseError)?;
 
-            // Update the Git watermark.
+            // Update the Git watermark (dual-write: kv_state + repo table).
             let _ = self.db.set_state("last_git_hash", &change.sha);
+            if let Some(rid) = self.effective_repo_id() {
+                let _ = self.db.update_repo_watermark(rid, svn_rev, &change.sha);
+                let _ = self.db.increment_repo_sync_count(rid);
+            }
 
             count += 1;
 
@@ -711,21 +732,34 @@ impl SyncEngine {
     // -----------------------------------------------------------------------
 
     async fn fetch_svn_changes(&self) -> Result<Vec<SvnChangeSet>, SyncError> {
-        // Check the state table first (written by sync_svn_to_git), then fall
-        // back to commit_map / sync_records for databases created by older
-        // versions.
-        let mut last_rev = match self
-            .db
-            .get_state(&self.svn_rev_key())
-            .map_err(SyncError::DatabaseError)?
-        {
-            Some(s) => s.parse::<i64>().unwrap_or(0),
-            None => self
+        // Try the repo table watermark first (authoritative), then fall back
+        // to kv_state, then to commit_map / sync_records for legacy databases.
+        let mut last_rev = 0i64;
+
+        if let Some(rid) = self.effective_repo_id() {
+            let (repo_rev, _repo_sha) = self
                 .db
-                .get_last_svn_revision()
+                .get_repo_watermark(rid)
+                .map_err(SyncError::DatabaseError)?;
+            if repo_rev > 0 {
+                last_rev = repo_rev;
+            }
+        }
+
+        if last_rev == 0 {
+            last_rev = match self
+                .db
+                .get_state(&self.svn_rev_key())
                 .map_err(SyncError::DatabaseError)?
-                .unwrap_or(0),
-        };
+            {
+                Some(s) => s.parse::<i64>().unwrap_or(0),
+                None => self
+                    .db
+                    .get_last_svn_revision()
+                    .map_err(SyncError::DatabaseError)?
+                    .unwrap_or(0),
+            };
+        }
 
         // On a fresh DB connecting to a repo with existing commits, auto-detect
         // the highest SVN revision already synced by scanning git log for
@@ -738,6 +772,10 @@ impl SyncEngine {
                     "Auto-detected last synced revision from existing git history"
                 );
                 let _ = self.db.set_state(&self.svn_rev_key(), &detected.to_string());
+                // Also persist to the repo table if available
+                if let Some(rid) = self.effective_repo_id() {
+                    let _ = self.db.update_repo_watermark(rid, detected, "");
+                }
                 last_rev = detected;
             }
         }

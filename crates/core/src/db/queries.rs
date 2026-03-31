@@ -1710,8 +1710,8 @@ impl Database {
     pub fn insert_repository(&self, repo: &models::Repository) -> Result<(), DatabaseError> {
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO repositories (id, name, svn_url, svn_branch, svn_username, git_provider, git_api_url, git_repo, git_branch, sync_mode, poll_interval_secs, lfs_threshold_mb, auto_merge, enabled, created_by, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            "INSERT INTO repositories (id, name, svn_url, svn_branch, svn_username, git_provider, git_api_url, git_repo, git_branch, sync_mode, poll_interval_secs, lfs_threshold_mb, auto_merge, enabled, created_by, created_at, updated_at, last_svn_rev, last_git_sha, last_sync_at, sync_status, total_syncs, total_errors)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
             params![
                 repo.id,
                 repo.name,
@@ -1730,6 +1730,12 @@ impl Database {
                 repo.created_by,
                 repo.created_at,
                 repo.updated_at,
+                repo.last_svn_rev,
+                repo.last_git_sha,
+                repo.last_sync_at,
+                repo.sync_status,
+                repo.total_syncs,
+                repo.total_errors,
             ],
         )?;
         debug!(id = %repo.id, name = %repo.name, "inserted repository");
@@ -1740,7 +1746,7 @@ impl Database {
     pub fn get_repository(&self, id: &str) -> Result<Option<models::Repository>, DatabaseError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, name, svn_url, svn_branch, svn_username, git_provider, git_api_url, git_repo, git_branch, sync_mode, poll_interval_secs, lfs_threshold_mb, auto_merge, enabled, created_by, created_at, updated_at
+            "SELECT id, name, svn_url, svn_branch, svn_username, git_provider, git_api_url, git_repo, git_branch, sync_mode, poll_interval_secs, lfs_threshold_mb, auto_merge, enabled, created_by, created_at, updated_at, last_svn_rev, last_git_sha, last_sync_at, sync_status, total_syncs, total_errors
              FROM repositories WHERE id = ?1",
         )?;
         let mut rows = stmt.query_map(params![id], |row| {
@@ -1762,6 +1768,12 @@ impl Database {
                 created_by: row.get(14)?,
                 created_at: row.get(15)?,
                 updated_at: row.get(16)?,
+                last_svn_rev: row.get(17)?,
+                last_git_sha: row.get(18)?,
+                last_sync_at: row.get(19)?,
+                sync_status: row.get(20)?,
+                total_syncs: row.get(21)?,
+                total_errors: row.get(22)?,
             })
         })?;
         match rows.next() {
@@ -1775,7 +1787,7 @@ impl Database {
     pub fn list_repositories(&self) -> Result<Vec<models::Repository>, DatabaseError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, name, svn_url, svn_branch, svn_username, git_provider, git_api_url, git_repo, git_branch, sync_mode, poll_interval_secs, lfs_threshold_mb, auto_merge, enabled, created_by, created_at, updated_at
+            "SELECT id, name, svn_url, svn_branch, svn_username, git_provider, git_api_url, git_repo, git_branch, sync_mode, poll_interval_secs, lfs_threshold_mb, auto_merge, enabled, created_by, created_at, updated_at, last_svn_rev, last_git_sha, last_sync_at, sync_status, total_syncs, total_errors
              FROM repositories ORDER BY name",
         )?;
         let entries = stmt
@@ -1798,6 +1810,12 @@ impl Database {
                     created_by: row.get(14)?,
                     created_at: row.get(15)?,
                     updated_at: row.get(16)?,
+                    last_svn_rev: row.get(17)?,
+                    last_git_sha: row.get(18)?,
+                    last_sync_at: row.get(19)?,
+                    sync_status: row.get(20)?,
+                    total_syncs: row.get(21)?,
+                    total_errors: row.get(22)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1808,8 +1826,8 @@ impl Database {
     pub fn update_repository(&self, repo: &models::Repository) -> Result<(), DatabaseError> {
         let conn = self.conn();
         let changed = conn.execute(
-            "UPDATE repositories SET name = ?1, svn_url = ?2, svn_branch = ?3, svn_username = ?4, git_provider = ?5, git_api_url = ?6, git_repo = ?7, git_branch = ?8, sync_mode = ?9, poll_interval_secs = ?10, lfs_threshold_mb = ?11, auto_merge = ?12, enabled = ?13, updated_at = ?14
-             WHERE id = ?15",
+            "UPDATE repositories SET name = ?1, svn_url = ?2, svn_branch = ?3, svn_username = ?4, git_provider = ?5, git_api_url = ?6, git_repo = ?7, git_branch = ?8, sync_mode = ?9, poll_interval_secs = ?10, lfs_threshold_mb = ?11, auto_merge = ?12, enabled = ?13, updated_at = ?14, last_svn_rev = ?15, last_git_sha = ?16, last_sync_at = ?17, sync_status = ?18, total_syncs = ?19, total_errors = ?20
+             WHERE id = ?21",
             params![
                 repo.name,
                 repo.svn_url,
@@ -1825,6 +1843,12 @@ impl Database {
                 repo.auto_merge as i32,
                 repo.enabled as i32,
                 repo.updated_at,
+                repo.last_svn_rev,
+                repo.last_git_sha,
+                repo.last_sync_at,
+                repo.sync_status,
+                repo.total_syncs,
+                repo.total_errors,
                 repo.id,
             ],
         )?;
@@ -1835,6 +1859,74 @@ impl Database {
             });
         }
         debug!(id = %repo.id, name = %repo.name, "updated repository");
+        Ok(())
+    }
+
+    /// Get the watermark (last_svn_rev, last_git_sha) for a repository.
+    pub fn get_repo_watermark(&self, repo_id: &str) -> Result<(i64, String), DatabaseError> {
+        let conn = self.conn();
+        let result = conn.query_row(
+            "SELECT last_svn_rev, last_git_sha FROM repositories WHERE id = ?1",
+            params![repo_id],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        );
+        match result {
+            Ok(pair) => Ok(pair),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok((0, String::new())),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Update the watermark for a repository after a successful sync.
+    pub fn update_repo_watermark(
+        &self,
+        repo_id: &str,
+        svn_rev: i64,
+        git_sha: &str,
+    ) -> Result<(), DatabaseError> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE repositories SET last_svn_rev = ?1, last_git_sha = ?2, last_sync_at = datetime('now') WHERE id = ?3",
+            params![svn_rev, git_sha, repo_id],
+        )?;
+        debug!(repo_id, svn_rev, git_sha, "updated repo watermark");
+        Ok(())
+    }
+
+    /// Update the sync status for a repository.
+    pub fn update_repo_sync_status(
+        &self,
+        repo_id: &str,
+        status: &str,
+    ) -> Result<(), DatabaseError> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE repositories SET sync_status = ?1 WHERE id = ?2",
+            params![status, repo_id],
+        )?;
+        debug!(repo_id, status, "updated repo sync status");
+        Ok(())
+    }
+
+    /// Increment the total_syncs counter for a repository.
+    pub fn increment_repo_sync_count(&self, repo_id: &str) -> Result<(), DatabaseError> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE repositories SET total_syncs = total_syncs + 1 WHERE id = ?1",
+            params![repo_id],
+        )?;
+        debug!(repo_id, "incremented repo sync count");
+        Ok(())
+    }
+
+    /// Increment the total_errors counter for a repository.
+    pub fn increment_repo_error_count(&self, repo_id: &str) -> Result<(), DatabaseError> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE repositories SET total_errors = total_errors + 1 WHERE id = ?1",
+            params![repo_id],
+        )?;
+        debug!(repo_id, "incremented repo error count");
         Ok(())
     }
 

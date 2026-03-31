@@ -236,6 +236,18 @@ static MIGRATIONS: &[(u32, &str, &str)] = &[
         ALTER TABLE import_progress_new RENAME TO import_progress;
         "#,
     ),
+    (
+        7,
+        "repository watermark columns",
+        r#"
+        ALTER TABLE repositories ADD COLUMN last_svn_rev INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE repositories ADD COLUMN last_git_sha TEXT NOT NULL DEFAULT '';
+        ALTER TABLE repositories ADD COLUMN last_sync_at TEXT;
+        ALTER TABLE repositories ADD COLUMN sync_status TEXT NOT NULL DEFAULT 'idle';
+        ALTER TABLE repositories ADD COLUMN total_syncs INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE repositories ADD COLUMN total_errors INTEGER NOT NULL DEFAULT 0;
+        "#,
+    ),
 ];
 
 /// Run all pending migrations against `conn`.
@@ -284,7 +296,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap();
-        assert_eq!(get_schema_version(&conn).unwrap(), 6);
+        assert_eq!(get_schema_version(&conn).unwrap(), 7);
     }
 
     #[test]

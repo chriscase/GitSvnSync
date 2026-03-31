@@ -170,6 +170,12 @@ async fn main() -> Result<()> {
                 created_by: None,
                 created_at: now.clone(),
                 updated_at: now,
+                last_svn_rev: 0,
+                last_git_sha: String::new(),
+                last_sync_at: None,
+                sync_status: "idle".to_string(),
+                total_syncs: 0,
+                total_errors: 0,
             };
             match db.insert_repository(&default_repo) {
                 Ok(()) => info!(
@@ -249,6 +255,95 @@ async fn main() -> Result<()> {
             engine.set_repo_id(repo.id);
         }
     }
+
+    // Auto-detect watermarks for repos where last_svn_rev == 0.
+    // This recovers watermark state from existing git history after a
+    // database reset or first migration to the repo-table watermark scheme.
+    {
+        let repos = engine.db().list_repositories().unwrap_or_default();
+        for repo in &repos {
+            if repo.last_svn_rev != 0 {
+                continue;
+            }
+            // Try the per-repo git directory first, then legacy layout
+            let repo_git_dir = config
+                .daemon
+                .data_dir
+                .join("repos")
+                .join(&repo.id)
+                .join("git-repo");
+            let legacy_git_dir = config.daemon.data_dir.join("git-repo");
+            let git_dir = if repo_git_dir.join(".git").exists() {
+                Some(&repo_git_dir)
+            } else if legacy_git_dir.join(".git").exists() {
+                Some(&legacy_git_dir)
+            } else {
+                None
+            };
+
+            if let Some(git_dir) = git_dir {
+                // Read git log and scan for sync markers
+                let output = std::process::Command::new("git")
+                    .args(["log", "--oneline", "-200", "--format=%H %s"])
+                    .current_dir(git_dir)
+                    .output();
+                if let Ok(output) = output {
+                    if output.status.success() {
+                        let log_text = String::from_utf8_lossy(&output.stdout);
+                        let re = regex_lite::Regex::new(
+                            r"(?i)(?:\[gitsvnsync\].*SVN r(\d+)|imported from SVN r(\d+))",
+                        )
+                        .unwrap();
+                        let mut max_rev: i64 = 0;
+                        let mut head_sha = String::new();
+                        for line in log_text.lines() {
+                            // First line is HEAD
+                            if head_sha.is_empty() {
+                                if let Some(sha) = line.split_whitespace().next() {
+                                    head_sha = sha.to_string();
+                                }
+                            }
+                            if let Some(caps) = re.captures(line) {
+                                let rev_str = caps
+                                    .get(1)
+                                    .or_else(|| caps.get(2))
+                                    .map(|m| m.as_str())
+                                    .unwrap_or("0");
+                                if let Ok(rev) = rev_str.parse::<i64>() {
+                                    max_rev = max_rev.max(rev);
+                                }
+                            }
+                        }
+                        if max_rev > 0 {
+                            let sha_for_watermark = if head_sha.is_empty() {
+                                String::new()
+                            } else {
+                                head_sha
+                            };
+                            match engine.db().update_repo_watermark(
+                                &repo.id,
+                                max_rev,
+                                &sha_for_watermark,
+                            ) {
+                                Ok(()) => info!(
+                                    repo_name = %repo.name,
+                                    rev = max_rev,
+                                    "Auto-detected watermark r{} for repo {}",
+                                    max_rev,
+                                    repo.name
+                                ),
+                                Err(e) => warn!(
+                                    "Failed to write auto-detected watermark for {}: {}",
+                                    repo.name, e
+                                ),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let sync_engine = Arc::new(engine);
     info!("Sync engine initialized");
 
