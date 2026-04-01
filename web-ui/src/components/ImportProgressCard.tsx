@@ -92,10 +92,20 @@ function PhaseDots({ phase }: { phase: string }) {
 // Component (self-fetching)
 // ---------------------------------------------------------------------------
 
-export default function ImportProgressCard() {
+export default function ImportProgressCard({ repoId }: { repoId?: string } = {}) {
   const { data: status } = useQuery<ImportStatus>({
-    queryKey: ['import-status'],
-    queryFn: api.getImportStatus,
+    queryKey: ['import-status', repoId || 'global'],
+    queryFn: async () => {
+      if (repoId) {
+        const token = localStorage.getItem('session_token');
+        const res = await fetch(`/api/repos/${repoId}/import/status`, {
+          headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        });
+        if (!res.ok) return api.getImportStatus();
+        return res.json();
+      }
+      return api.getImportStatus();
+    },
     refetchInterval: 2000,
     refetchIntervalInBackground: false,
   });

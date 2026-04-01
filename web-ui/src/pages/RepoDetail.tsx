@@ -601,7 +601,7 @@ export default function RepoDetail() {
       </div>
 
       {/* Import Progress */}
-      <ImportProgressCard />
+      <ImportProgressCard repoId={id} />
 
       {/* Sync Records */}
       <div className="bg-gray-800 shadow rounded-lg border border-gray-700">
