@@ -111,13 +111,14 @@ impl Scheduler {
                 }
                 // Regular polling interval
                 _ = interval.tick() => {
-                    self.maybe_run_cycle("scheduled").await;
+                    // Per-repo scheduler handles all repos from the DB.
+                    // The global TOML-based engine is disabled — it was causing
+                    // noise errors when the TOML SVN password was wrong.
                     self.maybe_run_repo_cycles().await;
                 }
                 // Webhook-triggered immediate sync
                 Some(()) = self.sync_rx.recv() => {
                     info!("immediate sync requested via webhook");
-                    self.maybe_run_cycle("webhook").await;
                     self.maybe_run_repo_cycles().await;
                     // Reset the interval so we don't sync again too soon
                     interval.reset();
