@@ -1,15 +1,18 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { api, type AuditEntry, type SyncRecord, type CommitMapEntry, type Repository } from '../api';
+import { UIForgeActivityStream } from '@appforgeapps/uiforge';
+import { api, type CommitMapEntry, type Repository } from '../api';
 import ImportProgressCard from '../components/ImportProgressCard';
 import ServerMonitor from '../components/ServerMonitor';
+import { RepoBadge, DirectionBadge } from '../components/Badges';
+import { renderAuditEvent, renderAuditIcon, renderSyncRecordEvent, renderSyncRecordIcon } from '../components/ActivityEventRenderers';
+import { auditEntryToActivityEvent, syncRecordToActivityEvent } from '../utils/activityAdapter';
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [selectedRepoId, setSelectedRepoId] = useState<string>('all');
-  const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
 
   const activeRepoId = selectedRepoId !== 'all' ? selectedRepoId : undefined;
 
@@ -38,6 +41,19 @@ export default function Dashboard() {
     queryKey: ['repos'],
     queryFn: api.getRepos,
   });
+
+  const repoName = repos && repos.length === 1 ? repos[0].name : (repos && repos.length > 1 ? 'All' : 'Default');
+
+  // Convert audit entries and sync records to UIForge ActivityEvent format
+  // (must be called before any early returns to satisfy rules-of-hooks)
+  const activityEvents = useMemo(
+    () => (recentActivity?.entries ?? []).map(e => auditEntryToActivityEvent(e, repoName)),
+    [recentActivity, repoName],
+  );
+  const syncRecordEvents = useMemo(
+    () => (syncRecords?.entries ?? []).map(r => syncRecordToActivityEvent(r, repoName)),
+    [syncRecords, repoName],
+  );
 
   if (statusLoading) {
     return <div className="text-center py-8 text-gray-400">Loading...</div>;
@@ -76,26 +92,7 @@ export default function Dashboard() {
 
   const repoContextLabel = selectedRepo ? selectedRepo.name : 'All Repositories';
 
-  const repoName = repos && repos.length === 1 ? repos[0].name : (repos && repos.length > 1 ? 'All' : 'Default');
-
-  const entries = recentActivity?.entries ?? [];
-  const records = syncRecords?.entries ?? [];
   const cmEntries = commitMap?.entries ?? [];
-
-  // Group consecutive audit entries with same (action, success) for collapsed display
-  function groupEntries(items: AuditEntry[]): { key: number; entries: AuditEntry[] }[] {
-    const groups: { key: number; entries: AuditEntry[] }[] = [];
-    for (const entry of items) {
-      const last = groups[groups.length - 1];
-      if (last && last.entries[0].action === entry.action && last.entries[0].success === entry.success) {
-        last.entries.push(entry);
-      } else {
-        groups.push({ key: entry.id, entries: [entry] });
-      }
-    }
-    return groups;
-  }
-  const auditGroups = groupEntries(entries);
 
   return (
     <div className="space-y-6">
@@ -257,7 +254,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Sync Records with expandable diffs */}
+      {/* Sync Records */}
       <div className="bg-gray-800 shadow rounded-lg border border-gray-700">
         <div className="p-6 pb-3">
           <h2 className="text-lg font-semibold text-gray-100">
@@ -275,15 +272,21 @@ export default function Dashboard() {
             </p>
           )}
         </div>
-        {records.length > 0 ? (
-          <div className="divide-y divide-gray-700">
-            {records.map((record) => (
-              <SyncRecordRow key={record.id} record={record} repoName={repoName} />
-            ))}
-          </div>
-        ) : (
-          <p className="text-gray-400 text-sm px-6 pb-6">No sync records yet</p>
-        )}
+        <div className="px-6 pb-6">
+          <UIForgeActivityStream
+            events={syncRecordEvents}
+            theme="dark"
+            density="compact"
+            enableGrouping={true}
+            groupingThreshold={3}
+            showTimeline={true}
+            showDateSeparators={true}
+            renderEvent={renderSyncRecordEvent}
+            renderIcon={renderSyncRecordIcon}
+            maxHeight="500px"
+            emptyMessage="No sync records yet"
+          />
+        </div>
       </div>
 
       {/* Commit Map */}
@@ -349,78 +352,20 @@ export default function Dashboard() {
             <span className="ml-2 text-sm font-normal text-blue-400">— {selectedRepo.name}</span>
           )}
         </h2>
-        {auditGroups.length > 0 ? (
-          <div className="space-y-1">
-            {auditGroups.map((group) => {
-              const latest = group.entries[0];
-              const isGroup = group.entries.length > 1;
-              const isExpanded = expandedGroups.has(group.key);
-              return (
-                <div key={group.key}>
-                  <div
-                    className={`flex items-center justify-between py-2 border-b border-gray-700 last:border-0 ${isGroup ? 'cursor-pointer hover:bg-gray-700/30' : ''}`}
-                    onClick={() => {
-                      if (!isGroup) return;
-                      setExpandedGroups(prev => {
-                        const next = new Set(prev);
-                        if (next.has(group.key)) next.delete(group.key); else next.add(group.key);
-                        return next;
-                      });
-                    }}
-                  >
-                    <div className="flex items-center space-x-3">
-                      {isGroup && (
-                        <span className="text-gray-500 w-4">{isExpanded ? '\u25BE' : '\u25B8'}</span>
-                      )}
-                      <RepoBadge name={repoName} />
-                      <SuccessIndicator success={latest.success} />
-                      {latest.direction && <DirectionBadge direction={latest.direction} />}
-                      <ActionBadge action={latest.action} />
-                      {isGroup && (
-                        <span className="text-xs bg-gray-600 text-gray-300 rounded-full px-2 py-0.5">
-                          &times;{group.entries.length}
-                        </span>
-                      )}
-                      <span className="text-sm text-gray-200 truncate max-w-xl lg:max-w-2xl" title={latest.details || latest.action}>
-                        {latest.details || latest.action}
-                      </span>
-                      {latest.author && (
-                        <span className="text-sm text-gray-400">by {latest.author}</span>
-                      )}
-                    </div>
-                    <div className="flex items-center space-x-3 flex-shrink-0">
-                      {latest.svn_rev && (
-                        <span className="text-xs font-mono text-blue-400">r{latest.svn_rev}</span>
-                      )}
-                      {latest.git_sha && (
-                        <span className="text-xs font-mono text-purple-400">
-                          {latest.git_sha.substring(0, 8)}
-                        </span>
-                      )}
-                      <span className="text-xs text-gray-500">
-                        {new Date(latest.created_at).toLocaleString()}
-                      </span>
-                    </div>
-                  </div>
-                  {isGroup && isExpanded && (
-                    <div className="ml-8 border-l-2 border-gray-700 pl-4 space-y-1">
-                      {group.entries.slice(1).map((entry: AuditEntry) => (
-                        <div key={entry.id} className="flex items-center justify-between py-1.5 text-sm text-gray-400">
-                          <span className="truncate max-w-xl">{entry.details || entry.action}</span>
-                          <span className="text-xs text-gray-500 flex-shrink-0 ml-3">
-                            {new Date(entry.created_at).toLocaleString()}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="text-gray-400 text-sm">No activity yet</p>
-        )}
+        <UIForgeActivityStream
+          events={activityEvents}
+          theme="dark"
+          density="compact"
+          enableGrouping={true}
+          groupingThreshold={2}
+          showDateSeparators={false}
+          showTimeline={true}
+          responsive={true}
+          renderEvent={renderAuditEvent}
+          renderIcon={renderAuditIcon}
+          maxHeight="600px"
+          emptyMessage="No activity yet"
+        />
       </div>
 
       {/* Server Monitor */}
@@ -432,97 +377,6 @@ export default function Dashboard() {
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
-
-function SyncRecordRow({ record, repoName }: { record: SyncRecord; repoName: string }) {
-  const [expanded, setExpanded] = useState(false);
-
-  const statusColor =
-    record.status === 'applied'
-      ? 'text-green-400'
-      : record.status === 'failed'
-        ? 'text-red-400'
-        : 'text-yellow-400';
-
-  return (
-    <div>
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full px-6 py-3 flex items-center justify-between hover:bg-gray-700/50 text-left transition-colors"
-      >
-        <div className="flex items-center space-x-3 min-w-0">
-          <RepoBadge name={repoName} />
-          <span className={`text-xs font-bold uppercase ${statusColor}`}>
-            {record.status === 'applied' ? '\u2713' : record.status === 'failed' ? '\u2717' : '\u25CB'}
-          </span>
-          <DirectionBadge direction={record.direction} />
-          <span className="text-sm text-gray-200 truncate">{record.message}</span>
-        </div>
-        <div className="flex items-center space-x-3 flex-shrink-0 ml-4">
-          <span className="text-sm text-gray-400">{record.author}</span>
-          {record.svn_rev && (
-            <span className="text-xs font-mono text-blue-400">r{record.svn_rev}</span>
-          )}
-          {record.git_sha && (
-            <span className="text-xs font-mono text-purple-400">{record.git_sha.substring(0, 8)}</span>
-          )}
-          <span className="text-xs text-gray-500">
-            {new Date(record.synced_at).toLocaleString()}
-          </span>
-          <svg
-            className={`w-4 h-4 text-gray-400 transition-transform ${expanded ? 'rotate-180' : ''}`}
-            fill="none" viewBox="0 0 24 24" stroke="currentColor"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          </svg>
-        </div>
-      </button>
-      {expanded && (
-        <div className="px-6 pb-4 bg-gray-850">
-          <div className="bg-gray-900 rounded-lg p-4 border border-gray-700">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4 text-sm">
-              <div>
-                <span className="text-gray-500 text-xs uppercase">Record ID</span>
-                <p className="font-mono text-gray-300 truncate">{record.id}</p>
-              </div>
-              <div>
-                <span className="text-gray-500 text-xs uppercase">SVN Revision</span>
-                <p className="font-mono text-blue-400">{record.svn_rev ? `r${record.svn_rev}` : 'N/A'}</p>
-              </div>
-              <div>
-                <span className="text-gray-500 text-xs uppercase">Git SHA</span>
-                <p className="font-mono text-purple-400">{record.git_sha || 'N/A'}</p>
-              </div>
-              <div>
-                <span className="text-gray-500 text-xs uppercase">Status</span>
-                <p className={statusColor + ' font-medium capitalize'}>{record.status}</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
-              <div>
-                <span className="text-gray-500 text-xs uppercase">Author</span>
-                <p className="text-gray-300">{record.author}</p>
-              </div>
-              <div>
-                <span className="text-gray-500 text-xs uppercase">Committed</span>
-                <p className="text-gray-300">{new Date(record.timestamp).toLocaleString()}</p>
-              </div>
-              <div>
-                <span className="text-gray-500 text-xs uppercase">Synced At</span>
-                <p className="text-gray-300">{new Date(record.synced_at).toLocaleString()}</p>
-              </div>
-            </div>
-            <div className="mt-4">
-              <span className="text-gray-500 text-xs uppercase">Commit Message</span>
-              <div className="mt-1 bg-gray-800 rounded p-3 border border-gray-700">
-                <pre className="text-sm text-gray-200 whitespace-pre-wrap font-mono">{record.message}</pre>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 function StatusCard({
   title,
@@ -576,61 +430,3 @@ function StatusCard({
   );
 }
 
-function RepoBadge({ name }: { name: string }) {
-  return (
-    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-900/40 text-blue-300 border border-blue-700/30 truncate max-w-[120px]">
-      {name}
-    </span>
-  );
-}
-
-function DirectionBadge({ direction }: { direction: string }) {
-  const isToGit = direction === 'svn_to_git';
-  return (
-    <span
-      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-        isToGit
-          ? 'bg-blue-900/50 text-blue-300'
-          : 'bg-purple-900/50 text-purple-300'
-      }`}
-    >
-      {isToGit ? 'SVN \u2192 Git' : 'Git \u2192 SVN'}
-    </span>
-  );
-}
-
-function ActionBadge({ action }: { action: string }) {
-  const colors: Record<string, string> = {
-    sync_cycle: 'bg-cyan-900/50 text-cyan-300',
-    conflict_detected: 'bg-red-900/50 text-red-300',
-    conflict_resolved: 'bg-green-900/50 text-green-300',
-    sync_error: 'bg-red-900/50 text-red-300',
-    webhook_received: 'bg-yellow-900/50 text-yellow-300',
-    daemon_started: 'bg-emerald-900/50 text-emerald-300',
-    auth_login: 'bg-indigo-900/50 text-indigo-300',
-    config_updated: 'bg-orange-900/50 text-orange-300',
-  };
-
-  const label = action.replace(/_/g, ' ');
-
-  return (
-    <span
-      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-        colors[action] ?? 'bg-gray-700 text-gray-300'
-      }`}
-    >
-      {label}
-    </span>
-  );
-}
-
-function SuccessIndicator({ success }: { success: boolean }) {
-  return (
-    <span
-      className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${
-        success ? 'bg-green-400' : 'bg-red-400'
-      }`}
-      title={success ? 'Success' : 'Failed'}
-    />
-  );
-}
