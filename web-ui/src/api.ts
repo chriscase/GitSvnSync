@@ -174,9 +174,10 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 
   const res = await fetch(`${API_BASE}${url}`, { ...options, headers });
   if (res.status === 401) {
-    // Don't redirect if we're on the setup page — let the user finish
-    if (!window.location.pathname.startsWith('/setup')) {
-      localStorage.removeItem('session_token');
+    // Clear credentials and redirect to login
+    localStorage.removeItem('session_token');
+    localStorage.removeItem('user');
+    if (window.location.pathname !== '/login') {
       window.location.href = '/login';
     }
     throw new Error('Session expired — please log in again');

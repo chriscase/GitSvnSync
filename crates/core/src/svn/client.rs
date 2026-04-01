@@ -131,9 +131,12 @@ impl SvnClient {
         let output = self
             .run_svn_in_dir(path, &["commit", "-m", message, &path_str])
             .await?;
-        let rev = parse_committed_revision(&output).ok_or_else(|| SvnError::CommandFailed {
-            exit_code: 0,
-            stderr: format!("could not parse committed revision from: {}", output),
+        let rev = parse_committed_revision(&output).ok_or_else(|| {
+            warn!(raw_output = %output, "failed to parse committed revision from svn commit output");
+            SvnError::CommandFailed {
+                exit_code: 0,
+                stderr: format!("could not parse committed revision from: {}", output),
+            }
         })?;
         info!(rev, "svn commit succeeded");
         Ok(rev)
@@ -348,15 +351,39 @@ impl SvnClient {
 }
 
 fn parse_committed_revision(output: &str) -> Option<i64> {
+    // Primary: match "Committed revision NNN" (case-insensitive)
     for line in output.lines() {
-        let line = line.trim();
-        if line.starts_with("Committed revision") {
-            return line
-                .trim_start_matches("Committed revision")
-                .trim()
-                .trim_end_matches('.')
-                .parse::<i64>()
-                .ok();
+        let trimmed = line.trim();
+        let lower = trimmed.to_lowercase();
+        if lower.contains("committed revision") || lower.contains("committedrevision") {
+            if let Some(pos) = lower.find("revision") {
+                let after = &trimmed[pos + 8..]; // "revision" = 8 chars
+                let num_str: String = after
+                    .chars()
+                    .skip_while(|c| !c.is_ascii_digit())
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                if let Ok(rev) = num_str.parse::<i64>() {
+                    return Some(rev);
+                }
+            }
+        }
+    }
+    // Fallback: any line containing "revision N" pattern
+    for line in output.lines() {
+        let trimmed = line.trim();
+        let lower = trimmed.to_lowercase();
+        if let Some(pos) = lower.find("revision ") {
+            let after = &trimmed[pos + 9..];
+            let num_str: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if !num_str.is_empty() {
+                if let Ok(rev) = num_str.parse::<i64>() {
+                    return Some(rev);
+                }
+            }
         }
     }
     None
