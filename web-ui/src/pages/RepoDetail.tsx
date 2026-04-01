@@ -251,6 +251,7 @@ export default function RepoDetail() {
         api_url: form.git_api_url,
         repo: form.git_repo,
         provider: form.git_provider,
+        token: form.git_token || undefined,
       });
       setGitTestResult(result);
     } catch (e: any) {

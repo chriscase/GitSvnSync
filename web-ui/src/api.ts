@@ -266,7 +266,7 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  testGitConnection: (data: { api_url: string; repo: string; provider: string }) =>
+  testGitConnection: (data: { api_url: string; repo: string; provider: string; token?: string }) =>
     fetchJson<{ ok: boolean; message: string }>('/setup/test-git', {
       method: 'POST',
       body: JSON.stringify(data),

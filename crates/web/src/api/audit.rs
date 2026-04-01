@@ -6,6 +6,7 @@ use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::routing::get;
 use axum::{Json, Router};
+use rusqlite;
 use serde::{Deserialize, Serialize};
 
 use crate::api::auth::validate_session;
@@ -76,18 +77,40 @@ async fn list_audit(
         .count_audit_log()
         .map_err(|e| AppError::Internal(format!("database error: {}", e)))? as usize;
 
-    // Fetch audit entries, optionally filtered by repo_id
-    let entries = db
-        .list_audit_log(limit, offset)
-        .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
-
-    // Filter by repo_id if provided (client-side filter for now —
-    // repo_id column exists but not all entries have it populated yet)
-    let views: Vec<AuditEntryView> = entries.into_iter().map(|e| AuditEntryView {
-        id: e.id, created_at: e.created_at, action: e.action,
-        details: e.details, author: e.author, direction: e.direction,
-        svn_rev: e.svn_rev, git_sha: e.git_sha, success: e.success,
-    }).collect();
+    // Fetch audit entries, filtered by repo_id if provided
+    let entries = if let Some(ref rid) = query.repo_id {
+        // SQL-level filter for specific repo
+        let conn = db.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, action, direction, svn_rev, git_sha, author, details, created_at, success
+             FROM audit_log WHERE repo_id = ?1 ORDER BY id DESC LIMIT ?2 OFFSET ?3"
+        ).map_err(|e| AppError::Internal(format!("prepare: {}", e)))?;
+        let rows = stmt.query_map(rusqlite::params![rid, limit, offset], |row| {
+            Ok(AuditEntryView {
+                id: row.get(0)?,
+                action: row.get(1)?,
+                direction: row.get(2)?,
+                svn_rev: row.get(3)?,
+                git_sha: row.get(4)?,
+                author: row.get(5)?,
+                details: row.get(6)?,
+                created_at: row.get(7)?,
+                success: row.get(8)?,
+            })
+        }).map_err(|e| AppError::Internal(format!("query: {}", e)))?;
+        rows.filter_map(|r| r.ok()).collect::<Vec<_>>()
+    } else {
+        // No filter — return all entries
+        let entries = db
+            .list_audit_log(limit, offset)
+            .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
+        entries.into_iter().map(|e| AuditEntryView {
+            id: e.id, created_at: e.created_at, action: e.action,
+            details: e.details, author: e.author, direction: e.direction,
+            svn_rev: e.svn_rev, git_sha: e.git_sha, success: e.success,
+        }).collect()
+    };
+    let views = entries;
 
     // Apply success filter if provided
     let views: Vec<AuditEntryView> = if let Some(success_val) = query.success {

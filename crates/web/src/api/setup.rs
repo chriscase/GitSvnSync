@@ -41,6 +41,7 @@ pub struct TestGitRequest {
     pub api_url: String,
     pub repo: String,
     pub provider: String,
+    pub token: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -332,7 +333,13 @@ async fn test_git_connection(
         .build()
         .map_err(|e| AppError::Internal(format!("http client error: {}", e)))?;
 
-    match client.get(&check_url).send().await {
+    let mut req = client.get(&check_url);
+    if let Some(ref token) = body.token {
+        if !token.is_empty() {
+            req = req.header("Authorization", format!("token {}", token));
+        }
+    }
+    match req.send().await {
         Ok(resp) => {
             let status = resp.status();
             if status.is_success() {
