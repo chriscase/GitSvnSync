@@ -657,7 +657,7 @@ async fn start_repo_import(
     } else {
         0
     };
-    let file_policy = FilePolicy::new(lfs_threshold_bytes, vec![]);
+    let file_policy = FilePolicy::with_lfs(0, vec![], lfs_threshold_bytes, &[]);
 
     // 10. Open a separate DB connection for the import task
     let db_path = data_dir.join("gitsvnsync.db");
@@ -703,6 +703,29 @@ async fn start_repo_import(
                     count
                 ));
                 info!(repo_id = %repo_id_clone, count, "per-repo import completed successfully");
+
+                // Update repo watermark so scheduler knows where import ended
+                let last_rev = import_db.get_state("svn_rev")
+                    .ok().flatten()
+                    .and_then(|v| v.parse::<i64>().ok())
+                    .unwrap_or(0);
+                let head_sha = {
+                    let g = git_client.lock().unwrap();
+                    g.get_head_sha().unwrap_or_default()
+                };
+                if last_rev > 0 {
+                    let _ = import_db.update_repo_watermark(&repo_id_clone, last_rev, &head_sha);
+                    // Also write per-repo kv_state keys for backward compat
+                    let _ = import_db.set_state(
+                        &format!("last_svn_rev_{}", repo_id_clone),
+                        &last_rev.to_string(),
+                    );
+                    let _ = import_db.set_state(
+                        &format!("last_git_sha_{}", repo_id_clone),
+                        &head_sha,
+                    );
+                    info!(repo_id = %repo_id_clone, last_rev, %head_sha, "updated repo watermark after import");
+                }
             }
             Err(e) => {
                 p.phase = ImportPhase::Failed;
