@@ -265,6 +265,42 @@ async fn main() -> Result<()> {
             if repo.last_svn_rev != 0 {
                 continue;
             }
+            info!(repo_name = %repo.name, "repo has last_svn_rev=0, attempting auto-detect");
+
+            // First, check the global watermarks table (import writes here)
+            if let Ok(Some(rev_str)) = engine.db().get_watermark("svn_rev") {
+                if let Ok(rev) = rev_str.parse::<i64>() {
+                    if rev > 0 {
+                        let sha = engine.db().get_watermark("git_sha")
+                            .ok().flatten().unwrap_or_default();
+                        match engine.db().update_repo_watermark(&repo.id, rev, &sha) {
+                            Ok(()) => {
+                                info!(repo_name = %repo.name, rev, "Recovered watermark from watermarks table");
+                                continue;
+                            }
+                            Err(e) => warn!("Failed to write watermark for {}: {}", repo.name, e),
+                        }
+                    }
+                }
+            }
+
+            // Also check per-repo kv_state keys
+            let repo_key = format!("last_svn_rev_{}", repo.id);
+            if let Ok(Some(rev_str)) = engine.db().get_state(&repo_key) {
+                if let Ok(rev) = rev_str.parse::<i64>() {
+                    if rev > 0 {
+                        let sha_key = format!("last_git_sha_{}", repo.id);
+                        let sha = engine.db().get_state(&sha_key).ok().flatten().unwrap_or_default();
+                        match engine.db().update_repo_watermark(&repo.id, rev, &sha) {
+                            Ok(()) => {
+                                info!(repo_name = %repo.name, rev, "Recovered watermark from per-repo kv_state");
+                                continue;
+                            }
+                            Err(e) => warn!("Failed to write watermark for {}: {}", repo.name, e),
+                        }
+                    }
+                }
+            }
             // Try the per-repo git directory first, then legacy layout
             let repo_git_dir = config
                 .daemon
