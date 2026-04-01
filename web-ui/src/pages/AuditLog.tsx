@@ -1,7 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
+import { UIForgeActivityStream } from '@appforgeapps/uiforge';
 import { api, type AuditEntry } from '../api';
+import { DirectionBadge } from '../components/Badges';
+import { renderAuditEvent, renderAuditIcon } from '../components/ActivityEventRenderers';
+import { auditEntryToActivityEvent } from '../utils/activityAdapter';
 
 const ACTION_TYPES = [
   { value: '', label: 'All Actions' },
@@ -22,6 +26,7 @@ export default function AuditLog() {
   const [actionFilter, setActionFilter] = useState('');
   const [successFilter, setSuccessFilter] = useState<string>('');
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<'table' | 'stream'>('stream');
 
   // Read success=false from URL params (from clickable card integration)
   useEffect(() => {
@@ -116,52 +121,42 @@ export default function AuditLog() {
             </button>
           ))}
         </div>
+        <div className="flex rounded-md overflow-hidden border border-gray-600">
+          <button
+            onClick={() => setViewMode('stream')}
+            className={`px-3 py-2 text-sm ${
+              viewMode === 'stream'
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+            }`}
+          >
+            Stream
+          </button>
+          <button
+            onClick={() => setViewMode('table')}
+            className={`px-3 py-2 text-sm ${
+              viewMode === 'table'
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+            }`}
+          >
+            Table
+          </button>
+        </div>
         <span className="text-sm text-gray-500">
           Showing {entries.length} of {allEntries.length} entries
         </span>
       </div>
 
-      {/* Table */}
-      <div className="bg-gray-800 shadow overflow-hidden rounded-lg border border-gray-700">
-        <table className="min-w-full divide-y divide-gray-700">
-          <thead>
-            <tr>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase w-8"></th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">
-                Time
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">
-                Action
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">
-                Direction
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">
-                Details
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">
-                Author
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">
-                SVN Rev
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">
-                Git SHA
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-700">
-            {entries.map((entry: AuditEntry) => (
-              <AuditRow
-                key={entry.id}
-                entry={entry}
-                expanded={expandedId === entry.id}
-                onToggle={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
-              />
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {viewMode === 'stream' ? (
+        <AuditStreamView entries={entries} />
+      ) : (
+        <AuditTableView
+          entries={entries}
+          expandedId={expandedId}
+          onToggleExpand={(id) => setExpandedId(expandedId === id ? null : id)}
+        />
+      )}
 
       {/* Pagination */}
       {totalPages > 1 && (
@@ -193,6 +188,92 @@ export default function AuditLog() {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Stream View (UIForgeActivityStream)
+// ---------------------------------------------------------------------------
+
+function AuditStreamView({ entries }: { entries: AuditEntry[] }) {
+  const activityEvents = useMemo(
+    () => entries.map(e => auditEntryToActivityEvent(e)),
+    [entries],
+  );
+
+  return (
+    <div className="bg-gray-800 shadow rounded-lg border border-gray-700 p-6">
+      <UIForgeActivityStream
+        events={activityEvents}
+        theme="dark"
+        density="comfortable"
+        enableGrouping={true}
+        groupingThreshold={2}
+        showDateSeparators={true}
+        showTimeline={true}
+        responsive={true}
+        renderEvent={renderAuditEvent}
+        renderIcon={renderAuditIcon}
+        emptyMessage="No matching audit entries"
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Table View (original)
+// ---------------------------------------------------------------------------
+
+function AuditTableView({
+  entries,
+  expandedId,
+  onToggleExpand,
+}: {
+  entries: AuditEntry[];
+  expandedId: number | null;
+  onToggleExpand: (id: number) => void;
+}) {
+  return (
+    <div className="bg-gray-800 shadow overflow-hidden rounded-lg border border-gray-700">
+      <table className="min-w-full divide-y divide-gray-700">
+        <thead>
+          <tr>
+            <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase w-8"></th>
+            <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">
+              Time
+            </th>
+            <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">
+              Action
+            </th>
+            <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">
+              Direction
+            </th>
+            <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">
+              Details
+            </th>
+            <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">
+              Author
+            </th>
+            <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">
+              SVN Rev
+            </th>
+            <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase">
+              Git SHA
+            </th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-700">
+          {entries.map((entry: AuditEntry) => (
+            <AuditRow
+              key={entry.id}
+              entry={entry}
+              expanded={expandedId === entry.id}
+              onToggle={() => onToggleExpand(entry.id)}
+            />
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -324,20 +405,5 @@ function AuditRow({
         </tr>
       )}
     </>
-  );
-}
-
-function DirectionBadge({ direction }: { direction: string }) {
-  const isToGit = direction === 'svn_to_git';
-  return (
-    <span
-      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-        isToGit
-          ? 'bg-blue-900/50 text-blue-300'
-          : 'bg-purple-900/50 text-purple-300'
-      }`}
-    >
-      {isToGit ? 'SVN \u2192 Git' : 'Git \u2192 SVN'}
-    </span>
   );
 }
