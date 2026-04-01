@@ -704,11 +704,13 @@ async fn start_repo_import(
                 ));
                 info!(repo_id = %repo_id_clone, count, "per-repo import completed successfully");
 
-                // Update repo watermark so scheduler knows where import ended
-                let last_rev = import_db.get_state("svn_rev")
+                // Update repo watermark so scheduler knows where import ended.
+                // Read from the watermarks table (where run_full_import writes)
+                // or fall back to the import progress total_revs.
+                let last_rev = import_db.get_watermark("svn_rev")
                     .ok().flatten()
                     .and_then(|v| v.parse::<i64>().ok())
-                    .unwrap_or(0);
+                    .unwrap_or_else(|| p.total_revs); // fallback to total revisions
                 let head_sha = {
                     let g = git_client.lock().unwrap();
                     g.get_head_sha().unwrap_or_default()
