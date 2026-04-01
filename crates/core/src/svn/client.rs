@@ -346,7 +346,16 @@ impl SvnClient {
             warn!(exit_code, %stderr, "svn command failed");
             return Err(SvnError::CommandFailed { exit_code, stderr });
         }
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        // Combine stdout and stderr — some SVN operations (especially commit)
+        // output the "Committed revision N" line to stderr, not stdout.
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if stdout.is_empty() && !stderr.is_empty() {
+            debug!(stderr = %stderr, "svn command produced no stdout, using stderr");
+            Ok(format!("{}\n{}", stdout, stderr))
+        } else {
+            Ok(stdout)
+        }
     }
 }
 
