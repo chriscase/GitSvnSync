@@ -551,11 +551,21 @@ async fn start_repo_import(
         std::fs::create_dir_all(&git_repo_path)
             .map_err(|e| AppError::Internal(format!("mkdir failed: {}", e)))?;
 
-        let clone_url = gitsvnsync_core::git::remote_url::derive_git_remote_url(
+        let base_clone_url = gitsvnsync_core::git::remote_url::derive_git_remote_url(
             &repo.git_api_url,
-            git_token.as_deref(),
+            None,
             &repo.git_repo,
         );
+        // Embed token in URL for the force-push
+        let clone_url = if let Some(ref tok) = git_token {
+            if let Some(rest) = base_clone_url.strip_prefix("https://") {
+                format!("https://x-access-token:{}@{}", tok, rest)
+            } else {
+                base_clone_url.clone()
+            }
+        } else {
+            base_clone_url.clone()
+        };
         let branch = if repo.git_branch.is_empty() { "main" } else { &repo.git_branch };
 
         let init_cmds: Vec<Vec<&str>> = vec![
