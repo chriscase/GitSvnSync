@@ -521,7 +521,7 @@ impl SyncEngine {
             count += 1;
 
             // Audit log for successful sync
-            let _ = self.db.insert_audit_log(
+            let _ = self.db.insert_audit_log_with_repo(
                 "sync_cycle",
                 Some("svn_to_git"),
                 Some(change.revision),
@@ -533,6 +533,7 @@ impl SyncEngine {
                     &git_sha[..8.min(git_sha.len())]
                 )),
                 true,
+                self.repo_id.as_deref(),
             );
 
             info!(
@@ -785,7 +786,7 @@ impl SyncEngine {
             count += 1;
 
             // Audit log for successful sync
-            let _ = self.db.insert_audit_log(
+            let _ = self.db.insert_audit_log_with_repo(
                 "sync_cycle",
                 Some("git_to_svn"),
                 Some(svn_rev),
@@ -797,6 +798,7 @@ impl SyncEngine {
                     svn_rev
                 )),
                 true,
+                self.repo_id.as_deref(),
             );
 
             info!(

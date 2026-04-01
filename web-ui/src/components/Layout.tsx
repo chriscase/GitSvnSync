@@ -16,7 +16,7 @@ export default function Layout() {
   const navigate = useNavigate();
   const { data: status } = useQuery({
     queryKey: ['status'],
-    queryFn: api.getStatus,
+    queryFn: () => api.getStatus(),
   });
 
   const user = getStoredUser();

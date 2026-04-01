@@ -14,8 +14,8 @@ export default function Dashboard() {
   const activeRepoId = selectedRepoId !== 'all' ? selectedRepoId : undefined;
 
   const { data: status, isLoading: statusLoading, isError, error } = useQuery({
-    queryKey: ['status'],
-    queryFn: api.getStatus,
+    queryKey: ['status', activeRepoId],
+    queryFn: () => api.getStatus(activeRepoId),
     refetchInterval: 5000,
   });
 
@@ -115,8 +115,8 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Import Progress Card */}
-      <ImportProgressCard />
+      {/* Import Progress Card — shows per-repo when filtered */}
+      <ImportProgressCard repoId={activeRepoId} />
 
       {/* Repositories Overview */}
       {repos && repos.length > 0 && (

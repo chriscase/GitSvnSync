@@ -1,75 +1,75 @@
 # RepoSync Known Issues
 
-## Resolved
+## Resolved (17 issues fixed)
 
-### 1. ~~Data not scoped by repository~~ FIXED
-- Frontend RepoDetail.tsx now passes repo_id to all API calls
+1. ~~Data not scoped by repository~~ — Frontend passes repo_id to all API calls
+2. ~~Import is global, not per-repo~~ — POST /api/repos/:id/import with ?reset=true
+3. ~~Scheduler only syncs global repo~~ — Per-repo scheduler with SyncEngine per repo
+4. ~~Setup Wizard overwrites TOML~~ — TOML generation removed, config in DB
+5. ~~Watermarks in fragile kv_state~~ — Now in repositories table columns
+6. ~~No credentials on repo detail~~ — SVN password + Git token fields with Test Connection
+7. ~~Dashboard filter doesn't work~~ — Passes activeRepoId to all queries
+8. ~~Server Monitor auth~~ — fetchJson includes Authorization header
+9. ~~Audit log only errors~~ — Success entries now logged
+12. ~~TOML file overwrite~~ — Generation removed
+13. ~~No graceful shutdown~~ — SIGTERM + WAL checkpoint
+15. ~~SVN commit parsing~~ — Case-insensitive with fallback patterns
+16. ~~LFS not tracked~~ — FilePolicy::with_lfs() now used correctly (4 files tracked)
+- ~~Import watermark not written~~ — Reads from watermarks table after import
+- ~~Reset import URL bug~~ — Token no longer passed as git_base_url
+- ~~Git test connection no auth~~ — Token sent in Authorization header
+- ~~Audit log not filtered by repo~~ — SQL-level WHERE repo_id = ?
 
-### 2. ~~Import is global, not per-repo~~ FIXED
-- Added `POST /api/repos/:id/import` endpoint, validated with 250+500 commit sandbox imports
-
-### 3. ~~Scheduler only syncs global repo~~ FIXED
-- Per-repo scheduler creates SyncEngine for each enabled repo
-- SVN→Git and Git→SVN both working (verified on Large Test repo)
-
-### 4. ~~Setup Wizard overwrites TOML config~~ FIXED
-- TOML generation removed from apply_config
-- /setup redirects to /repos
-- Setup removed from navigation
-
-### 5. ~~Watermark auto-detection reads wrong table~~ FIXED
-- Watermarks now stored as columns on repositories table (last_svn_rev, last_git_sha)
-- Dual-write to both repo table and kv_state for backward compat
-- Auto-detect from git history on daemon startup when watermark is 0
-
-### 6. ~~No per-repo credential management~~ FIXED
-- SVN password and Git token fields on repo detail edit form
-- Test Connection buttons on repo detail
-- POST /api/repos/:id/credentials endpoint
-
-### 7. ~~Dashboard repo filter doesn't filter~~ FIXED
-- Dashboard passes activeRepoId to all API calls with proper query keys
-
-### 8. ~~Server Monitor auth~~ FIXED
-- getSystemMetrics uses fetchJson which includes Authorization header
-
-### 9. ~~Audit log only shows errors~~ FIXED
-- Successful sync cycles now logged to audit_log
-
-### 12. ~~TOML file overwrite~~ FIXED
-- TOML generation removed, config lives in DB repositories table
-
-### 13. ~~No graceful shutdown~~ FIXED
-- SIGTERM handler with WAL checkpoint on shutdown
-- stop-daemon.sh script for graceful stop
-
-## Active
+## Active Issues
 
 ### 10. Activity grouping/collapsing
-- Consecutive same-action audit entries should be collapsed
+- Consecutive same-action audit entries should be collapsed in UI
 - Code exists but needs visual validation
 
-### 11. Per-repo credential hot-reload
-- reload_credentials() reads from kv_state with per-repo keys
-- Working for Large repo, needs broader validation
+### 11. Per-repo credential hot-reload validation
+- reload_credentials() reads per-repo keys — needs broader testing
 
 ### 14. Session expiry UX
-- 401 redirects to /login, clearing credentials
-- Could be improved with a toast notification instead of hard redirect
-- Partially mitigated: login page doesn't re-redirect
-
-### 15. SVN commit revision parsing (NEW — from sandbox testing)
-- Sandbox repo Git→SVN fails: "could not parse committed revision"
-- svn commit exits 0 but output format differs from expected
-- Fixed with case-insensitive parsing and fallback patterns
-- Needs re-validation after deploy
-
-### 16. LFS not tracked during per-repo import
-- lfs_unique_count shows 0 on both sandbox imports despite >1MB files
-- FilePolicy may not be reading lfs_threshold_mb from repo config correctly
-- Needs investigation
+- 401 redirects to /login — could show toast instead
 
 ### 17. Status endpoint shows global data when repo filtered
 - /api/status returns global sync engine state
-- When filtering by repo on dashboard, status cards show wrong data (e.g., r3078 for sandbox)
-- Needs per-repo status from repositories table
+- Dashboard status cards show wrong data for specific repos
+- **Fix needed**: Read status from repositories table (last_svn_rev, sync_status, total_syncs, total_errors) instead of global sync engine
+
+### 18. LFS counter not incremented in import progress
+- lfs_unique_count shows 0 even when LFS files are detected and tracked
+- The actual tracking works (4 files tracked) but the counter isn't updated
+- Cosmetic issue — import log lines show "LFS: 4" per revision
+
+### 19. Dashboard ImportProgressCard only shows global import
+- Per-repo imports only visible on repo detail page
+- Dashboard should show any active import across all repos
+
+### 20. Echo loop — sandbox accumulated 3000+ duplicate SVN revisions
+- Caused by watermark being 0 after import (Bug 1, now fixed)
+- Echo detection (is_echo_commit) works but wasn't preventing reprocessing
+  because scheduler didn't know where import ended
+- Need to verify fix with clean test after watermark fix deployed
+
+## Hardening Needed
+
+### H1. Per-repo status on dashboard
+- When repo filter selected, status cards should show that repo's data
+- Read from repositories.last_svn_rev, sync_status, total_syncs, total_errors
+
+### H2. Import shows progress on dashboard
+- Any active per-repo import should show on main dashboard
+- Currently only visible on individual repo detail page
+
+### H3. Robust error display
+- Long error messages truncated in audit log
+- Should be expandable
+
+### H4. Sync cycle should log to audit with repo_id
+- Current audit entries don't have repo_id set
+- Makes filtering by repo impossible for audit entries
+
+### H5. Identity mapping per-repo
+- Currently uses global identity config
+- Each repo should be able to have its own email_domain and mapping file

@@ -3,12 +3,18 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::AppState;
+
+/// Optional query parameter to scope status to a specific repository.
+#[derive(Deserialize)]
+struct RepoQuery {
+    repo_id: Option<String>,
+}
 
 /// Health check response.
 #[derive(Serialize)]
@@ -78,6 +84,7 @@ async fn health_check() -> Json<HealthResponse> {
 async fn get_status(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
+    Query(query): Query<RepoQuery>,
 ) -> Result<Json<StatusResponse>, AppError> {
     crate::api::auth::validate_session(
         &state,
@@ -85,9 +92,33 @@ async fn get_status(
     )
     .await?;
 
-    // Read status directly from the WEB DB connection, NOT via the sync
-    // engine (which has its own DB connection that may be locked by sync).
     let db = &state.db;
+
+    // When a specific repo is selected, return that repo's data instead of
+    // the global sync engine state.
+    if let Some(ref repo_id) = query.repo_id {
+        let repo = db
+            .get_repository(repo_id)
+            .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
+            .ok_or_else(|| AppError::NotFound(format!("repository {} not found", repo_id)))?;
+
+        let active_conflicts = db.count_active_conflicts_for_repo(repo_id).unwrap_or(0);
+
+        return Ok(Json(StatusResponse {
+            state: repo.sync_status,
+            last_sync_at: repo.last_sync_at,
+            last_svn_revision: if repo.last_svn_rev != 0 { Some(repo.last_svn_rev) } else { None },
+            last_git_hash: if repo.last_git_sha.is_empty() { None } else { Some(repo.last_git_sha) },
+            total_syncs: repo.total_syncs,
+            total_conflicts: 0,
+            active_conflicts,
+            total_errors: repo.total_errors,
+            last_error_at: None,
+            uptime_secs: 0,
+        }));
+    }
+
+    // Global status (no repo_id) — read from the sync engine's kv_state.
     let state_str = db.get_state("sync_state").unwrap_or(None).unwrap_or_else(|| "idle".into());
     let last_sync_str = db.get_state("last_sync_at").unwrap_or(None);
     let last_sync_at = last_sync_str.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.to_rfc3339()));

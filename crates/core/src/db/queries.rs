@@ -590,6 +590,17 @@ impl Database {
         Ok(count)
     }
 
+    /// Count active (unresolved) conflicts for a specific repository.
+    pub fn count_active_conflicts_for_repo(&self, repo_id: &str) -> Result<i64, DatabaseError> {
+        let conn = self.conn();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM conflicts WHERE status NOT IN ('resolved', 'deferred') AND repo_id = ?1",
+            params![repo_id],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
     // -- watermarks ---------------------------------------------------------
 
     /// Get the watermark value for a given source.
@@ -648,12 +659,27 @@ impl Database {
         details: Option<&str>,
         success: bool,
     ) -> Result<i64, DatabaseError> {
+        self.insert_audit_log_with_repo(action, direction, svn_rev, git_sha, author, details, success, None)
+    }
+
+    /// Insert an audit log entry tagged with an optional `repo_id`.
+    pub fn insert_audit_log_with_repo(
+        &self,
+        action: &str,
+        direction: Option<&str>,
+        svn_rev: Option<i64>,
+        git_sha: Option<&str>,
+        author: Option<&str>,
+        details: Option<&str>,
+        success: bool,
+        repo_id: Option<&str>,
+    ) -> Result<i64, DatabaseError> {
         let now = Utc::now().to_rfc3339();
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO audit_log (action, direction, svn_rev, git_sha, author, details, created_at, success)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![action, direction, svn_rev, git_sha, author, details, now, success as i32],
+            "INSERT INTO audit_log (action, direction, svn_rev, git_sha, author, details, created_at, success, repo_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![action, direction, svn_rev, git_sha, author, details, now, success as i32, repo_id],
         )?;
         let id = conn.last_insert_rowid();
         debug!(id, action, success, "inserted audit_log entry");

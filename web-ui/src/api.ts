@@ -190,7 +190,10 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  getStatus: () => fetchJson<SyncStatus>('/status'),
+  getStatus: (repoId?: string) => {
+    const params = repoId ? `?repo_id=${repoId}` : '';
+    return fetchJson<SyncStatus>(`/status${params}`);
+  },
 
   getHealth: () => fetchJson<{ ok: boolean }>('/status/health'),
 
