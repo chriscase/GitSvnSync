@@ -170,7 +170,15 @@ export default function RepoDetail() {
   });
 
   const reimportMutation = useMutation({
-    mutationFn: () => api.resetAndReimport(),
+    mutationFn: async () => {
+      const token = localStorage.getItem('session_token');
+      const res = await fetch(`/api/repos/${id}/import?reset=true`, {
+        method: 'POST',
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      });
+      if (!res.ok) throw new Error((await res.json()).message || 'Reset failed');
+      return res.json();
+    },
     onSuccess: () => {
       setShowReimportConfirm(false);
       setReimportConfirmText('');
