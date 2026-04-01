@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::config::{AppConfig, SvnLayout};
 use crate::conflict::detector::{ChangeKind, ConflictDetector, FileChange};
@@ -602,23 +602,48 @@ impl SyncEngine {
             // 2. Prepare an SVN working copy. Use a temporary checkout.
             let svn_wc_dir = tempfile::tempdir()
                 .map_err(|e| SyncError::SvnError(crate::errors::SvnError::IoError(e)))?;
+            let svn_url_for_log;
             {
                 let svn = self.svn_client.lock().unwrap().clone();
+                svn_url_for_log = svn.url().to_string();
+                debug!(
+                    sha = %change.sha,
+                    svn_url = %svn_url_for_log,
+                    wc_path = %svn_wc_dir.path().display(),
+                    "checking out SVN HEAD into temp working copy"
+                );
                 svn.checkout_head(svn_wc_dir.path())
                     .await
                     .map_err(SyncError::SvnError)?;
             }
 
             // 3. Copy changed files from Git into the SVN working copy.
+            //    If a file is marked as modified ("M") in Git but does not
+            //    exist in the SVN working copy, treat it as an add so that
+            //    `svn add` is called.  This handles the case where the SVN
+            //    repo has fewer files than Git (e.g. freshly created repo).
             let mut added_files = Vec::new();
             let mut deleted_files = Vec::new();
 
             for (action, file_path, content) in &file_contents {
                 let dst = svn_wc_dir.path().join(file_path);
+                debug!(
+                    sha = %change.sha,
+                    action = %action,
+                    file_path = %file_path,
+                    dst = %dst.display(),
+                    dst_exists = dst.exists(),
+                    "processing file change"
+                );
                 match action.as_str() {
                     "D" => {
                         if dst.exists() {
                             deleted_files.push(file_path.as_str());
+                        } else {
+                            debug!(
+                                file_path = %file_path,
+                                "skipping delete: file does not exist in SVN working copy"
+                            );
                         }
                     }
                     "A" => {
@@ -637,6 +662,7 @@ impl SyncEngine {
                     _ => {
                         // Modified: overwrite content.
                         if let Some(content) = content {
+                            let file_is_new = !dst.exists();
                             if let Some(parent) = dst.parent() {
                                 std::fs::create_dir_all(parent).map_err(|e| {
                                     SyncError::GitError(crate::errors::GitError::IoError(e))
@@ -645,6 +671,15 @@ impl SyncEngine {
                             std::fs::write(&dst, content).map_err(|e| {
                                 SyncError::GitError(crate::errors::GitError::IoError(e))
                             })?;
+                            // If the file didn't exist in the SVN working copy,
+                            // it must be `svn add`ed even though Git says "M".
+                            if file_is_new {
+                                debug!(
+                                    file_path = %file_path,
+                                    "file marked as modified in Git but missing in SVN WC; treating as add"
+                                );
+                                added_files.push(file_path.as_str());
+                            }
                         }
                     }
                 }
@@ -653,15 +688,64 @@ impl SyncEngine {
             // 4. Stage changes in SVN.
             let svn = self.svn_client.lock().unwrap().clone();
             if !added_files.is_empty() {
+                debug!(
+                    sha = %change.sha,
+                    files = ?added_files,
+                    "running svn add"
+                );
                 svn.add(svn_wc_dir.path(), &added_files)
                     .await
                     .map_err(SyncError::SvnError)?;
             }
             if !deleted_files.is_empty() {
+                debug!(
+                    sha = %change.sha,
+                    files = ?deleted_files,
+                    "running svn rm"
+                );
                 svn.rm(svn_wc_dir.path(), &deleted_files)
                     .await
                     .map_err(SyncError::SvnError)?;
             }
+
+            // 4b. Check `svn status` to verify there are actual pending changes.
+            //     If SVN sees no modifications, skip this commit gracefully
+            //     instead of failing to parse an empty commit output.
+            let svn_status = svn
+                .status(svn_wc_dir.path())
+                .await
+                .map_err(SyncError::SvnError)?;
+            let has_changes = svn_status.lines().any(|line| {
+                let trimmed = line.trim();
+                !trimmed.is_empty()
+                    && !trimmed.starts_with('?')  // unversioned
+                    && !trimmed.starts_with('X')  // externals
+            });
+            if !has_changes {
+                warn!(
+                    sha = %change.sha,
+                    svn_url = %svn_url_for_log,
+                    svn_status = %svn_status,
+                    file_count = file_contents.len(),
+                    added = added_files.len(),
+                    deleted = deleted_files.len(),
+                    "no pending SVN changes after copying files — skipping commit \
+                     (files may already be in sync or paths may be misaligned)"
+                );
+                // Still advance the Git watermark so we don't retry this
+                // commit on the next cycle.
+                let _ = self.db.set_state("last_git_hash", &change.sha);
+                if let Some(rid) = self.effective_repo_id() {
+                    let _ = self.db.update_repo_watermark(rid, 0, &change.sha);
+                }
+                continue;
+            }
+
+            debug!(
+                sha = %change.sha,
+                svn_status = %svn_status,
+                "SVN working copy has pending changes, committing"
+            );
 
             // 5. Commit to SVN.
             let commit_message = format!(
