@@ -7,7 +7,7 @@ use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use gitsvnsync_core::db::Database;
@@ -450,10 +450,17 @@ async fn trigger_sync(
 // Per-repo import
 // ---------------------------------------------------------------------------
 
+#[derive(serde::Deserialize, Default)]
+struct ImportQuery {
+    #[serde(default)]
+    reset: bool,
+}
+
 async fn start_repo_import(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
     Path(id): Path<String>,
+    axum::extract::Query(import_query): axum::extract::Query<ImportQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let (_user_id, role) = validate_session_with_role(
         &state,
@@ -520,13 +527,63 @@ async fn start_repo_import(
         }
     };
 
-    info!(repo_id = %id, svn_import_url = %svn_import_url, "starting per-repo import");
+    info!(repo_id = %id, svn_import_url = %svn_import_url, reset = import_query.reset, "starting per-repo import");
 
     let svn_client = SvnClient::new(&svn_import_url, &repo.svn_username, &svn_password);
 
     // 6. Build the git repo path: {data_dir}/repos/{repo_id}/git-repo
     let data_dir = state.config.daemon.data_dir.clone();
     let git_repo_path = data_dir.join("repos").join(&id).join("git-repo");
+
+    // If reset=true, wipe the local git repo and force-push empty to remote
+    if import_query.reset {
+        info!(repo_id = %id, "resetting: wiping local git repo and remote");
+        {
+            let mut p = progress.write().await;
+            p.push_log("[info] Reset: deleting local git repository...".into());
+        }
+        if git_repo_path.exists() {
+            std::fs::remove_dir_all(&git_repo_path)
+                .map_err(|e| AppError::Internal(format!("failed to delete git repo: {}", e)))?;
+        }
+
+        // Create fresh repo, force-push empty commit to wipe remote
+        std::fs::create_dir_all(&git_repo_path)
+            .map_err(|e| AppError::Internal(format!("mkdir failed: {}", e)))?;
+
+        let clone_url = gitsvnsync_core::git::remote_url::derive_git_remote_url(
+            &repo.git_api_url,
+            git_token.as_deref(),
+            &repo.git_repo,
+        );
+        let branch = if repo.git_branch.is_empty() { "main" } else { &repo.git_branch };
+
+        let init_cmds: Vec<Vec<&str>> = vec![
+            vec!["init", "--initial-branch", branch],
+            vec!["commit", "--allow-empty", "-m", "Reset for full SVN reimport"],
+            vec!["remote", "add", "origin", &clone_url],
+            vec!["push", "--force", "origin", branch],
+        ];
+        for args in &init_cmds {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&git_repo_path)
+                .output()
+                .map_err(|e| AppError::Internal(format!("git {:?} failed: {}", args[0], e)))?;
+            if !output.status.success() && args[0] != "push" {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                warn!(cmd = ?args[0], %stderr, "git command failed during reset");
+            }
+        }
+
+        // Reset watermark to 0
+        let _ = db.update_repo_watermark(&id, 0, "");
+        {
+            let mut p = progress.write().await;
+            p.push_log("[info] Reset: remote wiped, starting fresh import...".into());
+        }
+        info!(repo_id = %id, "reset complete, git repo and remote wiped");
+    }
 
     std::fs::create_dir_all(&git_repo_path)
         .map_err(|e| AppError::Internal(format!("failed to create repo dir: {}", e)))?;
