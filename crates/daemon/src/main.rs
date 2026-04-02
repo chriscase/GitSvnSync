@@ -168,6 +168,7 @@ async fn main() -> Result<()> {
                 auto_merge: config.sync.auto_merge,
                 enabled: true,
                 created_by: None,
+                parent_id: None,
                 created_at: now.clone(),
                 updated_at: now,
                 last_svn_rev: 0,

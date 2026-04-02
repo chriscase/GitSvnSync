@@ -287,12 +287,22 @@ impl Scheduler {
             }
 
             // Read credentials from kv_state.
+            // Chain: repo_id → parent_id → global
             let svn_password = self
                 .db
                 .get_state(&format!("secret_svn_password_{}", repo.id))
                 .ok()
                 .flatten()
                 .filter(|v| !v.is_empty())
+                .or_else(|| {
+                    repo.parent_id.as_ref().and_then(|pid| {
+                        self.db
+                            .get_state(&format!("secret_svn_password_{}", pid))
+                            .ok()
+                            .flatten()
+                            .filter(|v| !v.is_empty())
+                    })
+                })
                 .or_else(|| {
                     self.db
                         .get_state("secret_svn_password")
@@ -307,6 +317,15 @@ impl Scheduler {
                 .ok()
                 .flatten()
                 .filter(|v| !v.is_empty())
+                .or_else(|| {
+                    repo.parent_id.as_ref().and_then(|pid| {
+                        self.db
+                            .get_state(&format!("secret_git_token_{}", pid))
+                            .ok()
+                            .flatten()
+                            .filter(|v| !v.is_empty())
+                    })
+                })
                 .or_else(|| {
                     self.db
                         .get_state("secret_git_token")

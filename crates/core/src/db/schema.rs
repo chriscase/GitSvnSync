@@ -248,6 +248,13 @@ static MIGRATIONS: &[(u32, &str, &str)] = &[
         ALTER TABLE repositories ADD COLUMN total_errors INTEGER NOT NULL DEFAULT 0;
         "#,
     ),
+    (
+        8,
+        "add parent_id for branch sync",
+        r#"
+        ALTER TABLE repositories ADD COLUMN parent_id TEXT;
+        "#,
+    ),
 ];
 
 /// Run all pending migrations against `conn`.
@@ -296,7 +303,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap();
-        assert_eq!(get_schema_version(&conn).unwrap(), 7);
+        assert_eq!(get_schema_version(&conn).unwrap(), 8);
     }
 
     #[test]

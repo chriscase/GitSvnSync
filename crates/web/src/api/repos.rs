@@ -187,6 +187,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/repos/:id/import/status", get(repo_import_status))
         .route("/api/repos/:id/credentials", get(get_credentials))
         .route("/api/repos/:id/credentials", post(save_credentials))
+        .route("/api/repos/:id/branches", post(create_branch_pair))
+        .route("/api/repos/:id/branches", get(list_branch_pairs))
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +271,7 @@ async fn create_repo(
         auto_merge: body.auto_merge,
         enabled: body.enabled,
         created_by: Some(user_id),
+        parent_id: None,
         created_at: now.clone(),
         updated_at: now,
         last_svn_rev: 0,
@@ -348,6 +351,7 @@ async fn update_repo(
         auto_merge: body.auto_merge.unwrap_or(existing.auto_merge),
         enabled: body.enabled.unwrap_or(existing.enabled),
         created_by: existing.created_by,
+        parent_id: existing.parent_id,
         created_at: existing.created_at,
         updated_at: now,
         last_svn_rev: existing.last_svn_rev,
@@ -897,4 +901,173 @@ async fn save_credentials(
     }
 
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------------------
+// Branch pair endpoints
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct CreateBranchPairRequest {
+    svn_branch: String,
+    git_branch: String,
+    #[serde(default)]
+    skip_import: bool,
+}
+
+async fn create_branch_pair(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<CreateBranchPairRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (_user_id, role) = validate_session_with_role(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
+
+    if role != "admin" {
+        return Err(AppError::Unauthorized("admin access required".into()));
+    }
+
+    let db = &state.db;
+
+    // Load parent repo
+    let parent = db
+        .get_repository(&id)
+        .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
+        .ok_or_else(|| AppError::NotFound(format!("repository {} not found", id)))?;
+
+    // Reject nesting: parent must not itself be a child
+    if parent.parent_id.is_some() {
+        return Err(AppError::BadRequest(
+            "cannot create branch pair on a child repository (no nesting)".into(),
+        ));
+    }
+
+    if body.svn_branch.is_empty() {
+        return Err(AppError::BadRequest("svn_branch is required".into()));
+    }
+    if body.git_branch.is_empty() {
+        return Err(AppError::BadRequest("git_branch is required".into()));
+    }
+
+    let new_id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    let name = format!("{} / {}", parent.name, body.git_branch);
+
+    let child = gitsvnsync_core::models::Repository {
+        id: new_id.clone(),
+        name,
+        svn_url: parent.svn_url.clone(),
+        svn_branch: body.svn_branch.clone(),
+        svn_username: parent.svn_username.clone(),
+        git_provider: parent.git_provider.clone(),
+        git_api_url: parent.git_api_url.clone(),
+        git_repo: parent.git_repo.clone(),
+        git_branch: body.git_branch.clone(),
+        sync_mode: parent.sync_mode.clone(),
+        poll_interval_secs: parent.poll_interval_secs,
+        lfs_threshold_mb: parent.lfs_threshold_mb,
+        auto_merge: parent.auto_merge,
+        enabled: true,
+        created_by: parent.created_by.clone(),
+        parent_id: Some(parent.id.clone()),
+        created_at: now.clone(),
+        updated_at: now,
+        last_svn_rev: 0,
+        last_git_sha: String::new(),
+        last_sync_at: None,
+        sync_status: "idle".to_string(),
+        total_syncs: 0,
+        total_errors: 0,
+    };
+
+    db.insert_repository(&child)
+        .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
+
+    // skip_import: set watermark to latest SVN rev so we start from now
+    if body.skip_import {
+        let svn_url = format!(
+            "{}/{}",
+            parent.svn_url.trim_end_matches('/'),
+            body.svn_branch.trim_start_matches('/')
+        );
+
+        // Read parent credentials
+        let svn_password = db
+            .get_state(&format!("secret_svn_password_{}", parent.id))
+            .ok()
+            .flatten()
+            .filter(|v| !v.is_empty())
+            .or_else(|| {
+                db.get_state("secret_svn_password")
+                    .ok()
+                    .flatten()
+                    .filter(|v| !v.is_empty())
+            });
+
+        let svn_client = SvnClient::new(
+            &svn_url,
+            &parent.svn_username,
+            svn_password.as_deref().unwrap_or(""),
+        );
+
+        match svn_client.info().await {
+            Ok(svn_info) => {
+                let latest_rev = svn_info.latest_rev;
+                if let Err(e) = db.update_repo_watermark(&new_id, latest_rev, "") {
+                    warn!(repo_id = %new_id, error = %e, "failed to set watermark for branch pair");
+                } else {
+                    info!(
+                        repo_id = %new_id,
+                        latest_rev,
+                        "Branch pair created in 'start from now' mode, watermark set to r{}",
+                        latest_rev
+                    );
+                }
+            }
+            Err(e) => {
+                warn!(
+                    repo_id = %new_id,
+                    error = %e,
+                    "could not query SVN info for skip_import; watermark not set"
+                );
+            }
+        }
+    }
+
+    // Return the newly created repo
+    let created = db
+        .get_repository(&new_id)
+        .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
+        .ok_or_else(|| AppError::Internal("failed to read back created branch pair".into()))?;
+
+    Ok(Json(serde_json::to_value(created).unwrap()))
+}
+
+async fn list_branch_pairs(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    validate_session(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    )
+    .await?;
+
+    let db = &state.db;
+
+    let children = db
+        .list_child_repositories(&id)
+        .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
+
+    let result: Vec<serde_json::Value> = children
+        .into_iter()
+        .map(|r| serde_json::to_value(r).unwrap())
+        .collect();
+
+    Ok(Json(result))
 }

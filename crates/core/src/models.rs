@@ -360,6 +360,8 @@ pub struct Repository {
     pub auto_merge: bool,
     pub enabled: bool,
     pub created_by: Option<String>,
+    #[serde(default)]
+    pub parent_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     #[serde(default)]

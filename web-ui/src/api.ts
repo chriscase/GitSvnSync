@@ -310,6 +310,12 @@ export const api = {
     fetchJson<Repository>(`/repos/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteRepo: (id: string) =>
     fetchJson<void>(`/repos/${id}`, { method: 'DELETE' }),
+  createBranchPair: (repoId: string, data: { svn_branch: string; git_branch: string; skip_import: boolean }) =>
+    fetchJson<Repository>(`/repos/${repoId}/branches`, { method: 'POST', body: JSON.stringify(data) }),
+
+  listBranchPairs: (repoId: string) =>
+    fetchJson<Repository[]>(`/repos/${repoId}/branches`),
+
   triggerRepoSync: (id: string) =>
     fetchJson<{ ok: boolean }>(`/repos/${id}/sync`, { method: 'POST' }),
   getRepoCredentials: (id: string) =>
@@ -471,6 +477,7 @@ export interface WizardSetupConfig {
 export interface Repository {
   id: string;
   name: string;
+  parent_id: string | null;
   svn_url: string;
   svn_branch: string;
   svn_username: string;
