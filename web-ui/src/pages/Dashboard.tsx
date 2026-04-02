@@ -119,8 +119,14 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Import Progress — only show when a specific repo is selected */}
-      {activeRepoId && <ImportProgressCard repoId={activeRepoId} repoName={selectedRepo?.name} />}
+      {/* Import Progress — show per-repo when filtered, or scan all repos for active/recent imports */}
+      {activeRepoId ? (
+        <ImportProgressCard repoId={activeRepoId} repoName={selectedRepo?.name} />
+      ) : (
+        repos && repos.filter((r: Repository) => !r.parent_id).map((r: Repository) => (
+          <ImportProgressCard key={r.id} repoId={r.id} repoName={r.name} hideIfIdle />
+        ))
+      )}
 
       {/* Repositories Overview */}
       {repos && repos.length > 0 && (() => {

@@ -92,7 +92,7 @@ function PhaseDots({ phase }: { phase: string }) {
 // Component (self-fetching)
 // ---------------------------------------------------------------------------
 
-export default function ImportProgressCard({ repoId, repoName }: { repoId?: string; repoName?: string } = {}) {
+export default function ImportProgressCard({ repoId, repoName, hideIfIdle = false }: { repoId?: string; repoName?: string; hideIfIdle?: boolean } = {}) {
   const { data: status } = useQuery<ImportStatus>({
     queryKey: ['import-status', repoId || 'global'],
     queryFn: async () => {
@@ -119,9 +119,10 @@ export default function ImportProgressCard({ repoId, repoName }: { repoId?: stri
     );
   }
 
-  // Never ran an import
+  // Never ran an import — hide entirely if hideIfIdle
   const neverRan = status.phase === 'idle' && !status.started_at;
   if (neverRan) {
+    if (hideIfIdle) return null;
     return (
       <div className="bg-gray-800 border border-gray-700 rounded-xl p-5 shadow-lg">
         <div className="flex items-center justify-between">
@@ -141,6 +142,13 @@ export default function ImportProgressCard({ repoId, repoName }: { repoId?: stri
         </div>
       </div>
     );
+  }
+
+  // Completed and old — hide if requested (> 1 hour ago)
+  if (status.phase === 'completed' && hideIfIdle && status.completed_at) {
+    const completedMs = new Date(status.completed_at).getTime();
+    const hourAgo = Date.now() - 60 * 60 * 1000;
+    if (completedMs < hourAgo) return null;
   }
 
   // Completed state — show success summary
