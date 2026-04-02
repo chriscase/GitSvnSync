@@ -43,7 +43,7 @@ export default function Dashboard() {
     queryFn: api.getRepos,
   });
 
-  const repoName = repos && repos.length === 1 ? repos[0].name : (repos && repos.length > 1 ? 'All' : 'Default');
+  const repoName = repos && repos.length === 1 ? repos[0].name : 'Unknown';
 
   const repoNameMap = useMemo(() => {
     const m = new Map<string, string>();
