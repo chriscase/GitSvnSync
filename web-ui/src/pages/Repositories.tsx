@@ -290,11 +290,11 @@ export default function Repositories() {
             const activeConflicts = status?.active_conflicts ?? 0;
 
             return (
-              <div key={repo.id} className="group/card">
+              <div key={repo.id} className="group/card bg-gray-800/60 border border-gray-700 rounded-lg overflow-hidden hover:border-blue-500/50 transition-colors">
                 {/* Parent Repo Card */}
                 <button
                   onClick={() => navigate(`/repos/${repo.id}`)}
-                  className="w-full bg-gray-800/60 border border-gray-700 rounded-lg p-5 text-left hover:border-blue-500/50 transition-colors"
+                  className="w-full p-5 text-left"
                 >
                   <div className="flex items-start gap-4">
                     {/* Sync Icon */}
@@ -363,26 +363,28 @@ export default function Repositories() {
                   </div>
                 </button>
 
-                {/* Branch Pairs (children) */}
+                {/* Branch Pairs inside parent card */}
                 {children.length > 0 && (
-                  <div className="ml-7 mt-0.5 border-l-2 border-gray-700 pl-4 space-y-0.5">
+                  <div className="border-t border-gray-700/50 bg-gray-900/30 px-5 py-2 space-y-0.5">
+                    <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-gray-500 mb-1 pl-1">
+                      <GitBranch className="w-3 h-3" />
+                      <span>Branch Pairs</span>
+                    </div>
                     {children.map((child) => (
                       <button
                         key={child.id}
                         onClick={() => navigate(`/repos/${child.id}`)}
-                        className="w-full flex items-center gap-3 px-3 py-2 rounded-md bg-gray-800/40 hover:bg-gray-700/50 transition-colors text-left group/branch"
+                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-700/40 transition-colors text-left group/branch"
                       >
-                        <GitBranch className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
-                        <span className="text-sm font-medium text-gray-300 group-hover/branch:text-purple-300 transition-colors truncate">
-                          {child.name}
+                        <GitBranch className="w-3 h-3 text-purple-400 flex-shrink-0" />
+                        <span className="text-xs font-medium text-gray-300 group-hover/branch:text-purple-300 transition-colors truncate">
+                          {child.name.split(' / ').pop()}
                         </span>
-                        <span className="flex items-center gap-1.5 text-xs text-gray-500 flex-shrink-0">
-                          <span className="text-blue-400/70">{child.svn_branch}</span>
-                          <ArrowRight className="w-3 h-3 text-gray-600" />
-                          <span className="text-purple-400/70">{child.git_branch}</span>
-                        </span>
-                        <span className="ml-auto flex items-center gap-2 flex-shrink-0">
-                          <span className="text-xs text-gray-600">{formatTimeAgo(child.updated_at)}</span>
+                        <span className="text-[10px] text-blue-400/60">{child.svn_branch}</span>
+                        <ArrowRight className="w-2.5 h-2.5 text-gray-600 flex-shrink-0" />
+                        <span className="text-[10px] text-purple-400/60">{child.git_branch}</span>
+                        <span className="ml-auto flex items-center gap-1.5 flex-shrink-0">
+                          <span className="text-[10px] text-gray-600">{formatTimeAgo(child.updated_at)}</span>
                           <StatusDot state={undefined} enabled={child.enabled} />
                         </span>
                       </button>

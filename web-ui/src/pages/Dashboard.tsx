@@ -139,15 +139,16 @@ export default function Dashboard() {
               </button>
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3">
-            {parents.map((repo: Repository) => (
-              <div key={repo.id}>
+            {parents.map((repo: Repository) => {
+              const children = childMap.get(repo.id) || [];
+              return (
+              <div key={repo.id} className="bg-gray-800/60 border border-gray-700 rounded-lg overflow-hidden hover:border-blue-500/50 transition-colors">
                 <button
                   onClick={() => navigate(`/repos/${repo.id}`)}
-                  className="w-full bg-gray-800/60 border border-gray-700 rounded-lg p-4 text-left hover:border-blue-500/50 transition-colors"
+                  className="w-full p-4 text-left"
                 >
                   <div className="flex items-start gap-3">
-                    {/* Sync arrows icon */}
-                    <svg className="w-8 h-8 flex-shrink-0 mt-0.5" viewBox="0 0 32 32" fill="none">
+                    <svg className="w-7 h-7 flex-shrink-0 mt-0.5" viewBox="0 0 32 32" fill="none">
                       <path d="M8 14 A8 8 0 0 1 24 14" stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round" fill="none" />
                       <path d="M22 10 L24 14 L20 14" fill="#3b82f6" />
                       <path d="M24 18 A8 8 0 0 1 8 18" stroke="#a855f7" strokeWidth="2.5" strokeLinecap="round" fill="none" />
@@ -155,7 +156,7 @@ export default function Dashboard() {
                     </svg>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
-                        <span className="font-semibold text-gray-100 truncate">{repo.name}</span>
+                        <span className="font-semibold text-sm text-gray-100 truncate">{repo.name}</span>
                         <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${repo.enabled ? 'bg-green-900/60 text-green-300' : 'bg-gray-700 text-gray-400'}`}>
                           {repo.enabled ? 'Enabled' : 'Disabled'}
                         </span>
@@ -169,44 +170,48 @@ export default function Dashboard() {
                         <span className="truncate">{repo.git_repo}</span>
                       </div>
                       <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
-                        <span className="relative flex items-center gap-1">
-                          {repo.enabled ? (
-                            <span className="relative w-2 h-2">
-                              <span className="absolute inset-0 rounded-full bg-green-400 animate-ping opacity-40" />
-                              <span className="relative block w-2 h-2 rounded-full bg-green-400" />
-                            </span>
-                          ) : (
-                            <span className="w-2 h-2 rounded-full bg-gray-500" />
-                          )}
-                          <span className="text-green-300">Active</span>
-                        </span>
-                        <span>Updated {formatTimeAgo(repo.updated_at)}</span>
+                        {repo.enabled ? (
+                          <span className="flex items-center gap-1">
+                            <span className="relative w-2 h-2"><span className="absolute inset-0 rounded-full bg-green-400 animate-ping opacity-40" /><span className="relative block w-2 h-2 rounded-full bg-green-400" /></span>
+                            <span className="text-green-300">Active</span>
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-500" /><span>Disabled</span></span>
+                        )}
+                        <span>{formatTimeAgo(repo.updated_at)}</span>
                       </div>
                     </div>
                   </div>
                 </button>
-                {/* Branch pairs nested under parent */}
-                {childMap.get(repo.id)?.map((child: Repository) => (
-                  <button
-                    key={child.id}
-                    onClick={() => navigate(`/repos/${child.id}`)}
-                    className="w-full flex items-center gap-2 ml-6 pl-4 py-2 border-l-2 border-gray-700 text-left hover:bg-gray-800/40 transition-colors text-xs"
-                  >
-                    <GitBranch className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
-                    <span className="text-gray-300 font-medium truncate">{child.name.split(' / ').pop()}</span>
-                    <span className="text-blue-400 truncate">{child.svn_branch}</span>
-                    <ArrowRight className="w-3 h-3 text-gray-600 flex-shrink-0" />
-                    <span className="text-purple-400 truncate">{child.git_branch}</span>
-                    <span className="ml-auto text-gray-600 flex-shrink-0">{formatTimeAgo(child.updated_at)}</span>
-                    {child.enabled ? (
-                      <span className="w-2 h-2 rounded-full bg-green-400 flex-shrink-0" />
-                    ) : (
-                      <span className="w-2 h-2 rounded-full bg-gray-500 flex-shrink-0" />
-                    )}
-                  </button>
-                ))}
+                {/* Branch pairs inside card */}
+                {children.length > 0 && (
+                  <div className="border-t border-gray-700/50 bg-gray-900/30 px-4 py-2 space-y-0.5">
+                    <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-gray-500 mb-1">
+                      <GitBranch className="w-2.5 h-2.5" />
+                      <span>Branches</span>
+                    </div>
+                    {children.map((child: Repository) => (
+                      <button
+                        key={child.id}
+                        onClick={() => navigate(`/repos/${child.id}`)}
+                        className="w-full flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-700/40 transition-colors text-left"
+                      >
+                        <GitBranch className="w-3 h-3 text-purple-400 flex-shrink-0" />
+                        <span className="text-xs font-medium text-gray-300 truncate">{child.name.split(' / ').pop()}</span>
+                        <span className="text-[10px] text-blue-400/60">{child.svn_branch}</span>
+                        <ArrowRight className="w-2.5 h-2.5 text-gray-600 flex-shrink-0" />
+                        <span className="text-[10px] text-purple-400/60">{child.git_branch}</span>
+                        <span className="ml-auto flex items-center gap-1.5 flex-shrink-0">
+                          <span className="text-[10px] text-gray-600">{formatTimeAgo(child.updated_at)}</span>
+                          {child.enabled ? <span className="w-1.5 h-1.5 rounded-full bg-green-400" /> : <span className="w-1.5 h-1.5 rounded-full bg-gray-500" />}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-            ))}
+              );
+            })}
             </div>
           </div>
         );
