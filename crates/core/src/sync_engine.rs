@@ -737,6 +737,7 @@ impl SyncEngine {
                 // commit on the next cycle.
                 let _ = self.db.set_state("last_git_hash", &change.sha);
                 if let Some(rid) = self.effective_repo_id() {
+                    let _ = self.db.set_state(&format!("last_git_sha_{}", rid), &change.sha);
                     let _ = self.db.update_repo_watermark(rid, 0, &change.sha);
                 }
                 continue;
@@ -779,6 +780,7 @@ impl SyncEngine {
             // Update the Git watermark (dual-write: kv_state + repo table).
             let _ = self.db.set_state("last_git_hash", &change.sha);
             if let Some(rid) = self.effective_repo_id() {
+                let _ = self.db.set_state(&format!("last_git_sha_{}", rid), &change.sha);
                 let _ = self.db.update_repo_watermark(rid, svn_rev, &change.sha);
                 let _ = self.db.increment_repo_sync_count(rid);
             }
@@ -945,19 +947,32 @@ impl SyncEngine {
         git.pull("origin", branch, token)
             .map_err(SyncError::GitError)?;
 
-        // Check the state table first (written by sync_git_to_svn), then fall
-        // back to commit_map / sync_records for databases created by older
-        // versions.
-        let last_hash = match self
-            .db
-            .get_state("last_git_hash")
-            .map_err(SyncError::DatabaseError)?
-        {
-            Some(s) if !s.is_empty() => Some(s),
-            _ => self
-                .db
-                .get_last_git_hash()
-                .map_err(SyncError::DatabaseError)?,
+        // Check per-repo key first, then global key, then commit_map fallback.
+        let per_repo_key = self.effective_repo_id()
+            .map(|rid| format!("last_git_sha_{}", rid));
+        let repo_table_sha = self.effective_repo_id()
+            .and_then(|rid| self.db.get_repo_watermark(rid).ok())
+            .map(|(_, sha)| sha)
+            .filter(|s| !s.is_empty());
+
+        let last_hash = if let Some(sha) = repo_table_sha {
+            // Best source: repositories table (set by sync engine + import)
+            Some(sha)
+        } else if let Some(ref key) = per_repo_key {
+            // Per-repo kv_state key
+            match self.db.get_state(key).map_err(SyncError::DatabaseError)? {
+                Some(s) if !s.is_empty() => Some(s),
+                _ => match self.db.get_state("last_git_hash").map_err(SyncError::DatabaseError)? {
+                    Some(s) if !s.is_empty() => Some(s),
+                    _ => self.db.get_last_git_hash().map_err(SyncError::DatabaseError)?,
+                },
+            }
+        } else {
+            // Global fallback
+            match self.db.get_state("last_git_hash").map_err(SyncError::DatabaseError)? {
+                Some(s) if !s.is_empty() => Some(s),
+                _ => self.db.get_last_git_hash().map_err(SyncError::DatabaseError)?,
+            }
         };
 
         info!(since_sha = ?last_hash, "fetching Git changes");
