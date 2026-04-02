@@ -916,10 +916,11 @@ impl Database {
     pub fn insert_sync_record(&self, record: &models::SyncRecord) -> Result<(), DatabaseError> {
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO sync_records (id, svn_rev, git_sha, direction, author, message, timestamp, synced_at, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO sync_records (id, repo_id, svn_rev, git_sha, direction, author, message, timestamp, synced_at, status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 record.id,
+                record.repo_id,
                 record.svn_revision,
                 record.git_hash,
                 record.direction.to_string(),

@@ -107,6 +107,7 @@ impl Conflict {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncRecord {
     pub id: String,
+    pub repo_id: Option<String>,
     pub svn_revision: Option<i64>,
     pub git_hash: Option<String>,
     pub direction: SyncDirection,

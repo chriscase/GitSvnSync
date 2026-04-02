@@ -496,6 +496,7 @@ impl SyncEngine {
             // 5. Record the sync only after successful write.
             let record = crate::models::SyncRecord {
                 id: uuid::Uuid::new_v4().to_string(),
+                repo_id: self.effective_repo_id().map(|s| s.to_string()),
                 svn_revision: Some(change.revision),
                 git_hash: Some(git_sha.clone()),
                 direction: crate::models::SyncDirection::SvnToGit,
@@ -767,6 +768,7 @@ impl SyncEngine {
             // 6. Record the sync only after successful write.
             let record = crate::models::SyncRecord {
                 id: uuid::Uuid::new_v4().to_string(),
+                repo_id: self.effective_repo_id().map(|s| s.to_string()),
                 svn_revision: Some(svn_rev),
                 git_hash: Some(change.sha.clone()),
                 direction: crate::models::SyncDirection::GitToSvn,
