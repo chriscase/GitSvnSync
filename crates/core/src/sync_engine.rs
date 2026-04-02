@@ -738,7 +738,10 @@ impl SyncEngine {
                 let _ = self.db.set_state("last_git_hash", &change.sha);
                 if let Some(rid) = self.effective_repo_id() {
                     let _ = self.db.set_state(&format!("last_git_sha_{}", rid), &change.sha);
-                    let _ = self.db.update_repo_watermark(rid, 0, &change.sha);
+                    // Preserve existing SVN watermark — only update git_sha
+                    let current_svn_rev = self.db.get_repo_watermark(rid)
+                        .map(|(rev, _)| rev).unwrap_or(0);
+                    let _ = self.db.update_repo_watermark(rid, current_svn_rev, &change.sha);
                 }
                 continue;
             }
