@@ -45,6 +45,7 @@ pub struct CommitMapEntryView {
     pub synced_at: String,
     pub svn_author: String,
     pub git_author: String,
+    pub repo_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -64,6 +65,7 @@ pub struct SyncRecordView {
     pub timestamp: String,
     pub synced_at: String,
     pub status: String,
+    pub repo_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -105,7 +107,7 @@ async fn list_commit_map(
     let views: Vec<CommitMapEntryView> = if let Some(ref rid) = query.repo_id {
         let conn = db.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, svn_rev, git_sha, direction, synced_at, svn_author, git_author
+            "SELECT id, svn_rev, git_sha, direction, synced_at, svn_author, git_author, repo_id
              FROM commit_map WHERE repo_id = ?1 ORDER BY id DESC LIMIT ?2",
         ).map_err(|e| AppError::Internal(format!("prepare: {}", e)))?;
         let rows: Vec<CommitMapEntryView> = stmt.query_map(rusqlite::params![rid, limit], |row| {
@@ -113,6 +115,7 @@ async fn list_commit_map(
                 id: row.get(0)?, svn_rev: row.get(1)?, git_sha: row.get(2)?,
                 direction: row.get(3)?, synced_at: row.get(4)?,
                 svn_author: row.get(5)?, git_author: row.get(6)?,
+                repo_id: row.get(7)?,
             })
         }).map_err(|e| AppError::Internal(format!("query: {}", e)))?
         .collect::<Result<Vec<_>, _>>()
@@ -125,6 +128,7 @@ async fn list_commit_map(
             id: e.id, svn_rev: e.svn_rev, git_sha: e.git_sha,
             direction: e.direction, synced_at: e.synced_at,
             svn_author: e.svn_author, git_author: e.git_author,
+            repo_id: e.repo_id,
         }).collect()
     };
 
@@ -153,13 +157,13 @@ async fn list_sync_records(
     let conn = db.conn();
     let (sql, params_list): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(ref rid) = query.repo_id {
         (
-            "SELECT id, svn_rev, git_sha, direction, author, message, timestamp, synced_at, status
+            "SELECT id, svn_rev, git_sha, direction, author, message, timestamp, synced_at, status, repo_id
              FROM sync_records WHERE repo_id = ?1 ORDER BY synced_at DESC LIMIT ?2".to_string(),
             vec![Box::new(rid.clone()), Box::new(limit)],
         )
     } else {
         (
-            "SELECT id, svn_rev, git_sha, direction, author, message, timestamp, synced_at, status
+            "SELECT id, svn_rev, git_sha, direction, author, message, timestamp, synced_at, status, repo_id
              FROM sync_records ORDER BY synced_at DESC LIMIT ?1".to_string(),
             vec![Box::new(limit)],
         )
@@ -180,6 +184,7 @@ async fn list_sync_records(
                 timestamp: row.get(6)?,
                 synced_at: row.get(7)?,
                 status: row.get(8)?,
+                repo_id: row.get(9)?,
             })
         })
         .map_err(|e| AppError::Internal(format!("query error: {}", e)))?

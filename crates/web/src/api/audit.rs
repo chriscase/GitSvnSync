@@ -37,6 +37,7 @@ struct AuditEntryView {
     svn_rev: Option<i64>,
     git_sha: Option<String>,
     success: bool,
+    repo_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -82,7 +83,7 @@ async fn list_audit(
         // SQL-level filter for specific repo
         let conn = db.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, action, direction, svn_rev, git_sha, author, details, created_at, success
+            "SELECT id, action, direction, svn_rev, git_sha, author, details, created_at, success, repo_id
              FROM audit_log WHERE repo_id = ?1 ORDER BY id DESC LIMIT ?2 OFFSET ?3"
         ).map_err(|e| AppError::Internal(format!("prepare: {}", e)))?;
         let rows = stmt.query_map(rusqlite::params![rid, limit, offset], |row| {
@@ -96,6 +97,7 @@ async fn list_audit(
                 details: row.get(6)?,
                 created_at: row.get(7)?,
                 success: row.get(8)?,
+                repo_id: row.get(9)?,
             })
         }).map_err(|e| AppError::Internal(format!("query: {}", e)))?;
         rows.filter_map(|r| r.ok()).collect::<Vec<_>>()
@@ -108,6 +110,7 @@ async fn list_audit(
             id: e.id, created_at: e.created_at, action: e.action,
             details: e.details, author: e.author, direction: e.direction,
             svn_rev: e.svn_rev, git_sha: e.git_sha, success: e.success,
+            repo_id: e.repo_id,
         }).collect()
     };
     let views = entries;

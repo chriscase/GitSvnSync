@@ -23,6 +23,7 @@ pub struct CommitMapEntry {
     pub synced_at: String,
     pub svn_author: String,
     pub git_author: String,
+    pub repo_id: Option<String>,
 }
 
 /// A row from the `sync_state` table.
@@ -73,6 +74,7 @@ pub struct AuditLogEntry {
     pub details: Option<String>,
     pub created_at: String,
     pub success: bool,
+    pub repo_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -131,7 +133,7 @@ impl Database {
     pub fn list_commit_map(&self, limit: u32) -> Result<Vec<CommitMapEntry>, DatabaseError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, svn_rev, git_sha, direction, synced_at, svn_author, git_author
+            "SELECT id, svn_rev, git_sha, direction, synced_at, svn_author, git_author, repo_id
              FROM commit_map ORDER BY id DESC LIMIT ?1",
         )?;
         let entries = stmt
@@ -144,6 +146,7 @@ impl Database {
                     synced_at: row.get(4)?,
                     svn_author: row.get(5)?,
                     git_author: row.get(6)?,
+                    repo_id: row.get(7)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -719,7 +722,7 @@ impl Database {
     pub fn list_audit_log(&self, limit: u32, offset: u32) -> Result<Vec<AuditLogEntry>, DatabaseError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, action, direction, svn_rev, git_sha, author, details, created_at, success
+            "SELECT id, action, direction, svn_rev, git_sha, author, details, created_at, success, repo_id
              FROM audit_log ORDER BY id DESC LIMIT ?1 OFFSET ?2",
         )?;
         let entries = stmt
@@ -735,6 +738,7 @@ impl Database {
                     details: row.get(6)?,
                     created_at: row.get(7)?,
                     success: success_int != 0,
+                    repo_id: row.get(9)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -827,7 +831,7 @@ impl Database {
     ) -> Result<Vec<AuditLogEntry>, DatabaseError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, action, direction, svn_rev, git_sha, author, details, created_at, success
+            "SELECT id, action, direction, svn_rev, git_sha, author, details, created_at, success, repo_id
              FROM audit_log WHERE action = ?1 ORDER BY id DESC LIMIT ?2",
         )?;
         let entries = stmt
@@ -843,6 +847,7 @@ impl Database {
                     details: row.get(6)?,
                     created_at: row.get(7)?,
                     success: success_int != 0,
+                    repo_id: row.get(9)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

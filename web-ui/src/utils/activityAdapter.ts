@@ -60,8 +60,8 @@ export function syncRecordToActivityEvent(
 ): ActivityEvent {
   const type = `sync_${record.direction}`;
   const truncatedMsg =
-    record.message.length > 80
-      ? record.message.slice(0, 77) + '...'
+    record.message.length > 200
+      ? record.message.slice(0, 197) + '...'
       : record.message;
 
   return {

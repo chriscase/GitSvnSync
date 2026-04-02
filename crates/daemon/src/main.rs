@@ -179,11 +179,51 @@ async fn main() -> Result<()> {
                 total_errors: 0,
             };
             match db.insert_repository(&default_repo) {
-                Ok(()) => info!(
-                    "Auto-migrated existing config to repository: {}",
-                    default_repo.name
-                ),
+                Ok(()) => {
+                    info!(
+                        "Auto-migrated existing config to repository: {}",
+                        default_repo.name
+                    );
+                    // Migrate global credentials to per-repo keys
+                    if let Ok(Some(pw)) = db.get_state("secret_svn_password") {
+                        if !pw.is_empty() {
+                            let _ = db.set_state(&format!("secret_svn_password_{}", default_repo.id), &pw);
+                            info!("Migrated global SVN password to per-repo key for {}", default_repo.name);
+                        }
+                    }
+                    if let Ok(Some(tok)) = db.get_state("secret_git_token") {
+                        if !tok.is_empty() {
+                            let _ = db.set_state(&format!("secret_git_token_{}", default_repo.id), &tok);
+                            info!("Migrated global Git token to per-repo key for {}", default_repo.name);
+                        }
+                    }
+                }
                 Err(e) => warn!("Failed to auto-migrate config to repository: {}", e),
+            }
+        }
+    }
+
+    // Ensure all repos have per-repo credential keys (migrate from global if missing)
+    {
+        let repos = db.list_repositories().unwrap_or_default();
+        for repo in &repos {
+            let svn_key = format!("secret_svn_password_{}", repo.id);
+            if db.get_state(&svn_key).ok().flatten().filter(|v| !v.is_empty()).is_none() {
+                if let Ok(Some(pw)) = db.get_state("secret_svn_password") {
+                    if !pw.is_empty() {
+                        let _ = db.set_state(&svn_key, &pw);
+                        info!(repo_name = %repo.name, "migrated global SVN password to per-repo key");
+                    }
+                }
+            }
+            let git_key = format!("secret_git_token_{}", repo.id);
+            if db.get_state(&git_key).ok().flatten().filter(|v| !v.is_empty()).is_none() {
+                if let Ok(Some(tok)) = db.get_state("secret_git_token") {
+                    if !tok.is_empty() {
+                        let _ = db.set_state(&git_key, &tok);
+                        info!(repo_name = %repo.name, "migrated global Git token to per-repo key");
+                    }
+                }
             }
         }
     }

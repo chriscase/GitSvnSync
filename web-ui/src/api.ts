@@ -31,6 +31,7 @@ export interface Conflict {
 
 export interface AuditEntry {
   id: number;
+  repo_id?: string;
   action: string;
   direction: string | null;
   svn_rev: number | null;
@@ -55,6 +56,7 @@ export interface AuthorMapping {
 
 export interface CommitMapEntry {
   id: number;
+  repo_id?: string;
   svn_rev: number;
   git_sha: string;
   direction: string;
@@ -70,6 +72,7 @@ export interface CommitMapResponse {
 
 export interface SyncRecord {
   id: string;
+  repo_id?: string;
   svn_rev: number | null;
   git_sha: string | null;
   direction: string;

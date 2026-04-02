@@ -126,7 +126,7 @@ export function renderSyncRecordEvent(event: ActivityEvent): React.ReactNode {
         <span className={`text-xs font-bold ${statusColor}`}>{statusSymbol}</span>
         {repoName && repoName !== 'default' && <RepoBadge name={repoName} />}
         {direction && <DirectionBadge direction={direction} />}
-        <span className="text-sm text-gray-200 truncate">{event.title}</span>
+        <span className="text-sm text-gray-200 line-clamp-2">{event.title}</span>
       </div>
       <div className="flex items-center gap-3 flex-shrink-0">
         {author && <span className="text-sm text-gray-400">{author}</span>}

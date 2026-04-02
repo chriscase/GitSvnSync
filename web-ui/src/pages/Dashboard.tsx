@@ -45,15 +45,21 @@ export default function Dashboard() {
 
   const repoName = repos && repos.length === 1 ? repos[0].name : (repos && repos.length > 1 ? 'All' : 'Default');
 
+  const repoNameMap = useMemo(() => {
+    const m = new Map<string, string>();
+    if (repos) repos.forEach(r => m.set(r.id, r.name));
+    return m;
+  }, [repos]);
+
   // Convert audit entries and sync records to UIForge ActivityEvent format
   // (must be called before any early returns to satisfy rules-of-hooks)
   const activityEvents = useMemo(
-    () => (recentActivity?.entries ?? []).map(e => auditEntryToActivityEvent(e, repoName)),
-    [recentActivity, repoName],
+    () => (recentActivity?.entries ?? []).map(e => auditEntryToActivityEvent(e, e.repo_id ? repoNameMap.get(e.repo_id) || 'Unknown' : repoName)),
+    [recentActivity, repoName, repoNameMap],
   );
   const syncRecordEvents = useMemo(
-    () => (syncRecords?.entries ?? []).map(r => syncRecordToActivityEvent(r, repoName)),
-    [syncRecords, repoName],
+    () => (syncRecords?.entries ?? []).map(r => syncRecordToActivityEvent(r, r.repo_id ? repoNameMap.get(r.repo_id) || 'Unknown' : repoName)),
+    [syncRecords, repoName, repoNameMap],
   );
 
   if (statusLoading) {
@@ -276,7 +282,8 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* Sync Position */}
+      {/* Sync Position — only meaningful for a single repo */}
+      {activeRepoId && (
       <div className="bg-gray-800 shadow rounded-lg p-6 border border-gray-700">
         <h2 className="text-lg font-semibold text-gray-100 mb-4">
           Sync Position
@@ -317,6 +324,7 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+      )}
 
       {/* Sync Records */}
       <div className="bg-gray-800 shadow rounded-lg border border-gray-700">
@@ -384,7 +392,7 @@ export default function Dashboard() {
                 {cmEntries.map((cm: CommitMapEntry) => (
                   <tr key={cm.id} className="hover:bg-gray-700/50">
                     <td className="px-6 py-3">
-                      <RepoBadge name={repoName} />
+                      <RepoBadge name={cm.repo_id ? repoNameMap.get(cm.repo_id) || 'Unknown' : repoName} />
                     </td>
                     <td className="px-6 py-3 text-sm font-mono text-blue-400">r{cm.svn_rev}</td>
                     <td className="px-6 py-3 text-sm font-mono text-purple-400 truncate max-w-[200px]">
