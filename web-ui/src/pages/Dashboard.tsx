@@ -5,6 +5,7 @@ import { UIForgeActivityStream } from '@appforgeapps/uiforge';
 import { api, type CommitMapEntry, type Repository } from '../api';
 import ImportProgressCard from '../components/ImportProgressCard';
 import ServerMonitor from '../components/ServerMonitor';
+import { Database, GitBranch, ArrowRight } from 'lucide-react';
 import { RepoBadge, DirectionBadge } from '../components/Badges';
 import { renderAuditEvent, renderAuditIcon, renderSyncRecordEvent, renderSyncRecordIcon } from '../components/ActivityEventRenderers';
 import { auditEntryToActivityEvent, syncRecordToActivityEvent } from '../utils/activityAdapter';
@@ -116,42 +117,98 @@ export default function Dashboard() {
       <ImportProgressCard repoId={activeRepoId} />
 
       {/* Repositories Overview */}
-      {repos && repos.length > 0 && (
-        <div className="bg-gray-800/60 border border-gray-700 rounded-lg p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-gray-100">Repositories</h2>
-            <button
-              onClick={() => navigate('/repos')}
-              className="text-sm text-blue-400 hover:text-blue-300 transition-colors"
-            >
-              Manage Repositories &rarr;
-            </button>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-            {repos.map((repo: Repository) => (
+      {repos && repos.length > 0 && (() => {
+        const parents = repos.filter((r: Repository) => !r.parent_id);
+        const childMap = new Map<string, Repository[]>();
+        for (const r of repos) {
+          if (r.parent_id) {
+            const list = childMap.get(r.parent_id) || [];
+            list.push(r);
+            childMap.set(r.parent_id, list);
+          }
+        }
+        return (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-100">Repositories</h2>
               <button
-                key={repo.id}
-                onClick={() => navigate(`/repos/${repo.id}`)}
-                className="bg-gray-900/60 border border-gray-700 rounded-lg p-3 text-left hover:border-blue-500/50 transition-colors"
+                onClick={() => navigate('/repos')}
+                className="text-sm text-blue-400 hover:text-blue-300 transition-colors"
               >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-semibold text-gray-200 truncate">{repo.name}</span>
-                  <span
-                    className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ml-2 ${
-                      repo.enabled ? 'bg-green-400' : 'bg-gray-500'
-                    }`}
-                    title={repo.enabled ? 'Enabled' : 'Disabled'}
-                  />
-                </div>
-                <p className="text-xs text-gray-500 truncate">{repo.git_repo}</p>
-                <p className="text-xs text-gray-600 mt-1">
-                  Updated {formatTimeAgo(repo.updated_at)}
-                </p>
+                Manage Repositories &rarr;
               </button>
+            </div>
+            {parents.map((repo: Repository) => (
+              <div key={repo.id}>
+                <button
+                  onClick={() => navigate(`/repos/${repo.id}`)}
+                  className="w-full bg-gray-800/60 border border-gray-700 rounded-lg p-4 text-left hover:border-blue-500/50 transition-colors"
+                >
+                  <div className="flex items-start gap-3">
+                    {/* Sync arrows icon */}
+                    <svg className="w-8 h-8 flex-shrink-0 mt-0.5" viewBox="0 0 32 32" fill="none">
+                      <path d="M8 14 A8 8 0 0 1 24 14" stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round" fill="none" />
+                      <path d="M22 10 L24 14 L20 14" fill="#3b82f6" />
+                      <path d="M24 18 A8 8 0 0 1 8 18" stroke="#a855f7" strokeWidth="2.5" strokeLinecap="round" fill="none" />
+                      <path d="M10 22 L8 18 L12 18" fill="#a855f7" />
+                    </svg>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-semibold text-gray-100 truncate">{repo.name}</span>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${repo.enabled ? 'bg-green-900/60 text-green-300' : 'bg-gray-700 text-gray-400'}`}>
+                          {repo.enabled ? 'Enabled' : 'Disabled'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1 text-xs text-gray-400 mb-0.5">
+                        <Database className="w-3 h-3 text-blue-400" />
+                        <span className="truncate">{repo.svn_url}</span>
+                      </div>
+                      <div className="flex items-center gap-1 text-xs text-gray-400">
+                        <GitBranch className="w-3 h-3 text-purple-400" />
+                        <span className="truncate">{repo.git_repo}</span>
+                      </div>
+                      <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
+                        <span className="relative flex items-center gap-1">
+                          {repo.enabled ? (
+                            <span className="relative w-2 h-2">
+                              <span className="absolute inset-0 rounded-full bg-green-400 animate-ping opacity-40" />
+                              <span className="relative block w-2 h-2 rounded-full bg-green-400" />
+                            </span>
+                          ) : (
+                            <span className="w-2 h-2 rounded-full bg-gray-500" />
+                          )}
+                          <span className="text-green-300">Active</span>
+                        </span>
+                        <span>Updated {formatTimeAgo(repo.updated_at)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </button>
+                {/* Branch pairs nested under parent */}
+                {childMap.get(repo.id)?.map((child: Repository) => (
+                  <button
+                    key={child.id}
+                    onClick={() => navigate(`/repos/${child.id}`)}
+                    className="w-full flex items-center gap-2 ml-6 pl-4 py-2 border-l-2 border-gray-700 text-left hover:bg-gray-800/40 transition-colors text-xs"
+                  >
+                    <GitBranch className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
+                    <span className="text-gray-300 font-medium truncate">{child.name.split(' / ').pop()}</span>
+                    <span className="text-blue-400 truncate">{child.svn_branch}</span>
+                    <ArrowRight className="w-3 h-3 text-gray-600 flex-shrink-0" />
+                    <span className="text-purple-400 truncate">{child.git_branch}</span>
+                    <span className="ml-auto text-gray-600 flex-shrink-0">{formatTimeAgo(child.updated_at)}</span>
+                    {child.enabled ? (
+                      <span className="w-2 h-2 rounded-full bg-green-400 flex-shrink-0" />
+                    ) : (
+                      <span className="w-2 h-2 rounded-full bg-gray-500 flex-shrink-0" />
+                    )}
+                  </button>
+                ))}
+              </div>
             ))}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Status Cards */}
       <div className="mb-1">
