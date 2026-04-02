@@ -281,7 +281,7 @@ export default function Repositories() {
           )}
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
           {parents.map((repo: Repository) => {
             const children = childrenByParent.get(repo.id) ?? [];
             const status = statusMap.get(repo.id);

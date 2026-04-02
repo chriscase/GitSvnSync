@@ -138,6 +138,7 @@ export default function Dashboard() {
                 Manage Repositories &rarr;
               </button>
             </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3">
             {parents.map((repo: Repository) => (
               <div key={repo.id}>
                 <button
@@ -206,6 +207,7 @@ export default function Dashboard() {
                 ))}
               </div>
             ))}
+            </div>
           </div>
         );
       })()}
