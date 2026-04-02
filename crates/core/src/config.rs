@@ -323,6 +323,10 @@ pub struct WebConfig {
     /// Resolved OAuth client secret.
     #[serde(skip)]
     pub oauth_client_secret: Option<String>,
+
+    /// Allowed CORS origins. If empty, derives from the listen address.
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
 }
 
 fn default_listen() -> String {
@@ -340,6 +344,7 @@ impl Default for WebConfig {
             oauth_allowed_users: Vec::new(),
             admin_password: None,
             oauth_client_secret: None,
+            cors_origins: Vec::new(),
         }
     }
 }

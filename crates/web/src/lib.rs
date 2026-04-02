@@ -105,6 +105,11 @@ impl WebServer {
         Self { state }
     }
 
+    /// Get a clone of the shared application state.
+    pub fn app_state(&self) -> Arc<AppState> {
+        self.state.clone()
+    }
+
     /// Get a clone of the broadcast sender for pushing events.
     pub fn broadcast_sender(&self) -> broadcast::Sender<String> {
         self.state.ws_broadcast.clone()
@@ -114,12 +119,27 @@ impl WebServer {
     pub async fn start(self, listen_addr: &str) -> anyhow::Result<()> {
         let addr: SocketAddr = listen_addr.parse()?;
 
-        // CORS: allow the bundled web-ui (same origin) and localhost dev.
-        // In production, restrict to the actual frontend origin.
-        let cors = CorsLayer::new()
-            .allow_origin(tower_http::cors::Any)
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-            .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
+        // CORS: use configured origins, or derive from the listen address.
+        let cors = {
+            let origins = &self.state.config.web.cors_origins;
+            let allow_origin = if origins.is_empty() {
+                // Derive from listen address for dev convenience
+                let origin = format!("http://{}", addr);
+                tower_http::cors::AllowOrigin::exact(origin.parse().unwrap_or_else(|_| {
+                    "http://localhost:3000".parse().unwrap()
+                }))
+            } else {
+                let parsed: Vec<axum::http::HeaderValue> = origins
+                    .iter()
+                    .filter_map(|o| o.parse().ok())
+                    .collect();
+                tower_http::cors::AllowOrigin::list(parsed)
+            };
+            CorsLayer::new()
+                .allow_origin(allow_origin)
+                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+                .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+        };
 
         // Serve the React SPA from the "static" directory next to the binary.
         // All unknown routes fall back to index.html for client-side routing.

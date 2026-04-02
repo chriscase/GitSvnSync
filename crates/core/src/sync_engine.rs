@@ -947,10 +947,14 @@ impl SyncEngine {
     async fn fetch_git_changes(&self) -> Result<Vec<GitChangeSet>, SyncError> {
         let git = self.git_client.lock().unwrap_or_else(|p| p.into_inner());
 
+        // Wrap the blocking git pull in block_in_place to avoid starving
+        // the Tokio runtime while holding the lock for network I/O.
         let token = self.config.github.token.as_deref();
         let branch = &self.config.github.default_branch;
-        git.pull("origin", branch, token)
-            .map_err(SyncError::GitError)?;
+        tokio::task::block_in_place(|| {
+            git.pull("origin", branch, token)
+                .map_err(SyncError::GitError)
+        })?;
 
         // Check per-repo key first, then global key, then commit_map fallback.
         let per_repo_key = self.effective_repo_id()

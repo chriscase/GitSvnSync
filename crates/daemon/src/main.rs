@@ -470,6 +470,7 @@ async fn main() -> Result<()> {
     );
     let ws_broadcast = web_server.broadcast_sender();
     let listen_addr = config.web.listen.clone();
+    let app_state_for_cleanup = web_server.app_state();
 
     // Start web server — runs on the main tokio runtime directly
     // (not spawned) to ensure it gets immediate access to worker threads.
@@ -478,6 +479,24 @@ async fn main() -> Result<()> {
             error!("Web server error: {}", e);
         }
     });
+
+    // Spawn background session cleanup task (every 5 minutes)
+    {
+        let app_state = app_state_for_cleanup;
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                let now = chrono::Utc::now();
+                let mut sessions = app_state.sessions.write().await;
+                let before = sessions.len();
+                sessions.retain(|_, expires_at| *expires_at > now);
+                let pruned = before - sessions.len();
+                if pruned > 0 {
+                    tracing::debug!(pruned, "pruned expired in-memory sessions");
+                }
+            }
+        });
+    }
 
     // Create a shutdown notify for cooperative cancellation
     let shutdown = Arc::new(tokio::sync::Notify::new());
