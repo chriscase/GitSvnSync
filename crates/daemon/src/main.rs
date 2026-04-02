@@ -203,26 +203,52 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Ensure all repos have per-repo credential keys (migrate from global if missing)
+    // Ensure repos have per-repo credential keys.
+    // For child repos (branch pairs): inherit from PARENT, not global.
+    // For parent repos without credentials: only migrate from global
+    //   if this is the ONLY parent repo (avoids cross-contamination).
     {
         let repos = db.list_repositories().unwrap_or_default();
+        let parent_count = repos.iter().filter(|r| r.parent_id.is_none()).count();
+
         for repo in &repos {
             let svn_key = format!("secret_svn_password_{}", repo.id);
             if db.get_state(&svn_key).ok().flatten().filter(|v| !v.is_empty()).is_none() {
-                if let Ok(Some(pw)) = db.get_state("secret_svn_password") {
-                    if !pw.is_empty() {
-                        let _ = db.set_state(&svn_key, &pw);
-                        info!(repo_name = %repo.name, "migrated global SVN password to per-repo key");
+                // Try parent's credentials first (for branch pairs)
+                let source_pw = repo.parent_id.as_ref().and_then(|pid| {
+                    db.get_state(&format!("secret_svn_password_{}", pid))
+                        .ok().flatten().filter(|v| !v.is_empty())
+                });
+                // Only fall back to global if this is the sole parent repo
+                let source_pw = source_pw.or_else(|| {
+                    if repo.parent_id.is_none() && parent_count == 1 {
+                        db.get_state("secret_svn_password").ok().flatten().filter(|v| !v.is_empty())
+                    } else {
+                        None
                     }
+                });
+                if let Some(pw) = source_pw {
+                    let _ = db.set_state(&svn_key, &pw);
+                    info!(repo_name = %repo.name, "migrated SVN password to per-repo key");
                 }
             }
+
             let git_key = format!("secret_git_token_{}", repo.id);
             if db.get_state(&git_key).ok().flatten().filter(|v| !v.is_empty()).is_none() {
-                if let Ok(Some(tok)) = db.get_state("secret_git_token") {
-                    if !tok.is_empty() {
-                        let _ = db.set_state(&git_key, &tok);
-                        info!(repo_name = %repo.name, "migrated global Git token to per-repo key");
+                let source_tok = repo.parent_id.as_ref().and_then(|pid| {
+                    db.get_state(&format!("secret_git_token_{}", pid))
+                        .ok().flatten().filter(|v| !v.is_empty())
+                });
+                let source_tok = source_tok.or_else(|| {
+                    if repo.parent_id.is_none() && parent_count == 1 {
+                        db.get_state("secret_git_token").ok().flatten().filter(|v| !v.is_empty())
+                    } else {
+                        None
                     }
+                });
+                if let Some(tok) = source_tok {
+                    let _ = db.set_state(&git_key, &tok);
+                    info!(repo_name = %repo.name, "migrated Git token to per-repo key");
                 }
             }
         }
