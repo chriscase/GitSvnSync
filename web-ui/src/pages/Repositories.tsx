@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { api, type Repository, type User } from '../api';
-import { GitBranch, Plus, Database, Clock, X } from 'lucide-react';
+import { api, type Repository, type SyncStatus, type User } from '../api';
+import { GitBranch, Plus, Database, Clock, X, ArrowRight, AlertTriangle, RefreshCw } from 'lucide-react';
 
 function getStoredUser(): User | null {
   try {
@@ -13,14 +13,59 @@ function getStoredUser(): User | null {
   }
 }
 
-function formatTimeAgo(isoDate: string): string {
+function formatTimeAgo(isoDate: string | null | undefined): string {
+  if (!isoDate) return 'never';
   const diff = Math.max(0, Math.floor((Date.now() - new Date(isoDate).getTime()) / 1000));
+  if (diff < 10) return 'just now';
   if (diff < 60) return `${diff}s ago`;
   const mins = Math.floor(diff / 60);
   if (mins < 60) return `${mins}m ago`;
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ${mins % 60}m ago`;
   return `${Math.floor(hrs / 24)}d ago`;
+}
+
+/** Custom SVG icon: two circular sync arrows, one blue (SVN) and one purple (Git) */
+function SyncArrowsIcon({ className = 'w-8 h-8' }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      {/* Blue (SVN) arrow - top arc going right */}
+      <path
+        d="M8 14 A8 8 0 0 1 24 14"
+        stroke="#3b82f6"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        fill="none"
+      />
+      <path d="M22 10 L24 14 L20 14" fill="#3b82f6" />
+      {/* Purple (Git) arrow - bottom arc going left */}
+      <path
+        d="M24 18 A8 8 0 0 1 8 18"
+        stroke="#a855f7"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        fill="none"
+      />
+      <path d="M10 22 L8 18 L12 18" fill="#a855f7" />
+    </svg>
+  );
+}
+
+/** Status dot with optional pulsing animation for active state */
+function StatusDot({ state, enabled }: { state?: string; enabled: boolean }) {
+  if (!enabled) {
+    return <span className="w-2.5 h-2.5 rounded-full bg-gray-500 flex-shrink-0" />;
+  }
+  if (state === 'error' || state === 'failed') {
+    return <span className="w-2.5 h-2.5 rounded-full bg-red-400 flex-shrink-0" />;
+  }
+  // Active / idle / syncing - green with pulse
+  return (
+    <span className="relative flex-shrink-0 w-2.5 h-2.5">
+      <span className="absolute inset-0 rounded-full bg-green-400 animate-ping opacity-40" />
+      <span className="relative block w-2.5 h-2.5 rounded-full bg-green-400" />
+    </span>
+  );
 }
 
 const inputClass =
@@ -82,6 +127,33 @@ export default function Repositories() {
     queryKey: ['repos'],
     queryFn: api.getRepos,
   });
+
+  // Fetch per-repo statuses for all parent repos
+  const repoList = repos ?? [];
+  const parents = repoList.filter((r) => !r.parent_id);
+  const parentIds = parents.map((r) => r.id);
+
+  const statusQueries = useQuery({
+    queryKey: ['repo-statuses', parentIds],
+    queryFn: async () => {
+      const results = new Map<string, SyncStatus>();
+      await Promise.all(
+        parentIds.map(async (id) => {
+          try {
+            const s = await api.getStatus(id);
+            results.set(id, s);
+          } catch {
+            // ignore - status may not be available
+          }
+        }),
+      );
+      return results;
+    },
+    enabled: parentIds.length > 0,
+    refetchInterval: 15000,
+  });
+
+  const statusMap = statusQueries.data ?? new Map<string, SyncStatus>();
 
   const createMutation = useMutation({
     mutationFn: async (data: AddRepoForm) => {
@@ -159,10 +231,6 @@ export default function Repositories() {
     );
   }
 
-  const repoList = repos ?? [];
-
-  // Separate parents (no parent_id) from children
-  const parents = repoList.filter((r) => !r.parent_id);
   const childrenByParent = new Map<string, Repository[]>();
   for (const repo of repoList) {
     if (repo.parent_id) {
@@ -193,76 +261,130 @@ export default function Repositories() {
         )}
       </div>
 
-      {/* Repo Grid */}
+      {/* Repository List */}
       {parents.length === 0 ? (
-        <div className="bg-gray-800/60 border border-gray-700 rounded-lg p-12 text-center">
-          <Database className="w-12 h-12 text-gray-600 mx-auto mb-4" />
-          <p className="text-gray-400 text-lg">No repositories configured.</p>
-          <p className="text-gray-500 text-sm mt-1">
-            Click &quot;Add Repository&quot; to get started.
+        /* Empty State */
+        <div className="bg-gray-800/60 border border-gray-700 rounded-lg py-20 px-8 text-center flex flex-col items-center">
+          <SyncArrowsIcon className="w-16 h-16 mb-6 opacity-60" />
+          <p className="text-gray-300 text-xl font-semibold">No repositories configured</p>
+          <p className="text-gray-500 text-sm mt-2 mb-6">
+            Add your first SVN &#x2194; Git sync
           </p>
+          {isAdmin && (
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Add Repository
+            </button>
+          )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="space-y-4">
           {parents.map((repo: Repository) => {
             const children = childrenByParent.get(repo.id) ?? [];
+            const status = statusMap.get(repo.id);
+            const lastSync = status?.last_sync_at ?? repo.updated_at;
+            const totalSyncs = status?.total_syncs ?? 0;
+            const activeConflicts = status?.active_conflicts ?? 0;
+
             return (
-              <div key={repo.id}>
+              <div key={repo.id} className="group/card">
+                {/* Parent Repo Card */}
                 <button
                   onClick={() => navigate(`/repos/${repo.id}`)}
-                  className="w-full bg-gray-800/60 border border-gray-700 rounded-lg p-5 text-left hover:border-blue-500/50 transition-colors group"
+                  className="w-full bg-gray-800/60 border border-gray-700 rounded-lg p-5 text-left hover:border-blue-500/50 transition-colors"
                 >
-                  <div className="flex items-start justify-between mb-3">
-                    <h3 className="text-lg font-semibold text-gray-100 group-hover:text-blue-400 transition-colors truncate">
-                      {repo.name}
-                    </h3>
-                    <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium flex-shrink-0 ml-2 ${
-                        repo.enabled
-                          ? 'bg-green-900/50 text-green-300'
-                          : 'bg-gray-700 text-gray-400'
-                      }`}
-                    >
-                      {repo.enabled ? 'Enabled' : 'Disabled'}
-                    </span>
-                  </div>
+                  <div className="flex items-start gap-4">
+                    {/* Sync Icon */}
+                    <div className="flex-shrink-0 mt-0.5">
+                      <SyncArrowsIcon className="w-9 h-9" />
+                    </div>
 
-                  <div className="space-y-2 text-sm">
-                    <div className="flex items-center gap-2 text-gray-400">
-                      <Database className="w-3.5 h-3.5 flex-shrink-0" />
-                      <span className="truncate">{repo.svn_url}</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-gray-400">
-                      <GitBranch className="w-3.5 h-3.5 flex-shrink-0" />
-                      <span className="truncate">{repo.git_repo}</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-gray-500 text-xs">
-                      <Clock className="w-3.5 h-3.5 flex-shrink-0" />
-                      <span>Updated {formatTimeAgo(repo.updated_at)}</span>
+                    {/* Main Content */}
+                    <div className="flex-1 min-w-0">
+                      {/* Name + Badge row */}
+                      <div className="flex items-center gap-3 mb-2.5">
+                        <h3 className="text-lg font-semibold text-gray-100 truncate group-hover/card:text-blue-400 transition-colors">
+                          {repo.name}
+                        </h3>
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium flex-shrink-0 ${
+                            repo.enabled
+                              ? 'bg-green-900/50 text-green-300'
+                              : 'bg-gray-700 text-gray-400'
+                          }`}
+                        >
+                          {repo.enabled ? 'Enabled' : 'Disabled'}
+                        </span>
+                      </div>
+
+                      {/* SVN URL + Git repo */}
+                      <div className="space-y-1.5 mb-3">
+                        <div className="flex items-center gap-2 text-sm text-gray-400">
+                          <Database className="w-3.5 h-3.5 flex-shrink-0 text-blue-400" />
+                          <span className="truncate">{repo.svn_url}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-sm text-gray-400">
+                          <GitBranch className="w-3.5 h-3.5 flex-shrink-0 text-purple-400" />
+                          <span className="truncate">{repo.git_repo}</span>
+                        </div>
+                      </div>
+
+                      {/* Stats Row */}
+                      <div className="flex items-center gap-5 text-xs text-gray-500">
+                        <div className="flex items-center gap-1.5">
+                          <StatusDot state={status?.state} enabled={repo.enabled} />
+                          <span className="text-gray-400">
+                            {status?.state === 'error' || status?.state === 'failed'
+                              ? 'Error'
+                              : repo.enabled
+                                ? 'Active'
+                                : 'Disabled'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <Clock className="w-3 h-3" />
+                          <span>{formatTimeAgo(lastSync)}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <RefreshCw className="w-3 h-3" />
+                          <span>{totalSyncs} syncs</span>
+                        </div>
+                        {activeConflicts > 0 && (
+                          <div className="flex items-center gap-1.5 text-red-400">
+                            <AlertTriangle className="w-3 h-3" />
+                            <span>{activeConflicts} conflict{activeConflicts !== 1 ? 's' : ''}</span>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </button>
 
-                {/* Child branch repos */}
+                {/* Branch Pairs (children) */}
                 {children.length > 0 && (
-                  <div className="ml-4 mt-1 border-l-2 border-gray-700 pl-3 space-y-1">
+                  <div className="ml-7 mt-0.5 border-l-2 border-gray-700 pl-4 space-y-0.5">
                     {children.map((child) => (
                       <button
                         key={child.id}
                         onClick={() => navigate(`/repos/${child.id}`)}
-                        className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-gray-800/40 hover:bg-gray-700/50 transition-colors text-left"
+                        className="w-full flex items-center gap-3 px-3 py-2 rounded-md bg-gray-800/40 hover:bg-gray-700/50 transition-colors text-left group/branch"
                       >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <GitBranch className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
-                          <span className="text-sm text-gray-300 truncate">{child.svn_branch}</span>
-                          <span className="text-gray-600 text-xs">/</span>
-                          <span className="text-sm text-gray-400 truncate">{child.git_branch}</span>
-                        </div>
-                        <span
-                          className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                            child.enabled ? 'bg-green-400' : 'bg-red-400'
-                          }`}
-                        />
+                        <GitBranch className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
+                        <span className="text-sm font-medium text-gray-300 group-hover/branch:text-purple-300 transition-colors truncate">
+                          {child.name}
+                        </span>
+                        <span className="flex items-center gap-1.5 text-xs text-gray-500 flex-shrink-0">
+                          <span className="text-blue-400/70">{child.svn_branch}</span>
+                          <ArrowRight className="w-3 h-3 text-gray-600" />
+                          <span className="text-purple-400/70">{child.git_branch}</span>
+                        </span>
+                        <span className="ml-auto flex items-center gap-2 flex-shrink-0">
+                          <span className="text-xs text-gray-600">{formatTimeAgo(child.updated_at)}</span>
+                          <StatusDot state={undefined} enabled={child.enabled} />
+                        </span>
                       </button>
                     ))}
                   </div>

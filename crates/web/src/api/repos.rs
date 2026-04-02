@@ -94,6 +94,7 @@ struct UpdateRepoRequest {
 struct RepoSummary {
     id: String,
     name: String,
+    parent_id: Option<String>,
     svn_url: String,
     svn_branch: String,
     git_provider: String,
@@ -111,6 +112,7 @@ struct RepoSummary {
 struct RepoDetail {
     id: String,
     name: String,
+    parent_id: Option<String>,
     svn_url: String,
     svn_branch: String,
     svn_username: String,
@@ -135,6 +137,7 @@ impl From<gitsvnsync_core::models::Repository> for RepoDetail {
         Self {
             id: r.id,
             name: r.name,
+            parent_id: r.parent_id,
             svn_url: r.svn_url,
             svn_branch: r.svn_branch,
             svn_username: r.svn_username,
@@ -216,6 +219,7 @@ async fn list_repos(
         .map(|r| RepoSummary {
             id: r.id,
             name: r.name,
+            parent_id: r.parent_id,
             svn_url: r.svn_url,
             svn_branch: r.svn_branch,
             git_provider: r.git_provider,
