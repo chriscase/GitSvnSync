@@ -256,15 +256,16 @@ export default function RepoDetail() {
   }
 
   async function handleTestSvn() {
-    if (!form) return;
     setSvnTesting(true);
     setSvnTestResult(null);
     try {
-      const result = await api.testSvnConnection({
-        url: form.svn_url,
-        username: form.svn_username,
-        password: form.svn_password || undefined,
+      // Use per-repo test endpoint that reads stored credentials from DB
+      const token = localStorage.getItem('session_token');
+      const res = await fetch(`/api/repos/${id}/test-svn`, {
+        method: 'POST',
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
+      const result = await res.json();
       setSvnTestResult(result);
     } catch (e: any) {
       setSvnTestResult({ ok: false, message: e.message });
@@ -274,16 +275,16 @@ export default function RepoDetail() {
   }
 
   async function handleTestGit() {
-    if (!form) return;
     setGitTesting(true);
     setGitTestResult(null);
     try {
-      const result = await api.testGitConnection({
-        api_url: form.git_api_url,
-        repo: form.git_repo,
-        provider: form.git_provider,
-        token: form.git_token || undefined,
+      // Use per-repo test endpoint that reads stored credentials from DB
+      const token = localStorage.getItem('session_token');
+      const res = await fetch(`/api/repos/${id}/test-git`, {
+        method: 'POST',
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
+      const result = await res.json();
       setGitTestResult(result);
     } catch (e: any) {
       setGitTestResult({ ok: false, message: e.message });

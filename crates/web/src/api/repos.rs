@@ -192,6 +192,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/repos/:id/credentials", post(save_credentials))
         .route("/api/repos/:id/branches", post(create_branch_pair))
         .route("/api/repos/:id/branches", get(list_branch_pairs))
+        .route("/api/repos/:id/test-svn", post(test_repo_svn))
+        .route("/api/repos/:id/test-git", post(test_repo_git))
 }
 
 // ---------------------------------------------------------------------------
@@ -1074,4 +1076,112 @@ async fn list_branch_pairs(
         .collect();
 
     Ok(Json(result))
+}
+
+/// Test SVN connection using stored credentials for a specific repo.
+async fn test_repo_svn(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    validate_session(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    ).await?;
+
+    let db = &state.db;
+    let repo = db.get_repository(&id)
+        .map_err(|e| AppError::Internal(format!("db error: {}", e)))?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+    // Read stored SVN password: per-repo → parent → global
+    let password = db.get_state(&format!("secret_svn_password_{}", id))
+        .ok().flatten().filter(|v| !v.is_empty())
+        .or_else(|| repo.parent_id.as_ref().and_then(|pid|
+            db.get_state(&format!("secret_svn_password_{}", pid)).ok().flatten().filter(|v| !v.is_empty())
+        ))
+        .or_else(|| db.get_state("secret_svn_password").ok().flatten().filter(|v| !v.is_empty()))
+        .unwrap_or_default();
+
+    let svn_url = if repo.svn_branch.is_empty() {
+        repo.svn_url.clone()
+    } else {
+        format!("{}/{}", repo.svn_url.trim_end_matches('/'), repo.svn_branch.trim_start_matches('/'))
+    };
+
+    let result = tokio::process::Command::new("svn")
+        .args(["info", "--non-interactive", "--username", &repo.svn_username, "--password", &password, &svn_url])
+        .output()
+        .await;
+
+    match result {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let info = stdout.lines()
+                .find(|l| l.starts_with("Repository Root:") || l.starts_with("URL:"))
+                .unwrap_or("SVN server responded successfully");
+            Ok(Json(serde_json::json!({"ok": true, "message": info.trim()})))
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let msg = stderr.lines().find(|l| l.contains("E1") || l.contains("Unable") || l.contains("Authentication"))
+                .unwrap_or("SVN command failed");
+            Ok(Json(serde_json::json!({"ok": false, "message": msg.trim()})))
+        }
+        Err(e) => Ok(Json(serde_json::json!({"ok": false, "message": format!("Failed to run svn: {}", e)}))),
+    }
+}
+
+/// Test Git connection using stored credentials for a specific repo.
+async fn test_repo_git(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    validate_session(
+        &state,
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+    ).await?;
+
+    let db = &state.db;
+    let repo = db.get_repository(&id)
+        .map_err(|e| AppError::Internal(format!("db error: {}", e)))?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+    // Read stored Git token: per-repo → parent → global
+    let token = db.get_state(&format!("secret_git_token_{}", id))
+        .ok().flatten().filter(|v| !v.is_empty())
+        .or_else(|| repo.parent_id.as_ref().and_then(|pid|
+            db.get_state(&format!("secret_git_token_{}", pid)).ok().flatten().filter(|v| !v.is_empty())
+        ))
+        .or_else(|| db.get_state("secret_git_token").ok().flatten().filter(|v| !v.is_empty()));
+
+    let check_url = format!("{}/repos/{}", repo.git_api_url.trim_end_matches('/'), repo.git_repo);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| AppError::Internal(format!("http client error: {}", e)))?;
+
+    let mut req = client.get(&check_url);
+    if let Some(ref tok) = token {
+        req = req.header("Authorization", format!("token {}", tok));
+    }
+
+    match req.send().await {
+        Ok(resp) if resp.status().is_success() => {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                let name = json.get("full_name").or_else(|| json.get("name"))
+                    .and_then(|v| v.as_str()).unwrap_or(&repo.git_repo);
+                Ok(Json(serde_json::json!({"ok": true, "message": format!("Repository found: {}", name)})))
+            } else {
+                Ok(Json(serde_json::json!({"ok": true, "message": "Repository is accessible"})))
+            }
+        }
+        Ok(resp) => {
+            let status = resp.status();
+            Ok(Json(serde_json::json!({"ok": false, "message": format!("HTTP {} — check credentials and URL", status)})))
+        }
+        Err(e) => Ok(Json(serde_json::json!({"ok": false, "message": format!("Connection failed: {}", e)}))),
+    }
 }
