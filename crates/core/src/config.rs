@@ -561,57 +561,78 @@ impl AppConfig {
     /// `None` after [`resolve_env_vars`](Self::resolve_env_vars).  Env-var
     /// values therefore always take priority (they are set first).
     pub fn resolve_secrets_from_db(&mut self, db: &Database) {
+        // Helper: try encrypted_secrets first, fall back to legacy kv_state plaintext
+        let decrypt_secret = |db: &Database, key: &str, legacy_key: &str| -> Option<String> {
+            // Try encrypted secrets table first
+            if let Ok(Some((ct, nonce))) = db.get_encrypted_secret(key) {
+                if let Ok(enc_key) = crate::crypto::get_or_create_encryption_key(db) {
+                    if let Ok(plaintext) = crate::crypto::decrypt_credential(&ct, &nonce, &enc_key) {
+                        return Some(plaintext);
+                    }
+                }
+            }
+            // Fall back to legacy plaintext in kv_state
+            if let Ok(Some(val)) = db.get_state(legacy_key) {
+                if !val.is_empty() {
+                    // Auto-migrate: encrypt and store in encrypted_secrets
+                    if let Ok(enc_key) = crate::crypto::get_or_create_encryption_key(db) {
+                        if let Ok((ct, nonce)) = crate::crypto::encrypt_credential(&val, &enc_key) {
+                            let _ = db.store_encrypted_secret(key, &ct, &nonce);
+                            let _ = db.set_state(legacy_key, "");
+                            info!("Migrated {} from plaintext to encrypted storage", key);
+                        }
+                    }
+                    return Some(val);
+                }
+            }
+            None
+        };
+
         // SVN password
         if self.svn.password.is_some() {
             debug!("SVN password already set from env var, skipping DB lookup");
+        } else if let Some(val) = decrypt_secret(db, "svn_password", "secret_svn_password") {
+            self.svn.password = Some(val);
+            info!("Loaded SVN password from database (encrypted)");
         } else {
-            match db.get_state("secret_svn_password") {
-                Ok(Some(val)) if !val.is_empty() => {
-                    self.svn.password = Some(val);
-                    info!("Loaded SVN password from database");
-                }
-                Ok(_) => {
-                    debug!("No SVN password found in database");
-                }
-                Err(e) => {
-                    warn!("Failed to read SVN password from database: {}", e);
-                }
-            }
+            debug!("No SVN password found in database");
         }
 
         // Git token
         if self.github.token.is_some() {
             debug!("Git token already set from env var, skipping DB lookup");
+        } else if let Some(val) = decrypt_secret(db, "git_token", "secret_git_token") {
+            self.github.token = Some(val);
+            info!("Loaded Git token from database (encrypted)");
         } else {
-            match db.get_state("secret_git_token") {
-                Ok(Some(val)) if !val.is_empty() => {
-                    self.github.token = Some(val);
-                    info!("Loaded Git token from database");
-                }
-                Ok(_) => {
-                    debug!("No Git token found in database");
-                }
-                Err(e) => {
-                    warn!("Failed to read Git token from database: {}", e);
-                }
-            }
+            debug!("No Git token found in database");
         }
 
-        // Admin password
+        // Admin password (stored as bcrypt hash, not encrypted)
         if self.web.admin_password.is_some() {
             debug!("Admin password already set from env var, skipping DB lookup");
         } else {
-            match db.get_state("secret_admin_password") {
+            // Try bcrypt hash first, then legacy plaintext
+            match db.get_state("secret_admin_password_hash") {
                 Ok(Some(val)) if !val.is_empty() => {
                     self.web.admin_password = Some(val);
-                    info!("Loaded admin password from database");
+                    info!("Loaded admin password hash from database");
                 }
-                Ok(_) => {
-                    debug!("No admin password found in database");
-                }
-                Err(e) => {
-                    warn!("Failed to read admin password from database: {}", e);
-                }
+                _ => match db.get_state("secret_admin_password") {
+                    Ok(Some(val)) if !val.is_empty() => {
+                        // Auto-migrate plaintext to bcrypt hash
+                        if let Ok(hash) = crate::crypto::hash_password(&val) {
+                            let _ = db.set_state("secret_admin_password_hash", &hash);
+                            let _ = db.set_state("secret_admin_password", "");
+                            self.web.admin_password = Some(hash);
+                            info!("Migrated admin password from plaintext to bcrypt hash");
+                        } else {
+                            self.web.admin_password = Some(val);
+                        }
+                    }
+                    Ok(_) => debug!("No admin password found in database"),
+                    Err(e) => warn!("Failed to read admin password from database: {}", e),
+                },
             }
         }
     }

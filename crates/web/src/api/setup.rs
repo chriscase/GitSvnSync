@@ -11,7 +11,7 @@ use axum::extract::State;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use gitsvnsync_core::config::AppConfig;
 use gitsvnsync_core::db::Database;
@@ -251,8 +251,18 @@ async fn get_setup_config(
 // ---------------------------------------------------------------------------
 
 async fn test_svn_connection(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<TestSvnRequest>,
 ) -> Result<Json<TestConnectionResponse>, AppError> {
+    // Require auth unless this is a fresh instance with no users/password configured
+    let has_users = state.db.count_users().unwrap_or(0) > 0;
+    if state.config.web.admin_password.is_some() || has_users {
+        crate::api::auth::validate_session(
+            &state,
+            headers.get("authorization").and_then(|v| v.to_str().ok()),
+        ).await?;
+    }
     let url = body.url.trim().to_string();
     let username = body.username.trim().to_string();
 
@@ -310,8 +320,17 @@ async fn test_svn_connection(
 }
 
 async fn test_git_connection(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<TestGitRequest>,
 ) -> Result<Json<TestConnectionResponse>, AppError> {
+    let has_users = state.db.count_users().unwrap_or(0) > 0;
+    if state.config.web.admin_password.is_some() || has_users {
+        crate::api::auth::validate_session(
+            &state,
+            headers.get("authorization").and_then(|v| v.to_str().ok()),
+        ).await?;
+    }
     let api_url = body.api_url.trim().trim_end_matches('/').to_string();
     let repo = body.repo.trim().to_string();
 
@@ -405,8 +424,16 @@ async fn test_git_connection(
 
 async fn apply_config(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<ApplyConfigRequest>,
 ) -> Result<Json<ApplyConfigResponse>, AppError> {
+    let has_users = state.db.count_users().unwrap_or(0) > 0;
+    if state.config.web.admin_password.is_some() || has_users {
+        crate::api::auth::validate_session(
+            &state,
+            headers.get("authorization").and_then(|v| v.to_str().ok()),
+        ).await?;
+    }
     let mut warnings = Vec::new();
 
     // Write identity mapping file if mappings are provided
@@ -457,38 +484,54 @@ async fn apply_config(
         }
     }
 
-    // Store secrets in DB (never written to TOML file)
+    // Store secrets in DB encrypted (never written to TOML file)
     {
         let db = &state.db;
-        let now = chrono::Utc::now().to_rfc3339();
 
         if let Some(ref password) = body.svn_password {
             if !password.is_empty() {
-                let _ = db.conn().execute(
-                    "INSERT OR REPLACE INTO kv_state (key, value, updated_at) VALUES ('secret_svn_password', ?1, ?2)",
-                    rusqlite::params![password, now],
-                );
-                info!("SVN password stored in database");
+                match gitsvnsync_core::crypto::get_or_create_encryption_key(db) {
+                    Ok(key) => match gitsvnsync_core::crypto::encrypt_credential(password, &key) {
+                        Ok((ct, nonce)) => {
+                            let _ = db.store_encrypted_secret("svn_password", &ct, &nonce);
+                            // Remove legacy plaintext if present
+                            let _ = db.set_state("secret_svn_password", "");
+                            info!("SVN password encrypted and stored in database");
+                        }
+                        Err(e) => warn!("Failed to encrypt SVN password: {}", e),
+                    },
+                    Err(e) => warn!("Failed to get encryption key: {}", e),
+                }
             }
         }
 
         if let Some(ref token) = body.git_token {
             if !token.is_empty() {
-                let _ = db.conn().execute(
-                    "INSERT OR REPLACE INTO kv_state (key, value, updated_at) VALUES ('secret_git_token', ?1, ?2)",
-                    rusqlite::params![token, now],
-                );
-                info!("Git token stored in database");
+                match gitsvnsync_core::crypto::get_or_create_encryption_key(db) {
+                    Ok(key) => match gitsvnsync_core::crypto::encrypt_credential(token, &key) {
+                        Ok((ct, nonce)) => {
+                            let _ = db.store_encrypted_secret("git_token", &ct, &nonce);
+                            let _ = db.set_state("secret_git_token", "");
+                            info!("Git token encrypted and stored in database");
+                        }
+                        Err(e) => warn!("Failed to encrypt Git token: {}", e),
+                    },
+                    Err(e) => warn!("Failed to get encryption key: {}", e),
+                }
             }
         }
 
         if let Some(ref password) = body.web_admin_password {
             if !password.is_empty() {
-                let _ = db.conn().execute(
-                    "INSERT OR REPLACE INTO kv_state (key, value, updated_at) VALUES ('secret_admin_password', ?1, ?2)",
-                    rusqlite::params![password, now],
-                );
-                info!("Admin password stored in database");
+                match gitsvnsync_core::crypto::hash_password(password) {
+                    Ok(hash) => {
+                        let _ = db.set_state("secret_admin_password_hash", &hash);
+                        // Remove legacy plaintext if present
+                        let _ = db.set_state("secret_admin_password", "");
+                        info!("Admin password hashed and stored in database");
+                    }
+                    Err(e) => warn!("Failed to hash admin password: {}", e),
+                }
             }
         }
     }
@@ -590,7 +633,15 @@ async fn apply_config(
 
 async fn start_import(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<ImportActionResponse>, AppError> {
+    let has_users = state.db.count_users().unwrap_or(0) > 0;
+    if state.config.web.admin_password.is_some() || has_users {
+        crate::api::auth::validate_session(
+            &state,
+            headers.get("authorization").and_then(|v| v.to_str().ok()),
+        ).await?;
+    }
     // Check if already running
     {
         let p = state.import_progress.read().await;
@@ -620,7 +671,15 @@ async fn start_import(
 
 async fn import_status(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<ImportProgress>, AppError> {
+    let has_users = state.db.count_users().unwrap_or(0) > 0;
+    if state.config.web.admin_password.is_some() || has_users {
+        crate::api::auth::validate_session(
+            &state,
+            headers.get("authorization").and_then(|v| v.to_str().ok()),
+        ).await?;
+    }
     let p = state.import_progress.read().await;
 
     // If in-memory progress shows Idle, check the DB for persisted state
@@ -639,7 +698,15 @@ async fn import_status(
 
 async fn cancel_import(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<ImportActionResponse>, AppError> {
+    let has_users = state.db.count_users().unwrap_or(0) > 0;
+    if state.config.web.admin_password.is_some() || has_users {
+        crate::api::auth::validate_session(
+            &state,
+            headers.get("authorization").and_then(|v| v.to_str().ok()),
+        ).await?;
+    }
     let mut p = state.import_progress.write().await;
     if p.phase == ImportPhase::Importing {
         p.cancel_requested = true;
