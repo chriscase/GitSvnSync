@@ -69,18 +69,41 @@ export function renderAuditEvent(event: ActivityEvent): React.ReactNode {
           <span className="text-sm text-gray-400 flex-shrink-0">by {author}</span>
         )}
       </div>
-      <div className="flex items-center gap-2 flex-shrink-0">
+      <div className="flex items-center gap-2 flex-shrink-0 text-xs text-gray-500">
         {svnRev != null && (
-          <span className="text-xs font-mono text-blue-400">r{svnRev}</span>
+          <span className="font-mono text-blue-400">r{svnRev}</span>
         )}
         {gitSha && (
-          <span className="text-xs font-mono text-purple-400">
+          <span className="font-mono text-purple-400">
             {gitSha.substring(0, 8)}
+          </span>
+        )}
+        {event.timestamp && (
+          <span className="text-gray-500" title={String(event.timestamp)}>
+            {formatTimeAgo(String(event.timestamp))}
           </span>
         )}
       </div>
     </div>
   );
+}
+
+function formatTimeAgo(dateStr: string): string {
+  try {
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffSec = Math.floor(diffMs / 1000);
+    if (diffSec < 60) return `${diffSec}s ago`;
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    const diffDay = Math.floor(diffHr / 24);
+    return `${diffDay}d ago`;
+  } catch {
+    return dateStr;
+  }
 }
 
 /**
@@ -128,14 +151,19 @@ export function renderSyncRecordEvent(event: ActivityEvent): React.ReactNode {
         {direction && <DirectionBadge direction={direction} />}
         <span className="text-sm text-gray-200 line-clamp-2">{event.title}</span>
       </div>
-      <div className="flex items-center gap-3 flex-shrink-0">
-        {author && <span className="text-sm text-gray-400">{author}</span>}
+      <div className="flex items-center gap-2 flex-shrink-0 text-xs text-gray-500">
+        {author && <span className="text-gray-400">{author}</span>}
         {svnRev != null && (
-          <span className="text-xs font-mono text-blue-400">r{svnRev}</span>
+          <span className="font-mono text-blue-400">r{svnRev}</span>
         )}
         {gitSha && (
-          <span className="text-xs font-mono text-purple-400">
+          <span className="font-mono text-purple-400">
             {gitSha.substring(0, 8)}
+          </span>
+        )}
+        {event.timestamp && (
+          <span title={String(event.timestamp)}>
+            {formatTimeAgo(String(event.timestamp))}
           </span>
         )}
       </div>

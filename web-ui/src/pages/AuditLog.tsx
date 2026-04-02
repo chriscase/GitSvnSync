@@ -38,9 +38,11 @@ export default function AuditLog() {
     }
   }, [searchParams]);
 
+  const successParam = successFilter === 'failure' ? false : successFilter === 'success' ? true : undefined;
+
   const { data: response, isLoading, isError, error } = useQuery({
-    queryKey: ['audit', PAGE_SIZE, page],
-    queryFn: () => api.getAuditLog(PAGE_SIZE, page),
+    queryKey: ['audit', PAGE_SIZE, page, successFilter],
+    queryFn: () => api.getAuditLog(PAGE_SIZE, page, successParam),
   });
 
   if (isLoading) {
