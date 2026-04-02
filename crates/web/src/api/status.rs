@@ -529,19 +529,31 @@ pub enum AppError {
     BadRequest(String),
     NotFound(String),
     Unauthorized(String),
+    Forbidden(String),
     Internal(String),
 }
 
 impl axum::response::IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
-        let (status, message) = match self {
-            AppError::BadRequest(msg) => (axum::http::StatusCode::BAD_REQUEST, msg),
-            AppError::NotFound(msg) => (axum::http::StatusCode::NOT_FOUND, msg),
-            AppError::Unauthorized(msg) => (axum::http::StatusCode::UNAUTHORIZED, msg),
-            AppError::Internal(msg) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, msg),
+        let (status, message) = match &self {
+            AppError::BadRequest(_) => (axum::http::StatusCode::BAD_REQUEST, String::new()),
+            AppError::NotFound(_) => (axum::http::StatusCode::NOT_FOUND, String::new()),
+            AppError::Unauthorized(_) => (axum::http::StatusCode::UNAUTHORIZED, String::new()),
+            AppError::Forbidden(_) => (axum::http::StatusCode::FORBIDDEN, String::new()),
+            AppError::Internal(msg) => {
+                // Log the full error server-side but return a generic message to clients
+                tracing::error!(detail = %msg, "internal server error");
+                (axum::http::StatusCode::INTERNAL_SERVER_ERROR, String::new())
+            }
         };
 
-        let body = serde_json::json!({ "error": message });
+        let client_message = match self {
+            AppError::Internal(_) => "internal server error".to_string(),
+            AppError::BadRequest(msg) | AppError::NotFound(msg) |
+            AppError::Unauthorized(msg) | AppError::Forbidden(msg) => msg,
+        };
+
+        let body = serde_json::json!({ "error": client_message });
         (status, Json(body)).into_response()
     }
 }

@@ -9,6 +9,8 @@ use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use tracing::info;
+
 use crate::api::status::AppError;
 use crate::AppState;
 
@@ -316,14 +318,29 @@ async fn login(
             ));
         }
 
-        // Constant-time comparison to prevent timing attacks.
-        let password_matches = body.password.len() == configured_password.len()
-            && body
-                .password
-                .bytes()
-                .zip(configured_password.bytes())
-                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-                == 0;
+        // Check if the stored value is a bcrypt hash (starts with "$2")
+        let password_matches = if configured_password.starts_with("$2") {
+            // bcrypt hash comparison (constant-time internally)
+            gitsvnsync_core::crypto::verify_password(&body.password, configured_password)
+                .unwrap_or(false)
+        } else {
+            // Legacy plaintext — constant-time comparison
+            use subtle::ConstantTimeEq;
+            let matches: bool = if body.password.len() == configured_password.len() {
+                body.password.as_bytes().ct_eq(configured_password.as_bytes()).into()
+            } else {
+                false
+            };
+            // Auto-migrate to bcrypt if match succeeds
+            if matches {
+                if let Ok(hash) = gitsvnsync_core::crypto::hash_password(&body.password) {
+                    let _ = state.db.set_state("secret_admin_password_hash", &hash);
+                    let _ = state.db.set_state("secret_admin_password", "");
+                    info!("auto-migrated admin password to bcrypt hash");
+                }
+            }
+            matches
+        };
 
         if !password_matches {
             return Err(AppError::Unauthorized("invalid password".into()));
@@ -481,13 +498,16 @@ pub async fn validate_session(
     state: &Arc<AppState>,
     auth_header: Option<&str>,
 ) -> Result<(), AppError> {
-    // If no admin password is configured AND no users exist, skip authentication entirely
+    // If no admin password is configured AND no users exist, require setup first.
+    // Setup endpoints handle their own auth bypass for fresh instances.
     if state.config.web.admin_password.is_none() {
         let has_users = state.db.count_users()
             .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
             > 0;
         if !has_users {
-            return Ok(());
+            return Err(AppError::Forbidden(
+                "initial setup required — please complete the setup wizard".into(),
+            ));
         }
     }
 
@@ -524,13 +544,15 @@ pub async fn validate_session_with_role(
     state: &Arc<AppState>,
     auth_header: Option<&str>,
 ) -> Result<(String, String), AppError> {
-    // If no admin password is configured AND no users exist, skip auth
+    // If no admin password is configured AND no users exist, require setup first.
     if state.config.web.admin_password.is_none() {
         let has_users = state.db.count_users()
             .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
             > 0;
         if !has_users {
-            return Ok(("legacy".into(), "admin".into()));
+            return Err(AppError::Forbidden(
+                "initial setup required — please complete the setup wizard".into(),
+            ));
         }
     }
 
