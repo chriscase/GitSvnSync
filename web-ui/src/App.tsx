@@ -53,7 +53,7 @@ function SplashScreen() {
       <span className="mt-5 text-xs font-display font-medium text-gray-500 tracking-[0.2em] uppercase">
         Repository Synchronization Platform
       </span>
-      <div className="mt-6 w-7 h-7 border-3 border-gray-800 border-t-blue-500 border-r-indigo-400 rounded-full animate-spin" />
+      <div className="mt-6 w-7 h-7 border-[3px] border-gray-800 border-t-blue-500 border-r-indigo-400 rounded-full animate-spin" />
     </div>
   );
 }
@@ -90,7 +90,7 @@ export default function App() {
     <>
       {showSplash && (
         <div
-          className="transition-opacity duration-400"
+          className="transition-opacity duration-[400ms]"
           style={{ opacity: fadeOut ? 0 : 1, transition: 'opacity 0.4s ease-out' }}
         >
           <SplashScreen />

@@ -5,6 +5,7 @@
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
+use base64::Engine;
 use rand::RngCore;
 
 use crate::db::Database;
@@ -131,76 +132,17 @@ pub fn get_or_create_encryption_key(db: &Database) -> Result<[u8; 32], CryptoErr
 }
 
 // ---------------------------------------------------------------------------
-// Base64 helpers (simple, no external crate needed)
+// Base64 helpers (using the `base64` crate)
 // ---------------------------------------------------------------------------
 
 fn base64_encode(data: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
-
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-
-        result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
-        result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
-
-        if chunk.len() > 1 {
-            result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-
-        if chunk.len() > 2 {
-            result.push(CHARS[(triple & 0x3F) as usize] as char);
-        } else {
-            result.push('=');
-        }
-    }
-    result
+    base64::engine::general_purpose::STANDARD.encode(data)
 }
 
 fn base64_decode(input: &str) -> Result<Vec<u8>, CryptoError> {
-    let input = input.trim_end_matches('=');
-    let mut result = Vec::with_capacity(input.len() * 3 / 4);
-
-    let decode_char = |c: u8| -> Result<u32, CryptoError> {
-        match c {
-            b'A'..=b'Z' => Ok((c - b'A') as u32),
-            b'a'..=b'z' => Ok((c - b'a' + 26) as u32),
-            b'0'..=b'9' => Ok((c - b'0' + 52) as u32),
-            b'+' => Ok(62),
-            b'/' => Ok(63),
-            _ => Err(CryptoError::Base64Error(format!("invalid char: {}", c as char))),
-        }
-    };
-
-    let bytes = input.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        let remaining = bytes.len() - i;
-
-        let b0 = decode_char(bytes[i])?;
-        let b1 = if i + 1 < bytes.len() { decode_char(bytes[i + 1])? } else { 0 };
-        let b2 = if i + 2 < bytes.len() { decode_char(bytes[i + 2])? } else { 0 };
-        let b3 = if i + 3 < bytes.len() { decode_char(bytes[i + 3])? } else { 0 };
-
-        let triple = (b0 << 18) | (b1 << 12) | (b2 << 6) | b3;
-
-        result.push(((triple >> 16) & 0xFF) as u8);
-        if remaining > 2 {
-            result.push(((triple >> 8) & 0xFF) as u8);
-        }
-        if remaining > 3 {
-            result.push((triple & 0xFF) as u8);
-        }
-
-        i += 4;
-    }
-
-    Ok(result)
+    base64::engine::general_purpose::STANDARD
+        .decode(input)
+        .map_err(|e| CryptoError::Base64Error(e.to_string()))
 }
 
 #[cfg(test)]

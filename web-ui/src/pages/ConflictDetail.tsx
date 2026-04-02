@@ -10,6 +10,7 @@ export default function ConflictDetail() {
   const queryClient = useQueryClient();
   const [mergedContent, setMergedContent] = useState('');
   const [activeTab, setActiveTab] = useState<'diff' | 'edit'>('diff');
+  const [resolveError, setResolveError] = useState<string | null>(null);
 
   const { data: conflict, isLoading } = useQuery({
     queryKey: ['conflict', id],
@@ -18,15 +19,16 @@ export default function ConflictDetail() {
   });
 
   const resolveMutation = useMutation({
-    mutationFn: ({ resolution }: { resolution: string }) =>
-      api.resolveConflict(id!, resolution),
+    mutationFn: ({ resolution, merged_content }: { resolution: string; merged_content?: string }) =>
+      api.resolveConflict(id!, resolution, merged_content),
     onSuccess: () => {
+      setResolveError(null);
       queryClient.invalidateQueries({ queryKey: ['conflicts'] });
       queryClient.invalidateQueries({ queryKey: ['conflict', id] });
       navigate('/conflicts');
     },
     onError: (err: Error) => {
-      alert(`Resolution failed: ${err.message}`);
+      setResolveError(`Resolution failed: ${err.message}`);
     },
   });
 
@@ -46,6 +48,11 @@ export default function ConflictDetail() {
 
   return (
     <div className="space-y-6">
+      {resolveError && (
+        <div className="bg-red-900/50 border border-red-700 text-red-300 px-4 py-3 rounded-md">
+          {resolveError}
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div>
           <button
@@ -166,7 +173,7 @@ export default function ConflictDetail() {
             {activeTab === 'edit' && (
               <button
                 onClick={() =>
-                  resolveMutation.mutate({ resolution: 'custom' })
+                  resolveMutation.mutate({ resolution: 'custom', merged_content: mergedContent })
                 }
                 disabled={resolveMutation.isPending}
                 className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 text-sm font-medium"

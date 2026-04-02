@@ -31,6 +31,29 @@ pub struct LdapConfig {
     pub bind_dn: Option<String>,
     /// Optional service account password.
     pub bind_password: Option<String>,
+    /// Whether to verify TLS certificates (default: true).
+    #[serde(default = "default_tls_verify")]
+    pub tls_verify: bool,
+}
+
+fn default_tls_verify() -> bool {
+    true
+}
+
+/// Escape special characters in an LDAP filter value per RFC 4515.
+fn escape_ldap_filter_value(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for c in input.chars() {
+        match c {
+            '\\' => escaped.push_str("\\5c"),
+            '*' => escaped.push_str("\\2a"),
+            '(' => escaped.push_str("\\28"),
+            ')' => escaped.push_str("\\29"),
+            '\0' => escaped.push_str("\\00"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 /// A user record returned after successful LDAP authentication.
@@ -82,11 +105,13 @@ impl LdapConfig {
         username: &str,
         password: &str,
     ) -> Result<LdapUser, LdapAuthError> {
-        // Build connection settings — accept internal/self-signed CA certs
-        // commonly used by corporate LDAP/AD servers.
-        let tls_connector = TlsConnector::builder()
-            .danger_accept_invalid_certs(true)
-            .danger_accept_invalid_hostnames(true)
+        // Build connection settings — optionally accept self-signed certificates.
+        let mut tls_builder = TlsConnector::builder();
+        if !self.tls_verify {
+            tls_builder.danger_accept_invalid_certs(true);
+            tls_builder.danger_accept_invalid_hostnames(true);
+        }
+        let tls_connector = tls_builder
             .build()
             .map_err(|e| LdapAuthError::ConnectionFailed(format!("TLS setup failed: {}", e)))?;
         let settings = LdapConnSettings::new()
@@ -98,8 +123,9 @@ impl LdapConfig {
         // Drive the connection in the background.
         ldap3::drive!(conn);
 
-        // Build the search filter by replacing `{0}` with the username.
-        let search_filter = self.search_filter.replace("{0}", username);
+        // Build the search filter by replacing `{0}` with the escaped username.
+        let escaped_username = escape_ldap_filter_value(username);
+        let search_filter = self.search_filter.replace("{0}", &escaped_username);
 
         // Step 1: Find the user DN.
         let user_dn = if let (Some(bind_dn), Some(bind_pw)) =
@@ -198,9 +224,12 @@ impl LdapConfig {
 
             // Need a fresh connection for the retry
             drop(ldap);
-            let tls_connector2 = TlsConnector::builder()
-                .danger_accept_invalid_certs(true)
-                .danger_accept_invalid_hostnames(true)
+            let mut tls_builder2 = TlsConnector::builder();
+            if !self.tls_verify {
+                tls_builder2.danger_accept_invalid_certs(true);
+                tls_builder2.danger_accept_invalid_hostnames(true);
+            }
+            let tls_connector2 = tls_builder2
                 .build()
                 .map_err(|e| LdapAuthError::ConnectionFailed(format!("TLS: {}", e)))?;
             let settings2 = LdapConnSettings::new().set_connector(tls_connector2);
@@ -219,7 +248,7 @@ impl LdapConfig {
             }
 
             // DOMAIN\user bind succeeded — search for attributes
-            let search_filter2 = self.search_filter.replace("{0}", username);
+            let search_filter2 = self.search_filter.replace("{0}", &escaped_username);
             let (entries, _) = ldap2
                 .search(&self.base_dn, Scope::Subtree, &search_filter2, vec![
                     &self.display_name_attr,

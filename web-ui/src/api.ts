@@ -211,10 +211,10 @@ export const api = {
 
   getConflict: (id: string) => fetchJson<Conflict>(`/conflicts/${id}`),
 
-  resolveConflict: (id: string, resolution: string) =>
+  resolveConflict: (id: string, resolution: string, mergedContent?: string) =>
     fetchJson<{ ok: boolean }>(`/conflicts/${id}/resolve`, {
       method: 'POST',
-      body: JSON.stringify({ resolution }),
+      body: JSON.stringify({ resolution, merged_content: mergedContent }),
     }),
 
   deferConflict: (id: string) =>

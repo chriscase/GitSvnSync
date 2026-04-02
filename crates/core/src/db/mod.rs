@@ -45,6 +45,19 @@ impl Database {
             tracing::warn!("WAL checkpoint on startup failed: {}", e);
         }
 
+        // Verify database integrity on startup.
+        match conn.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0)) {
+            Ok(ref result) if result == "ok" => {
+                debug!("database integrity check passed");
+            }
+            Ok(result) => {
+                tracing::warn!(result = %result, "database integrity check failed");
+            }
+            Err(e) => {
+                tracing::warn!("database integrity check error: {}", e);
+            }
+        }
+
         debug!("database opened successfully with WAL mode");
         Ok(Self {
             conn: Mutex::new(conn),

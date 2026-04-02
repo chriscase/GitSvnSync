@@ -259,6 +259,7 @@ async fn build_test_server_with_ldap(
         group_attr: "memberOf".to_string(),
         bind_dn: None,
         bind_password: None,
+        tls_verify: true,
     };
     web_db
         .save_ldap_config(&ldap_config, true)

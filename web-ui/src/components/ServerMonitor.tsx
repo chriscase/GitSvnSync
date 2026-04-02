@@ -82,7 +82,7 @@ export default function ServerMonitor() {
   const { data: metrics } = useQuery<SystemMetrics>({
     queryKey: ['system-metrics'],
     queryFn: api.getSystemMetrics,
-    refetchInterval: 3000,
+    refetchInterval: 15000,
     refetchIntervalInBackground: false,
   });
 

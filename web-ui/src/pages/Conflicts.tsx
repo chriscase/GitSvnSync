@@ -38,7 +38,7 @@ export default function Conflicts() {
       {conflicts && conflicts.length > 0 ? (
         <div className="bg-gray-800 shadow overflow-hidden rounded-lg border border-gray-700">
           <table className="min-w-full divide-y divide-gray-700">
-            <thead className="bg-gray-750">
+            <thead className="bg-gray-700">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
                   File

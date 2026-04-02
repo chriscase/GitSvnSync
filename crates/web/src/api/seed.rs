@@ -12,7 +12,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use serde::Serialize;
 
-use crate::api::auth::validate_session;
+use crate::api::auth::validate_session_with_role;
 use crate::api::status::AppError;
 use crate::AppState;
 
@@ -40,11 +40,15 @@ async fn seed_data(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<SeedResponse>, AppError> {
-    validate_session(
+    let (_user_id, role) = validate_session_with_role(
         &state,
         headers.get("authorization").and_then(|v| v.to_str().ok()),
     )
     .await?;
+
+    if role != "admin" {
+        return Err(AppError::Unauthorized("admin access required".into()));
+    }
 
     let db = &state.db;
 

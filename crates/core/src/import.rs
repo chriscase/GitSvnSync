@@ -415,7 +415,7 @@ pub async fn run_full_import(
                 // Install LFS hooks/filters in the repo so `git add` invokes
                 // the clean filter and creates pointer files for tracked patterns.
                 let rp = {
-                    let git_guard = git_client.lock().unwrap();
+                    let git_guard = git_client.lock().unwrap_or_else(|p| p.into_inner());
                     git_guard.repo_workdir()
                 };
                 match crate::lfs::install_lfs_hooks(&rp) {
@@ -516,7 +516,7 @@ pub async fn run_full_import(
     .await;
 
     let repo_path = {
-        let git_guard = git_client.lock().unwrap();
+        let git_guard = git_client.lock().unwrap_or_else(|p| p.into_inner());
         git_guard.repo_path().to_path_buf()
     };
 
@@ -621,7 +621,7 @@ pub async fn run_full_import(
         // libgit2's Index::add_all() bypasses LFS filters entirely.
         let use_cli = lfs_available && copy_stats.lfs_tracked > 0;
         let (commit_result, push_repo_path) = {
-            let git_client_guard = git_client.lock().unwrap();
+            let git_client_guard = git_client.lock().unwrap_or_else(|p| p.into_inner());
             let rp = git_client_guard.repo_workdir();
             let result = if use_cli {
                 debug!(
@@ -866,7 +866,7 @@ pub async fn run_full_import(
             .await;
 
             let repo_path = {
-                let git_guard = git_client.lock().unwrap();
+                let git_guard = git_client.lock().unwrap_or_else(|p| p.into_inner());
                 git_guard.repo_workdir()
             };
 
@@ -952,7 +952,7 @@ pub async fn run_full_import(
     }
 
     {
-        let git_guard = git_client.lock().unwrap();
+        let git_guard = git_client.lock().unwrap_or_else(|p| p.into_inner());
         if let Ok(sha) = git_guard.get_head_sha() {
             db.set_watermark("git_sha", &sha).ok();
         }

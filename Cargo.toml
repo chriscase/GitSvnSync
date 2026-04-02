@@ -89,6 +89,12 @@ ldap3 = "0.11"
 bcrypt = "0.15"
 aes-gcm = "0.10"
 rand = "0.8"
+base64 = "0.22"
+subtle = "2"
+
+# Rate limiting
+tower_governor = "0.6"
+governor = "0.8"
 
 # Testing
 tempfile = "3"

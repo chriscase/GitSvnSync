@@ -722,7 +722,7 @@ async fn start_repo_import(
                     .and_then(|v| v.parse::<i64>().ok())
                     .unwrap_or_else(|| p.total_revs); // fallback to total revisions
                 let head_sha = {
-                    let g = git_client.lock().unwrap();
+                    let g = git_client.lock().unwrap_or_else(|p| p.into_inner());
                     g.get_head_sha().unwrap_or_default()
                 };
                 if last_rev > 0 {
@@ -1050,7 +1050,7 @@ async fn create_branch_pair(
         .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
         .ok_or_else(|| AppError::Internal("failed to read back created branch pair".into()))?;
 
-    Ok(Json(serde_json::to_value(created).unwrap()))
+    Ok(Json(serde_json::to_value(created).map_err(|e| AppError::Internal(format!("serialization error: {}", e)))?))
 }
 
 async fn list_branch_pairs(
@@ -1072,7 +1072,7 @@ async fn list_branch_pairs(
 
     let result: Vec<serde_json::Value> = children
         .into_iter()
-        .map(|r| serde_json::to_value(r).unwrap())
+        .map(|r| serde_json::to_value(r).unwrap_or(serde_json::Value::Null))
         .collect();
 
     Ok(Json(result))

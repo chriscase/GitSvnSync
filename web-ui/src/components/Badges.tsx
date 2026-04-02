@@ -48,9 +48,11 @@ export function ActionBadge({ action }: { action: string }) {
 export function SuccessIndicator({ success }: { success: boolean }) {
   return (
     <span
-      className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${
+      className={`inline-block w-2 h-2 rounded-full ${
         success ? 'bg-green-400' : 'bg-red-400'
       }`}
+      role="img"
+      aria-label={success ? 'Success' : 'Failed'}
       title={success ? 'Success' : 'Failed'}
     />
   );

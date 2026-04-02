@@ -348,7 +348,7 @@ export default function AdminUsers() {
             <tbody className="divide-y divide-gray-700">
               {users && users.length > 0 ? (
                 users.map((u) => (
-                  <tr key={u.id} className="hover:bg-gray-750">
+                  <tr key={u.id} className="hover:bg-gray-700">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-100">
                       {u.username}
                     </td>

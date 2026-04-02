@@ -255,6 +255,28 @@ static MIGRATIONS: &[(u32, &str, &str)] = &[
         ALTER TABLE repositories ADD COLUMN parent_id TEXT;
         "#,
     ),
+    (
+        9,
+        "encrypted secrets table",
+        r#"
+        CREATE TABLE IF NOT EXISTS encrypted_secrets (
+            key TEXT PRIMARY KEY,
+            ciphertext TEXT NOT NULL,
+            nonce TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        "#,
+    ),
+    (
+        10,
+        "compound indexes for multi-repo queries and resolved conflict content",
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_repositories_enabled_sync ON repositories(enabled, last_sync_at);
+        CREATE INDEX IF NOT EXISTS idx_commit_map_repo_svn ON commit_map(repo_id, svn_rev);
+        CREATE INDEX IF NOT EXISTS idx_commit_map_repo_git ON commit_map(repo_id, git_sha);
+        ALTER TABLE conflicts ADD COLUMN resolved_content TEXT;
+        "#,
+    ),
 ];
 
 /// Run all pending migrations against `conn`.
@@ -303,7 +325,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap();
-        assert_eq!(get_schema_version(&conn).unwrap(), 8);
+        assert_eq!(get_schema_version(&conn).unwrap(), 10);
     }
 
     #[test]

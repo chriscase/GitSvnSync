@@ -156,6 +156,12 @@ async fn create_user(
     if body.password.is_empty() {
         return Err(AppError::BadRequest("password is required".into()));
     }
+    if body.password.len() < 8 {
+        return Err(AppError::BadRequest("password must be at least 8 characters".into()));
+    }
+    if body.password.len() > 72 {
+        return Err(AppError::BadRequest("password must not exceed 72 characters".into()));
+    }
     if !matches!(body.role.as_str(), "admin" | "user") {
         return Err(AppError::BadRequest(
             "role must be 'admin' or 'user'".into(),
@@ -469,6 +475,7 @@ struct SaveLdapConfigRequest {
     group_attr: String,
     bind_dn: Option<String>,
     bind_password: Option<String>,
+    tls_verify: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -481,6 +488,7 @@ struct TestLdapRequest {
     group_attr: String,
     bind_dn: Option<String>,
     bind_password: Option<String>,
+    tls_verify: Option<bool>,
 }
 
 async fn get_ldap_config(
@@ -570,6 +578,7 @@ async fn save_ldap_config(
         group_attr: body.group_attr,
         bind_dn: body.bind_dn.filter(|s| !s.is_empty()),
         bind_password,
+        tls_verify: body.tls_verify.unwrap_or(true),
     };
 
     db.save_ldap_config(&config, body.enabled)
@@ -616,6 +625,7 @@ async fn test_ldap_connection(
         group_attr: body.group_attr,
         bind_dn: body.bind_dn.filter(|s| !s.is_empty()),
         bind_password,
+        tls_verify: body.tls_verify.unwrap_or(true),
     };
 
     match config.test_connection().await {

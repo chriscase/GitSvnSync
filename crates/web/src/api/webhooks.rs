@@ -84,6 +84,9 @@ async fn github_webhook(
     let is_gitea = headers.contains_key("x-gitea-event") || headers.contains_key("x-gitea-signature");
 
     // Verify webhook signature if a secret is configured
+    if state.config.github.webhook_secret.is_none() {
+        tracing::warn!("GitHub webhook secret not configured - webhook payloads are not authenticated");
+    }
     if state.config.github.webhook_secret.is_some() {
         let (signature, provider) = if is_gitea {
             let sig = headers.get("x-gitea-signature")
@@ -170,19 +173,22 @@ async fn svn_webhook(
     Json(payload): Json<SvnPostCommitPayload>,
 ) -> Result<Json<WebhookResponse>, AppError> {
     // Verify shared secret if configured
+    if state.config.svn.webhook_secret.is_none() {
+        tracing::warn!("SVN webhook secret not configured - webhook payloads are not authenticated");
+    }
     if let Some(ref secret) = state.config.svn.webhook_secret {
         let provided = headers
             .get("x-webhook-secret")
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| AppError::Unauthorized("missing X-Webhook-Secret header".into()))?;
 
-        // Constant-time comparison
-        let matches = provided.len() == secret.len()
-            && provided
-                .bytes()
-                .zip(secret.bytes())
-                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-                == 0;
+        // Constant-time comparison using subtle crate
+        use subtle::ConstantTimeEq;
+        let matches: bool = if provided.len() == secret.len() {
+            provided.as_bytes().ct_eq(secret.as_bytes()).into()
+        } else {
+            false
+        };
 
         if !matches {
             return Err(AppError::Unauthorized("invalid webhook secret".into()));

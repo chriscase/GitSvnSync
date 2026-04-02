@@ -156,23 +156,23 @@ impl Database {
     /// Check whether a given SVN revision has already been synced.
     pub fn is_svn_rev_synced(&self, svn_rev: i64) -> Result<bool, DatabaseError> {
         let conn = self.conn();
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM commit_map WHERE svn_rev = ?1",
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM commit_map WHERE svn_rev = ?1)",
             params![svn_rev],
             |row| row.get(0),
         )?;
-        Ok(count > 0)
+        Ok(exists)
     }
 
     /// Check whether a given Git SHA has already been synced.
     pub fn is_git_sha_synced(&self, git_sha: &str) -> Result<bool, DatabaseError> {
         let conn = self.conn();
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM commit_map WHERE git_sha = ?1",
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM commit_map WHERE git_sha = ?1)",
             params![git_sha],
             |row| row.get(0),
         )?;
-        Ok(count > 0)
+        Ok(exists)
     }
 
     // -- sync_state ---------------------------------------------------------
@@ -541,10 +541,28 @@ impl Database {
         &self,
         id: &str,
         resolution: &models::ConflictResolution,
-        _content: Option<&str>,
+        content: Option<&str>,
         resolved_by: &str,
     ) -> Result<(), DatabaseError> {
-        self.resolve_conflict(id, "resolved", &resolution.to_string(), resolved_by)
+        self.resolve_conflict(id, "resolved", &resolution.to_string(), resolved_by)?;
+        if let Some(c) = content {
+            self.store_resolved_content(id, c)?;
+        }
+        Ok(())
+    }
+
+    /// Store merged/resolved content for a conflict.
+    pub fn store_resolved_content(
+        &self,
+        conflict_id: &str,
+        content: &str,
+    ) -> Result<(), DatabaseError> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE conflicts SET resolved_content = ?1 WHERE id = ?2",
+            params![content, conflict_id],
+        )?;
+        Ok(())
     }
 
     /// Defer a conflict.
@@ -700,8 +718,6 @@ impl Database {
             Some(&entry.details),
             entry.success,
         )?;
-        // Prune old entries to prevent unbounded growth
-        self.prune_audit_log(1000).ok();
         Ok(id)
     }
 
@@ -1687,6 +1703,10 @@ impl Database {
             None
         };
 
+        let tls_verify = self.get_state("ldap_tls_verify")?
+            .map(|v| v != "false")
+            .unwrap_or(true);
+
         Ok(Some(crate::ldap_auth::LdapConfig {
             url,
             base_dn,
@@ -1696,6 +1716,7 @@ impl Database {
             group_attr,
             bind_dn,
             bind_password,
+            tls_verify,
         }))
     }
 
@@ -1732,6 +1753,11 @@ impl Database {
             self.set_state("ldap_bind_password", "")?;
             self.set_state("ldap_bind_password_nonce", "")?;
         }
+
+        self.set_state(
+            "ldap_tls_verify",
+            if config.tls_verify { "true" } else { "false" },
+        )?;
 
         Ok(())
     }
@@ -2039,6 +2065,92 @@ impl Database {
         info!("cleared all sync data from database");
         Ok(())
     }
+
+    // -- encrypted_secrets ---------------------------------------------------
+
+    /// Store an encrypted secret (ciphertext + nonce) in the encrypted_secrets table.
+    pub fn store_encrypted_secret(
+        &self,
+        key: &str,
+        ciphertext: &str,
+        nonce: &str,
+    ) -> Result<(), DatabaseError> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.conn();
+        conn.execute(
+            "INSERT OR REPLACE INTO encrypted_secrets (key, ciphertext, nonce, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            params![key, ciphertext, nonce, now],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieve an encrypted secret. Returns `(ciphertext, nonce)` if found.
+    pub fn get_encrypted_secret(
+        &self,
+        key: &str,
+    ) -> Result<Option<(String, String)>, DatabaseError> {
+        let conn = self.conn();
+        match conn.query_row(
+            "SELECT ciphertext, nonce FROM encrypted_secrets WHERE key = ?1",
+            params![key],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        ) {
+            Ok(pair) => Ok(Some(pair)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Delete an encrypted secret by key.
+    pub fn delete_secret(&self, key: &str) -> Result<(), DatabaseError> {
+        let conn = self.conn();
+        conn.execute(
+            "DELETE FROM encrypted_secrets WHERE key = ?1",
+            params![key],
+        )?;
+        Ok(())
+    }
+
+    /// Get a consolidated status summary in a single query to reduce mutex contention.
+    pub fn get_status_summary(
+        &self,
+        _repo_id: Option<&str>,
+    ) -> Result<StatusSummary, DatabaseError> {
+        let conn = self.conn();
+        let summary = conn.query_row(
+            "SELECT
+                (SELECT value FROM kv_state WHERE key = 'sync_state') as sync_state,
+                (SELECT value FROM kv_state WHERE key = 'last_sync_at') as last_sync_at,
+                (SELECT COUNT(*) FROM sync_records) as total_syncs,
+                (SELECT COUNT(*) FROM conflicts) as total_conflicts,
+                (SELECT COUNT(*) FROM conflicts WHERE status = 'active') as active_conflicts,
+                (SELECT COUNT(*) FROM audit_log WHERE success = 0 AND created_at > datetime('now', '-24 hours')) as recent_errors
+            ",
+            [],
+            |row| {
+                Ok(StatusSummary {
+                    sync_state: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    last_sync_at: row.get::<_, Option<String>>(1)?,
+                    total_syncs: row.get(2)?,
+                    total_conflicts: row.get(3)?,
+                    active_conflicts: row.get(4)?,
+                    recent_errors: row.get(5)?,
+                })
+            },
+        )?;
+        Ok(summary)
+    }
+}
+
+/// Consolidated status summary returned by `get_status_summary`.
+#[derive(Debug, Clone)]
+pub struct StatusSummary {
+    pub sync_state: String,
+    pub last_sync_at: Option<String>,
+    pub total_syncs: i64,
+    pub total_conflicts: i64,
+    pub active_conflicts: i64,
+    pub recent_errors: i64,
 }
 
 /// Parse a datetime string, returning Utc::now() as a fallback if parsing fails.

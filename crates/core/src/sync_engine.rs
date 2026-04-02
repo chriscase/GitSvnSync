@@ -378,7 +378,7 @@ impl SyncEngine {
                 .map_err(SyncError::IdentityError)?;
 
             // 1. Get the SVN diff for this revision.
-            let svn = self.svn_client.lock().unwrap().clone();
+            let svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner()).clone();
             let diff = svn
                 .diff_full(change.revision)
                 .await
@@ -386,7 +386,7 @@ impl SyncEngine {
 
             // Get the git repo path before locking, for apply_diff_to_path.
             let repo_path = {
-                let git = self.git_client.lock().unwrap();
+                let git = self.git_client.lock().unwrap_or_else(|p| p.into_inner());
                 git.repo_path().to_path_buf()
             };
 
@@ -429,7 +429,7 @@ impl SyncEngine {
                     String::new()
                 };
                 {
-                    let svn = self.svn_client.lock().unwrap().clone();
+                    let svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner()).clone();
                     svn.export(&export_path, change.revision, export_dir.path())
                         .await
                         .map_err(SyncError::SvnError)?;
@@ -473,7 +473,7 @@ impl SyncEngine {
             // CLI call doesn't block the tokio async runtime (which would
             // make the web UI unresponsive during pushes).
             let git_sha = tokio::task::block_in_place(|| {
-                let git = self.git_client.lock().unwrap();
+                let git = self.git_client.lock().unwrap_or_else(|p| p.into_inner());
                 let oid = git
                     .commit(
                         &commit_message,
@@ -580,7 +580,7 @@ impl SyncEngine {
             //    Lock is scoped in a block so the guard is dropped before any
             //    .await (std::sync::MutexGuard is !Send).
             let (_changed_files, file_contents) = {
-                let git = self.git_client.lock().unwrap();
+                let git = self.git_client.lock().unwrap_or_else(|p| p.into_inner());
                 let files = git
                     .get_changed_files(&change.sha)
                     .map_err(SyncError::GitError)?;
@@ -606,7 +606,7 @@ impl SyncEngine {
                 .map_err(|e| SyncError::SvnError(crate::errors::SvnError::IoError(e)))?;
             let svn_url_for_log;
             {
-                let svn = self.svn_client.lock().unwrap().clone();
+                let svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner()).clone();
                 svn_url_for_log = svn.url().to_string();
                 debug!(
                     sha = %change.sha,
@@ -688,7 +688,7 @@ impl SyncEngine {
             }
 
             // 4. Stage changes in SVN.
-            let svn = self.svn_client.lock().unwrap().clone();
+            let svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner()).clone();
             if !added_files.is_empty() {
                 debug!(
                     sha = %change.sha,
@@ -875,7 +875,7 @@ impl SyncEngine {
 
         info!(since_rev = last_rev, "fetching SVN changes");
 
-        let svn = self.svn_client.lock().unwrap().clone();
+        let svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let svn_info = svn.info().await.map_err(SyncError::SvnError)?;
         let head_rev = svn_info.latest_rev;
 
@@ -945,7 +945,7 @@ impl SyncEngine {
     }
 
     async fn fetch_git_changes(&self) -> Result<Vec<GitChangeSet>, SyncError> {
-        let git = self.git_client.lock().unwrap();
+        let git = self.git_client.lock().unwrap_or_else(|p| p.into_inner());
 
         let token = self.config.github.token.as_deref();
         let branch = &self.config.github.default_branch;
@@ -1096,7 +1096,7 @@ impl SyncEngine {
             });
 
         if let Some(pw) = svn_pw {
-            let mut svn = self.svn_client.lock().unwrap();
+            let mut svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner());
             svn.set_password(pw);
             debug!("reloaded SVN password from database");
         }
@@ -1121,7 +1121,7 @@ impl SyncEngine {
             });
 
         if let Some(token) = git_tok {
-            let git = self.git_client.lock().unwrap();
+            let git = self.git_client.lock().unwrap_or_else(|p| p.into_inner());
             let _ = git.ensure_remote_credentials("origin", Some(&token));
             debug!("reloaded Git token from database");
         }
@@ -1136,7 +1136,7 @@ impl SyncEngine {
     /// connecting to a repo that already has synced history.
     fn detect_last_svn_rev_from_git(&self) -> i64 {
         let repo_path = {
-            let git = self.git_client.lock().unwrap();
+            let git = self.git_client.lock().unwrap_or_else(|p| p.into_inner());
             git.repo_path().to_path_buf()
         };
 
@@ -1149,7 +1149,10 @@ impl SyncEngine {
             _ => return 0,
         };
 
-        let re = regex_lite::Regex::new(r"(?i)(?:synced from |from )SVN r(\d+)").unwrap();
+        static RE: std::sync::OnceLock<regex_lite::Regex> = std::sync::OnceLock::new();
+        let re = RE.get_or_init(|| {
+            regex_lite::Regex::new(r"(?i)(?:synced from |from )SVN r(\d+)").unwrap()
+        });
         let mut max_rev: i64 = 0;
         for line in output.lines() {
             if let Some(caps) = re.captures(line) {
