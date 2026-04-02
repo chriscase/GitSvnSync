@@ -92,7 +92,7 @@ function PhaseDots({ phase }: { phase: string }) {
 // Component (self-fetching)
 // ---------------------------------------------------------------------------
 
-export default function ImportProgressCard({ repoId }: { repoId?: string } = {}) {
+export default function ImportProgressCard({ repoId, repoName }: { repoId?: string; repoName?: string } = {}) {
   const { data: status } = useQuery<ImportStatus>({
     queryKey: ['import-status', repoId || 'global'],
     queryFn: async () => {
@@ -126,7 +126,9 @@ export default function ImportProgressCard({ repoId }: { repoId?: string } = {})
       <div className="bg-gray-800 border border-gray-700 rounded-xl p-5 shadow-lg">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-semibold text-gray-200">SVN Import</h3>
+            <h3 className="text-sm font-semibold text-gray-200">
+            SVN Import{repoName && <span className="text-blue-400 ml-1">— {repoName}</span>}
+          </h3>
             <p className="text-xs text-gray-500 mt-1">No import history</p>
           </div>
           <a
@@ -148,7 +150,9 @@ export default function ImportProgressCard({ repoId }: { repoId?: string } = {})
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center space-x-2">
             <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-            <h3 className="text-sm font-semibold text-gray-200">SVN Import Complete</h3>
+            <h3 className="text-sm font-semibold text-gray-200">
+              SVN Import Complete{repoName && <span className="text-blue-400 ml-1">— {repoName}</span>}
+            </h3>
           </div>
           <div className="flex items-center space-x-1 text-xs text-gray-500">
             <Clock className="w-3.5 h-3.5" />
@@ -164,13 +168,15 @@ export default function ImportProgressCard({ repoId }: { repoId?: string } = {})
           <StatCell label="Batches" value={`${status.batches_pushed}`} />
           <StatCell label="LFS Files" value={`${status.lfs_unique_count}`} />
         </div>
-        <a
-          href="/"
-          className="flex items-center justify-center space-x-1 text-sm text-blue-400 hover:text-blue-300 transition-colors"
-        >
-          <span>View Full Import</span>
-          <ArrowRight className="w-4 h-4" />
-        </a>
+        {repoId && (
+          <a
+            href={`/repos/${repoId}`}
+            className="flex items-center justify-center space-x-1 text-sm text-blue-400 hover:text-blue-300 transition-colors"
+          >
+            <span>View Repository</span>
+            <ArrowRight className="w-4 h-4" />
+          </a>
+        )}
       </div>
     );
   }
@@ -196,7 +202,9 @@ export default function ImportProgressCard({ repoId }: { repoId?: string } = {})
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center space-x-2">
           <span className={`w-2.5 h-2.5 rounded-full ${phaseDotColor(status.phase)}`} />
-          <h3 className="text-sm font-semibold text-gray-200">SVN Import</h3>
+          <h3 className="text-sm font-semibold text-gray-200">
+            SVN Import{repoName && <span className="text-blue-400 ml-1">— {repoName}</span>}
+          </h3>
           <span className="text-xs text-gray-400 bg-gray-700 px-2 py-0.5 rounded-full">
             {phaseLabel(status.phase)}
           </span>

@@ -119,8 +119,8 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Import Progress Card — shows per-repo when filtered */}
-      <ImportProgressCard repoId={activeRepoId} />
+      {/* Import Progress — only show when a specific repo is selected */}
+      {activeRepoId && <ImportProgressCard repoId={activeRepoId} repoName={selectedRepo?.name} />}
 
       {/* Repositories Overview */}
       {repos && repos.length > 0 && (() => {
