@@ -155,6 +155,15 @@ function validateStep(step: number, data: WizardData): Errors {
       errors.git_repo = 'Must be in owner/repo format';
   }
 
+  if (step === 3) {
+    if (data.daemon_poll_interval < 1) errors.daemon_poll_interval = 'Poll interval must be at least 1 second';
+  }
+
+  if (step === 4) {
+    if (data.lfs_threshold_mb !== undefined && data.lfs_threshold_mb < 0)
+      errors.lfs_threshold_mb = 'LFS threshold must be non-negative';
+  }
+
   if (step === 5) {
     if (!data.web_listen.trim()) errors.web_listen = 'Listen address is required';
     else if (!/^.+:\d+$/.test(data.web_listen.trim()))

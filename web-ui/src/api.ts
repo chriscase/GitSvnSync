@@ -130,6 +130,7 @@ export interface UpdateUserRequest {
   role?: string;
   enabled?: boolean;
   password?: string;
+  current_password?: string;
 }
 
 export interface StoreCredentialRequest {

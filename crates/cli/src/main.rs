@@ -568,11 +568,16 @@ async fn cmd_sync(_db: &Database, config: &AppConfig, action: SyncAction) -> Res
                 Arc::new(identity),
             );
 
+            let spinner = indicatif::ProgressBar::new_spinner();
+            spinner.set_message("Running sync cycle...");
+            spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+
             let result = engine
                 .run_sync_cycle()
                 .await
                 .map_err(|e| anyhow::anyhow!("sync cycle failed: {}", e))?;
 
+            spinner.finish_and_clear();
             println!("Sync cycle completed:");
             println!("  SVN -> Git : {} operations", result.svn_to_git_count);
             println!("  Git -> SVN : {} operations", result.git_to_svn_count);

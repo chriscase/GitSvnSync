@@ -28,16 +28,22 @@ export default function Dashboard() {
   const { data: recentActivity } = useQuery({
     queryKey: ['audit', 'recent', activeRepoId],
     queryFn: () => api.getAuditLog(20, undefined, undefined, activeRepoId),
+    staleTime: 30000,
+    refetchInterval: 10000,
   });
 
   const { data: syncRecords } = useQuery({
     queryKey: ['sync-records', activeRepoId],
     queryFn: () => api.getSyncRecords(20, activeRepoId),
+    staleTime: 30000,
+    refetchInterval: 10000,
   });
 
   const { data: commitMap } = useQuery({
     queryKey: ['commit-map', activeRepoId],
     queryFn: () => api.getCommitMap(15, activeRepoId),
+    staleTime: 30000,
+    refetchInterval: 10000,
   });
 
   const { data: repos } = useQuery({

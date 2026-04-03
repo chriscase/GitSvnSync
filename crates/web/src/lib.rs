@@ -176,7 +176,13 @@ impl WebServer {
         info!(addr = %addr, "starting web server");
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
-        axum::serve(listener, app).await?;
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                // Wait until the process receives a shutdown signal.
+                // The daemon's main.rs drops the web_handle or signals shutdown.
+                tokio::signal::ctrl_c().await.ok();
+            })
+            .await?;
 
         Ok(())
     }

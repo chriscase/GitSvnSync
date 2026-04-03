@@ -568,8 +568,13 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Abort the web server
-    web_handle.abort();
+    // The web server uses with_graceful_shutdown and will drain connections
+    // when the Tokio runtime shuts down. Give it a moment to finish.
+    match tokio::time::timeout(std::time::Duration::from_secs(5), web_handle).await {
+        Ok(Ok(())) => info!("web server stopped gracefully"),
+        Ok(Err(e)) => warn!("web server task error: {}", e),
+        Err(_) => info!("web server shutdown timed out, proceeding"),
+    }
 
     // Checkpoint the SQLite WAL to prevent corruption on unclean exit.
     // Open a fresh connection since the original db/web_db were moved into AppState.

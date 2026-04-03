@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type User, type CreateUserRequest } from '../api';
 import { getStoredUser } from '../utils/auth';
+import { ConfirmModal } from '../components/ConfirmModal';
 
 // ---------------------------------------------------------------------------
 // Create User Modal
@@ -254,6 +255,7 @@ export default function AdminUsers() {
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [confirmDeleteUser, setConfirmDeleteUser] = useState<User | null>(null);
 
   // Check admin role
   const currentUser = getStoredUser();
@@ -386,11 +388,7 @@ export default function AdminUsers() {
                         Edit
                       </button>
                       <button
-                        onClick={() => {
-                          if (confirm(`Delete user "${u.username}"? This cannot be undone.`)) {
-                            deleteMutation.mutate(u.id);
-                          }
-                        }}
+                        onClick={() => setConfirmDeleteUser(u)}
                         disabled={u.username === currentUser?.username}
                         className="text-red-400 hover:text-red-300 disabled:opacity-30 disabled:cursor-not-allowed"
                       >
@@ -422,6 +420,21 @@ export default function AdminUsers() {
           onUpdated={handleRefresh}
         />
       )}
+      <ConfirmModal
+        isOpen={!!confirmDeleteUser}
+        title="Delete User"
+        message={`Delete user "${confirmDeleteUser?.username}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={() => {
+          if (confirmDeleteUser) {
+            deleteMutation.mutate(confirmDeleteUser.id);
+          }
+          setConfirmDeleteUser(null);
+        }}
+        onCancel={() => setConfirmDeleteUser(null)}
+      />
     </div>
   );
 }

@@ -142,3 +142,52 @@ cp /var/lib/gitsvnsync/gitsvnsync.db /backup/
 - [ ] Webhook secret configured for GitHub
 - [ ] SVN service account has minimal required permissions
 - [ ] GitHub token has minimal required scopes (`repo`)
+
+## Production Security
+
+### Encryption Key Management
+
+GitSvnSync encrypts stored credentials (SVN passwords, Git tokens) using
+AES-256-GCM. The encryption key can be provided in two ways:
+
+1. **Environment variable (recommended for production):**
+   ```bash
+   # Generate a key:
+   openssl rand -hex 32
+
+   # Set in your environment or systemd unit:
+   REPOSYNC_ENCRYPTION_KEY=<hex-encoded-32-byte-key>
+   ```
+
+2. **Auto-generated (default):** If no environment variable is set, a key is
+   generated automatically and stored in the SQLite database. This is
+   convenient for development but means the key and encrypted data live in
+   the same file — an attacker with database access can decrypt all secrets.
+
+**For production deployments, always set `REPOSYNC_ENCRYPTION_KEY` via
+environment variable** to ensure the key is stored separately from the data.
+
+### Admin Password
+
+The admin password is stored as a bcrypt hash. On first login after upgrade
+from plaintext storage, the password is automatically migrated to bcrypt.
+
+### CORS Configuration
+
+By default, CORS origins are derived from the listen address. For production,
+configure explicit origins in your `config.toml`:
+
+```toml
+[web]
+cors_origins = ["https://gitsvnsync.example.com"]
+```
+
+### LDAP TLS Verification
+
+LDAP TLS certificate verification is enabled by default. To disable it for
+servers with self-signed certificates:
+
+```toml
+# Via the Admin UI → LDAP page, toggle "Verify TLS Certificates"
+# Or in the database: ldap_tls_verify = "false"
+```

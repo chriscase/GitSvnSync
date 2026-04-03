@@ -221,6 +221,10 @@ function ProfileSection({ user }: { user: User }) {
   };
 
   const handleChangePassword = async () => {
+    if (!currentPassword) {
+      setError('Current password is required');
+      return;
+    }
     if (newPassword !== confirmPassword) {
       setError('Passwords do not match');
       return;
@@ -233,7 +237,7 @@ function ProfileSection({ user }: { user: User }) {
     setError('');
     setMessage('');
     try {
-      await api.updateUser(user.id, { password: newPassword });
+      await api.updateUser(user.id, { password: newPassword, current_password: currentPassword });
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
