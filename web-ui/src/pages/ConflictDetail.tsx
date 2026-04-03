@@ -4,6 +4,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import DiffViewer from '../components/DiffViewer';
+import { ConfirmModal } from '../components/ConfirmModal';
 
 export default function ConflictDetail() {
   const { id } = useParams<{ id: string }>();
@@ -12,6 +13,7 @@ export default function ConflictDetail() {
   const [mergedContent, setMergedContent] = useState('');
   const [activeTab, setActiveTab] = useState<'diff' | 'edit'>('diff');
   const [resolveError, setResolveError] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ resolution: string; label: string } | null>(null);
 
   const { data: conflict, isLoading } = useQuery({
     queryKey: ['conflict', id],
@@ -158,14 +160,14 @@ export default function ConflictDetail() {
         <div className="bg-gray-800 shadow rounded-lg p-4 flex items-center justify-between border border-gray-700">
           <div className="flex space-x-3">
             <button
-              onClick={() => resolveMutation.mutate({ resolution: 'accept_svn' })}
+              onClick={() => setConfirmAction({ resolution: 'accept_svn', label: 'Accept SVN version' })}
               disabled={resolveMutation.isPending}
               className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:opacity-50 text-sm font-medium"
             >
               Accept SVN
             </button>
             <button
-              onClick={() => resolveMutation.mutate({ resolution: 'accept_git' })}
+              onClick={() => setConfirmAction({ resolution: 'accept_git', label: 'Accept Git version' })}
               disabled={resolveMutation.isPending}
               className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm font-medium"
             >
@@ -205,6 +207,20 @@ export default function ConflictDetail() {
           </p>
         </div>
       )}
+      <ConfirmModal
+        isOpen={!!confirmAction}
+        title="Resolve Conflict"
+        message={`Are you sure you want to ${confirmAction?.label ?? ''}? This cannot be undone.`}
+        confirmLabel="Resolve"
+        cancelLabel="Cancel"
+        onConfirm={() => {
+          if (confirmAction) {
+            resolveMutation.mutate({ resolution: confirmAction.resolution });
+          }
+          setConfirmAction(null);
+        }}
+        onCancel={() => setConfirmAction(null)}
+      />
     </div>
   );
 }

@@ -234,7 +234,12 @@ async fn cmd_start(config_path: &str, foreground: bool) -> Result<()> {
         daemon::remove_pid_file(&daemon::pid_file_path(data_dir))?;
         result
     } else {
-        info!("starting personal sync daemon in background mode");
+        eprintln!("WARNING: The --background flag does not truly daemonize the process.");
+        eprintln!("         For production use, run with systemd, launchd, or nohup:");
+        eprintln!("         $ nohup gitsvnsync-personal start --foreground &");
+        eprintln!("         Or use the provided systemd service file.");
+        eprintln!();
+        info!("starting personal sync daemon (note: not truly daemonized, use systemd for production)");
         daemon::write_pid_file(&daemon::pid_file_path(data_dir))?;
 
         let shutdown = signals::setup_signal_handlers();
