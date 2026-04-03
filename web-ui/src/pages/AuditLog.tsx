@@ -1,3 +1,4 @@
+import { LoadingSpinner } from '../components/LoadingSpinner';
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
@@ -46,7 +47,7 @@ export default function AuditLog() {
   });
 
   if (isLoading) {
-    return <div className="text-center py-8 text-gray-400">Loading...</div>;
+    return <LoadingSpinner />;
   }
 
   if (isError) {

@@ -1,3 +1,4 @@
+import { LoadingSpinner } from '../components/LoadingSpinner';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -11,7 +12,7 @@ export default function Conflicts() {
   });
 
   if (isLoading) {
-    return <div className="text-center py-8 text-gray-400">Loading...</div>;
+    return <LoadingSpinner />;
   }
 
   return (

@@ -12,6 +12,7 @@ import AdminUsers from './pages/AdminUsers';
 import AdminLdap from './pages/AdminLdap';
 import Repositories from './pages/Repositories';
 import RepoDetail from './pages/RepoDetail';
+import SetupWizard from './pages/SetupWizard';
 
 // ---------------------------------------------------------------------------
 // Splash Screen (React-controlled with minimum display time)
@@ -99,7 +100,7 @@ export default function App() {
       <div style={{ opacity: showSplash ? 0 : 1, transition: 'opacity 0.3s ease-in' }}>
         <Routes>
           <Route path="/login" element={<Login />} />
-          <Route path="/setup" element={<Navigate to="/repos" replace />} />
+          <Route path="/setup" element={<SetupWizard />} />
           <Route
             path="/"
             element={

@@ -1,3 +1,4 @@
+import { LoadingSpinner } from '../components/LoadingSpinner';
 import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type SaveLdapConfigRequest } from '../api';
@@ -61,7 +62,7 @@ export default function AdminLdap() {
   }
 
   if (isLoading) {
-    return <div className="text-center py-8 text-gray-400">Loading LDAP configuration...</div>;
+    return <LoadingSpinner message="Loading LDAP configuration..." />;
   }
 
   const buildRequest = (): SaveLdapConfigRequest => ({

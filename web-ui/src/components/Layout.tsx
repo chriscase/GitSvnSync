@@ -1,16 +1,8 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { api, type User } from '../api';
+import { api } from '../api';
 import SyncStatus from './SyncStatus';
-
-function getStoredUser(): User | null {
-  try {
-    const stored = localStorage.getItem('user');
-    return stored ? JSON.parse(stored) : null;
-  } catch {
-    return null;
-  }
-}
+import { getStoredUser } from '../utils/auth';
 
 export default function Layout() {
   const navigate = useNavigate();
@@ -98,6 +90,16 @@ export default function Layout() {
                 {isAdmin && (
                   <NavLink to="/ldap" className={navLinkClass}>
                     LDAP
+                  </NavLink>
+                )}
+                {isAdmin && (
+                  <NavLink to="/config" className={navLinkClass}>
+                    Config
+                  </NavLink>
+                )}
+                {isAdmin && (
+                  <NavLink to="/setup" className={navLinkClass}>
+                    Setup
                   </NavLink>
                 )}
               </div>

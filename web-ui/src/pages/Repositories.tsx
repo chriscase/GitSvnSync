@@ -1,29 +1,10 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { api, type Repository, type SyncStatus, type User } from '../api';
+import { api, type Repository, type SyncStatus } from '../api';
 import { GitBranch, Plus, Database, Clock, X, ArrowRight, AlertTriangle, RefreshCw } from 'lucide-react';
-
-function getStoredUser(): User | null {
-  try {
-    const stored = localStorage.getItem('user');
-    return stored ? JSON.parse(stored) : null;
-  } catch {
-    return null;
-  }
-}
-
-function formatTimeAgo(isoDate: string | null | undefined): string {
-  if (!isoDate) return 'never';
-  const diff = Math.max(0, Math.floor((Date.now() - new Date(isoDate).getTime()) / 1000));
-  if (diff < 10) return 'just now';
-  if (diff < 60) return `${diff}s ago`;
-  const mins = Math.floor(diff / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ${mins % 60}m ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
+import { getStoredUser } from '../utils/auth';
+import { formatTimeAgo } from '../utils/time';
 
 /** Custom SVG icon: two circular sync arrows, one blue (SVN) and one purple (Git) */
 function SyncArrowsIcon({ className = 'w-8 h-8' }: { className?: string }) {

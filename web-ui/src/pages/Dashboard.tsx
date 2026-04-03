@@ -1,8 +1,10 @@
+import { LoadingSpinner } from '../components/LoadingSpinner';
 import { useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { UIForgeActivityStream } from '@appforgeapps/uiforge';
 import { api, type CommitMapEntry, type Repository } from '../api';
+import { formatTimeAgo } from '../utils/time';
 import ImportProgressCard from '../components/ImportProgressCard';
 import ServerMonitor from '../components/ServerMonitor';
 import { Database, GitBranch, ArrowRight } from 'lucide-react';
@@ -63,7 +65,7 @@ export default function Dashboard() {
   );
 
   if (statusLoading) {
-    return <div className="text-center py-8 text-gray-400">Loading...</div>;
+    return <LoadingSpinner />;
   }
 
   if (isError) {
@@ -81,16 +83,6 @@ export default function Dashboard() {
     if (days > 0) return `${days}d ${hours}h ${mins}m`;
     if (hours > 0) return `${hours}h ${mins}m`;
     return `${mins}m`;
-  };
-
-  const formatTimeAgo = (isoDate: string): string => {
-    const diff = Math.max(0, Math.floor((Date.now() - new Date(isoDate).getTime()) / 1000));
-    if (diff < 60) return `${diff}s ago`;
-    const mins = Math.floor(diff / 60);
-    if (mins < 60) return `${mins}m ago`;
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return `${hrs}h ${mins % 60}m ago`;
-    return `${Math.floor(hrs / 24)}d ago`;
   };
 
   const selectedRepo = selectedRepoId !== 'all'

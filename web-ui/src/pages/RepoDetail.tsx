@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { api, type Repository, type User, type SyncStatus, type SyncRecord, type CommitMapEntry, type AuditEntry } from '../api';
+import { api, type Repository, type SyncStatus, type SyncRecord, type CommitMapEntry, type AuditEntry } from '../api';
 import ImportProgressCard from '../components/ImportProgressCard';
 import ServerMonitor from '../components/ServerMonitor';
 import {
@@ -10,24 +10,8 @@ import {
   ChevronDown, Plus,
 } from 'lucide-react';
 
-function getStoredUser(): User | null {
-  try {
-    const stored = localStorage.getItem('user');
-    return stored ? JSON.parse(stored) : null;
-  } catch {
-    return null;
-  }
-}
-
-function formatTimeAgo(isoDate: string): string {
-  const diff = Math.max(0, Math.floor((Date.now() - new Date(isoDate).getTime()) / 1000));
-  if (diff < 60) return `${diff}s ago`;
-  const mins = Math.floor(diff / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ${mins % 60}m ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
+import { getStoredUser } from '../utils/auth';
+import { formatTimeAgo } from '../utils/time';
 
 type EditForm = {
   name: string;

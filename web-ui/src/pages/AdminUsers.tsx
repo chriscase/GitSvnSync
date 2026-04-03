@@ -1,6 +1,8 @@
+import { LoadingSpinner } from '../components/LoadingSpinner';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type User, type CreateUserRequest } from '../api';
+import { getStoredUser } from '../utils/auth';
 
 // ---------------------------------------------------------------------------
 // Create User Modal
@@ -254,14 +256,7 @@ export default function AdminUsers() {
   const [editingUser, setEditingUser] = useState<User | null>(null);
 
   // Check admin role
-  const currentUser = (() => {
-    try {
-      const stored = localStorage.getItem('user');
-      return stored ? JSON.parse(stored) : null;
-    } catch {
-      return null;
-    }
-  })();
+  const currentUser = getStoredUser();
 
   const { data: users, isLoading, error } = useQuery({
     queryKey: ['admin-users'],
@@ -288,7 +283,7 @@ export default function AdminUsers() {
   }
 
   if (isLoading) {
-    return <div className="text-center py-8 text-gray-400">Loading users...</div>;
+    return <LoadingSpinner message="Loading users..." />;
   }
 
   if (error) {

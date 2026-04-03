@@ -1,3 +1,4 @@
+import { LoadingSpinner } from '../components/LoadingSpinner';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -28,7 +29,7 @@ export default function Config() {
   const [copied, setCopied] = useState(false);
 
   if (configLoading || mappingsLoading) {
-    return <div className="text-center py-8 text-gray-400">Loading...</div>;
+    return <LoadingSpinner />;
   }
 
   const generateFullToml = () => {
