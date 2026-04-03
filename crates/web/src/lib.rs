@@ -52,6 +52,9 @@ pub struct AppState {
     /// Per-repo import progress tracking (repo_id -> progress).
     pub repo_import_progress:
         tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::RwLock<ImportProgress>>>>,
+    /// Login attempt tracker for rate limiting (IP -> (count, window_start)).
+    pub login_attempts:
+        std::sync::Mutex<HashMap<String, (u32, std::time::Instant)>>,
 }
 
 impl AppState {
@@ -101,6 +104,7 @@ impl WebServer {
             config_path,
             prev_net_snapshot: std::sync::Mutex::new(None),
             repo_import_progress: tokio::sync::RwLock::new(HashMap::new()),
+            login_attempts: std::sync::Mutex::new(HashMap::new()),
         });
         Self { state }
     }

@@ -95,8 +95,28 @@ async fn auth_info(
 
 async fn login(
     State(state): State<Arc<AppState>>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
+    // Rate limiting: max 10 login attempts per IP per 60 seconds
+    {
+        let ip = addr.ip().to_string();
+        let mut attempts = state.login_attempts.lock().unwrap_or_else(|p| p.into_inner());
+        let (count, window_start) = attempts
+            .entry(ip)
+            .or_insert((0, std::time::Instant::now()));
+        if window_start.elapsed() > std::time::Duration::from_secs(60) {
+            *count = 0;
+            *window_start = std::time::Instant::now();
+        }
+        *count += 1;
+        if *count > 10 {
+            return Err(AppError::BadRequest(
+                "too many login attempts, please try again later".into(),
+            ));
+        }
+    }
+
     // Check if any users exist in the database (multi-user mode).
     let has_users = {
         let db = &state.db;
