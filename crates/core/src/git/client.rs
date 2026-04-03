@@ -414,7 +414,9 @@ impl GitClient {
     pub fn get_commits_since(
         &self,
         since_sha: Option<&str>,
+        max_commits: Option<usize>,
     ) -> Result<Vec<GitCommitInfo>, GitError> {
+        let cap = max_commits.unwrap_or(1000);
         let mut revwalk = self.repo.revwalk()?;
         revwalk.push_head()?;
         revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
@@ -435,8 +437,8 @@ impl GitClient {
                 committer_name: commit.committer().name().unwrap_or("").to_string(),
                 committer_email: commit.committer().email().unwrap_or("").to_string(),
             });
-            if commits.len() >= 1000 {
-                warn!("reached 1000 commit limit");
+            if commits.len() >= cap {
+                info!(cap, "reached commit limit for get_commits_since");
                 break;
             }
         }

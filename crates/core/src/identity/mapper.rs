@@ -121,7 +121,10 @@ impl IdentityMapper {
             let mut resolver = ldap
                 .write()
                 .map_err(|_| IdentityError::LdapError("LDAP lock poisoned".into()))?;
-            if let Some(identity) = resolver.lookup_by_username(svn_username)? {
+            let ldap_result = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(resolver.lookup_by_username(svn_username))
+            })?;
+            if let Some(identity) = ldap_result {
                 debug!(svn_username, "found via LDAP");
                 // Cache the LDAP result for future lookups.
                 drop(resolver);
@@ -167,7 +170,10 @@ impl IdentityMapper {
             let mut resolver = ldap
                 .write()
                 .map_err(|_| IdentityError::LdapError("LDAP lock poisoned".into()))?;
-            if let Some(username) = resolver.lookup_by_email(git_email)? {
+            let ldap_result = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(resolver.lookup_by_email(git_email))
+            })?;
+            if let Some(username) = ldap_result {
                 debug!(git_email, svn_username = %username, "found via LDAP reverse");
                 return Ok(username);
             }

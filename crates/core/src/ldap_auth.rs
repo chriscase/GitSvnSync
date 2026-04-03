@@ -41,7 +41,7 @@ fn default_tls_verify() -> bool {
 }
 
 /// Escape special characters in an LDAP filter value per RFC 4515.
-fn escape_ldap_filter_value(input: &str) -> String {
+pub fn escape_ldap_filter_value(input: &str) -> String {
     let mut escaped = String::with_capacity(input.len());
     for c in input.chars() {
         match c {

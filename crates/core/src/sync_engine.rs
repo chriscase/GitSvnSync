@@ -987,7 +987,7 @@ impl SyncEngine {
         info!(since_sha = ?last_hash, "fetching Git changes");
 
         let commits = git
-            .get_commits_since(last_hash.as_deref())
+            .get_commits_since(last_hash.as_deref(), None)
             .map_err(SyncError::GitError)?;
 
         let mut change_sets: Vec<GitChangeSet> = Vec::new();

@@ -4,6 +4,7 @@ use hmac::{Hmac, Mac};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use tokio::time::sleep;
 use tracing::{debug, info, instrument, warn};
 
 use crate::config::GitProvider;
@@ -155,17 +156,35 @@ impl GitHubClient {
         repo: &str,
         since_sha: Option<&str>,
     ) -> Result<Vec<GitHubCommit>, GitHubError> {
-        let url = format!("{}/repos/{}/commits", self.api_url, repo);
-        let mut req = self.auth(self.http.get(&url));
-        if let Some(sha) = since_sha {
-            req = req.query(&[("sha", sha)]);
+        let first_url = format!("{}/repos/{}/commits", self.api_url, repo);
+        let since_sha = since_sha.map(|s| s.to_string());
+        let resp = self.retry_request(|| {
+            let mut req = self.auth(self.http.get(&first_url));
+            if let Some(ref sha) = since_sha {
+                req = req.query(&[("sha", sha.as_str())]);
+            }
+            req.query(&[("per_page", "100")])
+        }).await?;
+
+        let mut next_link = Self::parse_next_link(resp.headers());
+        let mut all_commits: Vec<GitHubCommit> = resp.json().await?;
+        let mut pages = 1usize;
+
+        while let Some(ref url) = next_link {
+            if pages >= 10 {
+                warn!(pages, "reached GitHub pagination limit for get_commits");
+                break;
+            }
+            let url_clone = url.clone();
+            let resp = self.retry_request(|| self.auth(self.http.get(&url_clone))).await?;
+            next_link = Self::parse_next_link(resp.headers());
+            let page: Vec<GitHubCommit> = resp.json().await?;
+            all_commits.extend(page);
+            pages += 1;
         }
-        req = req.query(&[("per_page", "100")]);
-        let resp = req.send().await?;
-        let resp = self.check_response(resp).await?;
-        let commits: Vec<GitHubCommit> = resp.json().await?;
-        debug!(count = commits.len(), "fetched commits");
-        Ok(commits)
+
+        debug!(count = all_commits.len(), pages, "fetched commits");
+        Ok(all_commits)
     }
 
     #[instrument(skip(self, secret))]
@@ -304,36 +323,54 @@ impl GitHubClient {
         base: &str,
         since: Option<&str>,
     ) -> Result<Vec<PullRequest>, GitHubError> {
-        let url = format!("{}/repos/{}/pulls", self.api_url, repo);
-        let mut req = self.auth(self.http.get(&url)).query(&[
-            ("state", "closed"),
-            ("base", base),
-            ("per_page", "50"),
-        ]);
-        if let Some(since_dt) = since {
-            req = req.query(&[("sort", "updated"), ("direction", "desc")]);
-            // Filter will be done client-side since GitHub doesn't support `since` on /pulls
-            let _ = since_dt; // used below
+        let first_url = format!("{}/repos/{}/pulls", self.api_url, repo);
+        let base = base.to_string();
+        let since = since.map(|s| s.to_string());
+        let resp = self.retry_request(|| {
+            let mut req = self.auth(self.http.get(&first_url)).query(&[
+                ("state", "closed"),
+                ("base", base.as_str()),
+                ("per_page", "100"),
+            ]);
+            if since.is_some() {
+                req = req.query(&[("sort", "updated"), ("direction", "desc")]);
+            }
+            req
+        }).await?;
+
+        let mut next_link = Self::parse_next_link(resp.headers());
+        let mut all_prs: Vec<PullRequest> = resp.json().await?;
+        let mut pages = 1usize;
+
+        while let Some(ref url) = next_link {
+            if pages >= 10 {
+                warn!(pages, "reached GitHub pagination limit for get_merged_pull_requests");
+                break;
+            }
+            let url_clone = url.clone();
+            let resp = self.retry_request(|| self.auth(self.http.get(&url_clone))).await?;
+            next_link = Self::parse_next_link(resp.headers());
+            let page: Vec<PullRequest> = resp.json().await?;
+            all_prs.extend(page);
+            pages += 1;
         }
-        let resp = req.send().await?;
-        let resp = self.check_response(resp).await?;
-        let prs: Vec<PullRequest> = resp.json().await?;
+
         // Filter to only merged PRs, optionally after a timestamp
-        let merged: Vec<PullRequest> = prs
+        let merged: Vec<PullRequest> = all_prs
             .into_iter()
             .filter(|pr| pr.merged == Some(true))
             .filter(|pr| {
-                if let Some(since_dt) = since {
+                if let Some(ref since_dt) = since {
                     pr.merged_at
                         .as_deref()
-                        .map(|m| m >= since_dt)
+                        .map(|m| m >= since_dt.as_str())
                         .unwrap_or(false)
                 } else {
                     true
                 }
             })
             .collect();
-        debug!(count = merged.len(), base, "fetched merged pull requests");
+        debug!(count = merged.len(), base = %base, pages, "fetched merged pull requests");
         Ok(merged)
     }
 
@@ -438,6 +475,66 @@ impl GitHubClient {
         let user: GitHubUser = resp.json().await?;
         debug!(login = %user.login, "fetched authenticated user");
         Ok(user)
+    }
+
+    /// Parse the `rel="next"` URL from a GitHub `Link` response header.
+    fn parse_next_link(headers: &reqwest::header::HeaderMap) -> Option<String> {
+        let link_val = headers.get("link")?.to_str().ok()?;
+        for part in link_val.split(',') {
+            let mut url_part = None;
+            let mut is_next = false;
+            for segment in part.split(';') {
+                let s = segment.trim();
+                if s.starts_with('<') && s.ends_with('>') {
+                    url_part = Some(s[1..s.len() - 1].to_string());
+                } else if s == "rel=\"next\"" {
+                    is_next = true;
+                }
+            }
+            if is_next {
+                return url_part;
+            }
+        }
+        None
+    }
+
+    /// Execute an HTTP request with exponential backoff retry.
+    ///
+    /// Retries up to 3 times on 429 (Too Many Requests) and 5xx server errors.
+    async fn retry_request<F>(&self, make_req: F) -> Result<reqwest::Response, GitHubError>
+    where
+        F: Fn() -> reqwest::RequestBuilder,
+    {
+        const MAX_RETRIES: u32 = 3;
+        let mut attempt = 0u32;
+        loop {
+            let resp = make_req().send().await?;
+            let status = resp.status();
+
+            if status.is_success() {
+                return Ok(resp);
+            }
+
+            let should_retry = status.as_u16() == 429 || status.is_server_error();
+            if !should_retry || attempt >= MAX_RETRIES {
+                return self.check_response(resp).await;
+            }
+
+            let wait_secs = if status.as_u16() == 429 {
+                resp.headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(1u64 << attempt)
+                    .min(60)
+            } else {
+                1u64 << attempt
+            };
+
+            warn!(status = status.as_u16(), attempt, wait_secs, "GitHub API transient error; retrying");
+            sleep(std::time::Duration::from_secs(wait_secs)).await;
+            attempt += 1;
+        }
     }
 
     /// Validate a response. On success, returns the response for further
