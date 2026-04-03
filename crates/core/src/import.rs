@@ -560,23 +560,51 @@ pub async fn run_full_import(
             }
         };
 
-        if let Err(e) = svn_client.export("", rev, export_dir.path()).await {
-            let msg = format!("[error] r{}: SVN export failed: {}", rev, e);
-            log(&progress, &ws_broadcast, msg.clone()).await;
-            let mut p = progress.write().await;
-            p.errors.push(msg);
-            continue;
+        // P6 optimization: for revisions after the first, try applying an
+        // incremental SVN diff instead of a full export.  Falls back to full
+        // export if the diff cannot be applied.
+        let mut used_incremental = false;
+        if idx > 0 {
+            match svn_client.diff_full(rev).await {
+                Ok(diff_text) if !diff_text.trim().is_empty() => {
+                    match crate::sync_engine::apply_diff_to_path(&repo_path, &diff_text).await {
+                        Ok(()) => {
+                            used_incremental = true;
+                            debug!(rev, "applied incremental SVN diff");
+                        }
+                        Err(e) => {
+                            debug!(rev, error = %e, "incremental diff failed, falling back to full export");
+                        }
+                    }
+                }
+                _ => {
+                    debug!(rev, "no diff available, using full export");
+                }
+            }
         }
 
-        // Remove stale files from Git working tree
-        if let Err(e) = remove_stale_files(export_dir.path(), &repo_path) {
-            let msg = format!("[warn] r{}: failed to remove stale files: {}", rev, e);
-            log(&progress, &ws_broadcast, msg).await;
+        if !used_incremental {
+            if let Err(e) = svn_client.export("", rev, export_dir.path()).await {
+                let msg = format!("[error] r{}: SVN export failed: {}", rev, e);
+                log(&progress, &ws_broadcast, msg.clone()).await;
+                let mut p = progress.write().await;
+                p.errors.push(msg);
+                continue;
+            }
+
+            // Remove stale files from Git working tree
+            if let Err(e) = remove_stale_files(export_dir.path(), &repo_path) {
+                let msg = format!("[warn] r{}: failed to remove stale files: {}", rev, e);
+                log(&progress, &ws_broadcast, msg).await;
+            }
         }
 
-        // Copy with policy enforcement
-        let copy_stats = match copy_tree_with_policy(export_dir.path(), &repo_path, file_policy, db)
-        {
+        // Copy with policy enforcement (only needed for full export path)
+        let copy_stats = if used_incremental {
+            CopyStats::default()
+        } else {
+            match copy_tree_with_policy(export_dir.path(), &repo_path, file_policy, db)
+            {
             Ok(s) => s,
             Err(e) => {
                 let msg = format!("[error] r{}: copy failed: {}", rev, e);
@@ -585,6 +613,7 @@ pub async fn run_full_import(
                 p.errors.push(msg);
                 continue;
             }
+        }
         };
 
         // Update file stats — use current file count (not cumulative)

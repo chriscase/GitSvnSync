@@ -401,44 +401,82 @@ impl SyncEngine {
             };
 
             if !diff_applied {
-                // Fallback: use svn export to copy changed files.
-                let export_dir = tempfile::tempdir()
-                    .map_err(|e| SyncError::GitError(crate::errors::GitError::IoError(e)))?;
-                // When using standard layout, export only the trunk subtree.
-                let export_path = if self.config.svn.layout == SvnLayout::Standard {
-                    self.config.svn.trunk_path.trim_matches('/').to_string()
-                } else {
-                    String::new()
-                };
-                {
-                    let svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner()).clone();
-                    svn.export(&export_path, change.revision, export_dir.path())
-                        .await
-                        .map_err(SyncError::SvnError)?;
-                }
+                // Fallback: fetch changed files individually when few files changed,
+                // or export the full tree when many files changed (P11 optimization).
+                let non_delete_count = change.changed_files.iter()
+                    .filter(|f| f.action != "D")
+                    .count();
 
-                // Copy each changed file from the export to the Git repo.
-                for file in &change.changed_files {
-                    let src = export_dir.path().join(&file.path);
-                    let dst = repo_path.join(&file.path);
-                    match file.action.as_str() {
-                        "D" => {
-                            if dst.exists() {
-                                std::fs::remove_file(&dst).map_err(|e| {
-                                    SyncError::GitError(crate::errors::GitError::IoError(e))
-                                })?;
+                if non_delete_count > 0 && non_delete_count <= 20 {
+                    // Use svn cat per file — much faster than full export for small changesets.
+                    let svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                    for file in &change.changed_files {
+                        let dst = repo_path.join(&file.path);
+                        match file.action.as_str() {
+                            "D" => {
+                                if dst.exists() {
+                                    std::fs::remove_file(&dst).map_err(|e| {
+                                        SyncError::GitError(crate::errors::GitError::IoError(e))
+                                    })?;
+                                }
+                            }
+                            _ => {
+                                if let Some(parent) = dst.parent() {
+                                    std::fs::create_dir_all(parent).map_err(|e| {
+                                        SyncError::GitError(crate::errors::GitError::IoError(e))
+                                    })?;
+                                }
+                                match svn.cat(&file.path, change.revision).await {
+                                    Ok(content) => {
+                                        std::fs::write(&dst, content.as_bytes()).map_err(|e| {
+                                            SyncError::GitError(crate::errors::GitError::IoError(e))
+                                        })?;
+                                    }
+                                    Err(e) => {
+                                        warn!(file = %file.path, error = %e, "svn cat failed, skipping file");
+                                    }
+                                }
                             }
                         }
-                        _ => {
-                            if let Some(parent) = dst.parent() {
-                                std::fs::create_dir_all(parent).map_err(|e| {
-                                    SyncError::GitError(crate::errors::GitError::IoError(e))
-                                })?;
+                    }
+                } else {
+                    // Full export fallback for large changesets.
+                    let export_dir = tempfile::tempdir()
+                        .map_err(|e| SyncError::GitError(crate::errors::GitError::IoError(e)))?;
+                    let export_path = if self.config.svn.layout == SvnLayout::Standard {
+                        self.config.svn.trunk_path.trim_matches('/').to_string()
+                    } else {
+                        String::new()
+                    };
+                    {
+                        let svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                        svn.export(&export_path, change.revision, export_dir.path())
+                            .await
+                            .map_err(SyncError::SvnError)?;
+                    }
+
+                    for file in &change.changed_files {
+                        let src = export_dir.path().join(&file.path);
+                        let dst = repo_path.join(&file.path);
+                        match file.action.as_str() {
+                            "D" => {
+                                if dst.exists() {
+                                    std::fs::remove_file(&dst).map_err(|e| {
+                                        SyncError::GitError(crate::errors::GitError::IoError(e))
+                                    })?;
+                                }
                             }
-                            if src.exists() && src.is_file() {
-                                std::fs::copy(&src, &dst).map_err(|e| {
-                                    SyncError::GitError(crate::errors::GitError::IoError(e))
-                                })?;
+                            _ => {
+                                if let Some(parent) = dst.parent() {
+                                    std::fs::create_dir_all(parent).map_err(|e| {
+                                        SyncError::GitError(crate::errors::GitError::IoError(e))
+                                    })?;
+                                }
+                                if src.exists() && src.is_file() {
+                                    std::fs::copy(&src, &dst).map_err(|e| {
+                                        SyncError::GitError(crate::errors::GitError::IoError(e))
+                                    })?;
+                                }
                             }
                         }
                     }
@@ -1203,7 +1241,7 @@ impl SyncEngine {
 ///
 /// This is a standalone async function that does not hold a reference to
 /// `GitClient`, avoiding `Send` issues with `git2::Repository`.
-async fn apply_diff_to_path(
+pub async fn apply_diff_to_path(
     repo_path: &std::path::Path,
     diff_content: &str,
 ) -> Result<(), crate::errors::GitError> {

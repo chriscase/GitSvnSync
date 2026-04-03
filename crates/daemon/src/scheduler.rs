@@ -64,6 +64,8 @@ pub struct Scheduler {
     running_repos: Arc<tokio::sync::Mutex<HashSet<String>>>,
     /// Handles for in-flight sync tasks, for graceful shutdown.
     pub sync_handles: Arc<tokio::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    /// Cached identity mapper (shared across all repo sync cycles).
+    cached_identity_mapper: std::sync::OnceLock<Arc<IdentityMapper>>,
 }
 
 impl Scheduler {
@@ -87,6 +89,7 @@ impl Scheduler {
             app_config,
             running_repos: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
             sync_handles: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            cached_identity_mapper: std::sync::OnceLock::new(),
         }
     }
 
@@ -434,12 +437,21 @@ impl Scheduler {
                 .ensure_remote_credentials("origin", git_token.as_deref())
                 .ok();
 
-            // Build identity mapper (shared config).
-            let identity_mapper = match IdentityMapper::new(&self.app_config.identity) {
-                Ok(m) => Arc::new(m),
-                Err(e) => {
-                    error!(repo_name = %repo.name, error = %e, "failed to create identity mapper");
-                    continue;
+            // Reuse cached identity mapper when possible (P7 optimization).
+            let identity_mapper = match self.cached_identity_mapper.get() {
+                Some(cached) => cached.clone(),
+                None => {
+                    match IdentityMapper::new(&self.app_config.identity) {
+                        Ok(m) => {
+                            let arc = Arc::new(m);
+                            let _ = self.cached_identity_mapper.set(arc.clone());
+                            arc
+                        }
+                        Err(e) => {
+                            error!(repo_name = %repo.name, error = %e, "failed to create identity mapper");
+                            continue;
+                        }
+                    }
                 }
             };
 
