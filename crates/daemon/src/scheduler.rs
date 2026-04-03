@@ -105,6 +105,10 @@ impl Scheduler {
         // time to fully start before the first sync.
         interval.tick().await;
 
+        // Run maintenance (audit pruning, retention) every ~10 minutes.
+        let maintenance_ticks = (600 / self.poll_interval.as_secs().max(1)) as u64;
+        let mut tick_count: u64 = 0;
+
         loop {
             tokio::select! {
                 // Shutdown signal takes priority
@@ -114,10 +118,18 @@ impl Scheduler {
                 }
                 // Regular polling interval
                 _ = interval.tick() => {
+                    tick_count += 1;
                     // Per-repo scheduler handles all repos from the DB.
-                    // The global TOML-based engine is disabled — it was causing
-                    // noise errors when the TOML SVN password was wrong.
                     self.maybe_run_repo_cycles().await;
+                    // Periodic maintenance (every ~10 minutes)
+                    if tick_count % maintenance_ticks == 0 {
+                        if let Err(e) = self.db.run_maintenance(90) {
+                            warn!("periodic maintenance failed: {}", e);
+                        }
+                        if let Err(e) = self.db.prune_audit_log(1000) {
+                            warn!("audit log pruning failed: {}", e);
+                        }
+                    }
                 }
                 // Webhook-triggered immediate sync
                 Some(()) = self.sync_rx.recv() => {

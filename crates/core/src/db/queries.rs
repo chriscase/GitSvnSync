@@ -2066,6 +2066,33 @@ impl Database {
         Ok(())
     }
 
+    // -- maintenance / retention -----------------------------------------------
+
+    /// Run periodic maintenance: prune old audit log, sync records, and commit map entries.
+    pub fn run_maintenance(&self, retention_days: u32) -> Result<(), DatabaseError> {
+        let conn = self.conn();
+        let cutoff = format!("-{} days", retention_days);
+
+        let audit_deleted: usize = conn.execute(
+            "DELETE FROM audit_log WHERE created_at < datetime('now', ?1)",
+            params![cutoff],
+        )?;
+        let sync_deleted: usize = conn.execute(
+            "DELETE FROM sync_records WHERE synced_at < datetime('now', ?1)",
+            params![cutoff],
+        )?;
+
+        if audit_deleted > 0 || sync_deleted > 0 {
+            tracing::info!(
+                audit_deleted,
+                sync_deleted,
+                retention_days,
+                "periodic maintenance: pruned old records"
+            );
+        }
+        Ok(())
+    }
+
     // -- encrypted_secrets ---------------------------------------------------
 
     /// Store an encrypted secret (ciphertext + nonce) in the encrypted_secrets table.

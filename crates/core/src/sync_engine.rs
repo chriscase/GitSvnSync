@@ -232,23 +232,18 @@ impl SyncEngine {
 
     /// Get a status summary.
     pub fn get_status(&self) -> Result<crate::models::SyncStatus, SyncError> {
-        let state_str = self
-            .db
-            .get_state("sync_state")
-            .map_err(SyncError::DatabaseError)?
-            .unwrap_or_else(|| "idle".to_string());
-
-        let last_sync_str = self
-            .db
-            .get_state("last_sync_at")
+        // Use the consolidated summary query to reduce mutex acquisitions
+        // (1 query instead of 8+ separate queries).
+        let summary = self.db.get_status_summary(self.repo_id.as_deref())
             .map_err(SyncError::DatabaseError)?;
 
-        let last_sync_at = last_sync_str.and_then(|s| {
+        let last_sync_at = summary.last_sync_at.and_then(|s| {
             chrono::DateTime::parse_from_rfc3339(&s)
                 .ok()
                 .map(|dt| dt.with_timezone(&Utc))
         });
 
+        // SVN rev and git hash need per-repo key lookups not in the summary
         let last_svn_rev = match self
             .db
             .get_state(&self.svn_rev_key())
@@ -271,32 +266,19 @@ impl SyncEngine {
                 .get_last_git_hash()
                 .map_err(SyncError::DatabaseError)?,
         };
-        let total_syncs = self
-            .db
-            .count_sync_records()
-            .map_err(SyncError::DatabaseError)?;
-        let total_conflicts = self
-            .db
-            .count_all_conflicts()
-            .map_err(SyncError::DatabaseError)?;
-        let active_conflicts = self
-            .db
-            .count_active_conflicts()
-            .map_err(SyncError::DatabaseError)?;
-        let total_errors = self.db.count_errors().map_err(SyncError::DatabaseError)?;
         let last_error_at = self.db.last_error_at().map_err(SyncError::DatabaseError)?;
 
         let uptime = (Utc::now() - self.started_at).num_seconds().max(0) as u64;
 
         Ok(crate::models::SyncStatus {
-            state: crate::models::SyncState::from_str_val(&state_str),
+            state: crate::models::SyncState::from_str_val(&summary.sync_state),
             last_sync_at,
             last_svn_revision: last_svn_rev,
             last_git_hash,
-            total_syncs,
-            total_conflicts,
-            active_conflicts,
-            total_errors,
+            total_syncs: summary.total_syncs,
+            total_conflicts: summary.total_conflicts,
+            active_conflicts: summary.active_conflicts,
+            total_errors: summary.recent_errors,
             last_error_at,
             uptime_secs: uptime,
         })
@@ -565,6 +547,13 @@ impl SyncEngine {
     async fn sync_git_to_svn(&self, git_changes: &[GitChangeSet]) -> Result<usize, SyncError> {
         let mut count = 0;
 
+        // Reuse a single SVN working copy across all commits (P4 optimization).
+        // Create the tempdir once and use `svn update` between commits instead
+        // of a fresh `checkout_head` per commit.
+        let svn_wc_dir = tempfile::tempdir()
+            .map_err(|e| SyncError::SvnError(crate::errors::SvnError::IoError(e)))?;
+        let mut svn_wc_initialized = false;
+
         for change in git_changes {
             if self.is_echo_commit(&change.message) {
                 debug!(sha = %change.sha, "skipping echo Git commit");
@@ -579,15 +568,15 @@ impl SyncEngine {
             // 1. Get changed files and their contents from the Git commit.
             //    Lock is scoped in a block so the guard is dropped before any
             //    .await (std::sync::MutexGuard is !Send).
-            let (_changed_files, file_contents) = {
+            let file_contents = {
                 let git = self.git_client.lock().unwrap_or_else(|p| p.into_inner());
-                let files = git
-                    .get_changed_files(&change.sha)
-                    .map_err(SyncError::GitError)?;
-                // Pre-fetch file contents for A(dd) and M(odify) actions.
-                let contents: Vec<(String, String, Option<Vec<u8>>)> = files
+                // Use the pre-populated changed_files from fetch_git_changes
+                // instead of re-calling get_changed_files (P5 optimization).
+                let contents: Vec<(String, String, Option<Vec<u8>>)> = change
+                    .changed_files
                     .iter()
-                    .map(|(action, path)| {
+                    .map(|f| {
+                        let (action, path) = (&f.action, &f.path);
                         let content = if action != "D" {
                             git.get_file_content_at_commit(&change.sha, path)
                                 .ok()
@@ -598,25 +587,31 @@ impl SyncEngine {
                         (action.clone(), path.clone(), content)
                     })
                     .collect();
-                (files, contents)
+                contents
             };
 
-            // 2. Prepare an SVN working copy. Use a temporary checkout.
-            let svn_wc_dir = tempfile::tempdir()
-                .map_err(|e| SyncError::SvnError(crate::errors::SvnError::IoError(e)))?;
+            // 2. Prepare SVN working copy: checkout on first use, update thereafter.
             let svn_url_for_log;
             {
                 let svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner()).clone();
                 svn_url_for_log = svn.url().to_string();
-                debug!(
-                    sha = %change.sha,
-                    svn_url = %svn_url_for_log,
-                    wc_path = %svn_wc_dir.path().display(),
-                    "checking out SVN HEAD into temp working copy"
-                );
-                svn.checkout_head(svn_wc_dir.path())
-                    .await
-                    .map_err(SyncError::SvnError)?;
+                if !svn_wc_initialized {
+                    debug!(
+                        sha = %change.sha,
+                        svn_url = %svn_url_for_log,
+                        wc_path = %svn_wc_dir.path().display(),
+                        "checking out SVN HEAD into temp working copy"
+                    );
+                    svn.checkout_head(svn_wc_dir.path())
+                        .await
+                        .map_err(SyncError::SvnError)?;
+                    svn_wc_initialized = true;
+                } else {
+                    debug!(sha = %change.sha, "updating SVN working copy to HEAD");
+                    svn.update(svn_wc_dir.path())
+                        .await
+                        .map_err(SyncError::SvnError)?;
+                }
             }
 
             // 3. Copy changed files from Git into the SVN working copy.
