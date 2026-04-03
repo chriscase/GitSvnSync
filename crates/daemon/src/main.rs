@@ -277,21 +277,24 @@ async fn main() -> Result<()> {
                 warn!("Clone failed ({}), initializing empty git repo", e);
                 std::fs::create_dir_all(&git_repo_path)
                     .context("failed to create git repo directory")?;
-                let init_output = std::process::Command::new("git")
+                let init_output = tokio::process::Command::new("git")
                     .args(["init", "--initial-branch", &config.github.default_branch])
                     .current_dir(&git_repo_path)
-                    .output();
+                    .output()
+                    .await;
                 if init_output.is_err() || !init_output.as_ref().unwrap().status.success() {
                     // Fallback for older git without --initial-branch
-                    let _ = std::process::Command::new("git")
+                    let _ = tokio::process::Command::new("git")
                         .args(["init"])
                         .current_dir(&git_repo_path)
-                        .output();
+                        .output()
+                        .await;
                 }
-                let _ = std::process::Command::new("git")
+                let _ = tokio::process::Command::new("git")
                     .args(["remote", "add", "origin", &clone_url])
                     .current_dir(&git_repo_path)
-                    .output();
+                    .output()
+                    .await;
                 GitClient::new(&git_repo_path)
                     .context("failed to open newly initialized Git repository")?
             }
@@ -386,10 +389,11 @@ async fn main() -> Result<()> {
 
             if let Some(git_dir) = git_dir {
                 // Read git log and scan for sync markers
-                let output = std::process::Command::new("git")
+                let output = tokio::process::Command::new("git")
                     .args(["log", "--oneline", "-200", "--format=%H %s"])
                     .current_dir(git_dir)
-                    .output();
+                    .output()
+                    .await;
                 if let Ok(output) = output {
                     if output.status.success() {
                         let log_text = String::from_utf8_lossy(&output.stdout);
@@ -518,6 +522,9 @@ async fn main() -> Result<()> {
         config.clone(),
     );
 
+    // Capture sync handles for graceful shutdown before moving sched
+    let sync_handles = sched.sync_handles.clone();
+
     // Start the scheduler in a background task
     let scheduler_handle = tokio::spawn(async move {
         sched.run(scheduler_shutdown).await;
@@ -536,6 +543,29 @@ async fn main() -> Result<()> {
         Ok(Ok(())) => info!("scheduler stopped gracefully"),
         Ok(Err(e)) => warn!("scheduler task error: {}", e),
         Err(_) => warn!("scheduler did not stop within 10s, forcing shutdown"),
+    }
+
+    // Wait for in-flight sync tasks (up to 30s)
+    {
+        let handles: Vec<_> = {
+            let mut locked = sync_handles.lock().await;
+            locked.drain(..).filter(|h| !h.is_finished()).collect()
+        };
+        if !handles.is_empty() {
+            info!(count = handles.len(), "waiting for in-flight sync tasks...");
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+            for handle in handles {
+                match tokio::time::timeout_at(deadline, handle).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => warn!("sync task error: {}", e),
+                    Err(_) => {
+                        warn!("remaining sync tasks did not complete within 30s");
+                        break;
+                    }
+                }
+            }
+            info!("in-flight sync task shutdown complete");
+        }
     }
 
     // Abort the web server

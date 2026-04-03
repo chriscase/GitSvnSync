@@ -125,9 +125,10 @@ impl GitClient {
         Ok(())
     }
 
-    /// Fetch from a named remote.
+    /// Fetch from a named remote with a 5-minute timeout.
     #[instrument(skip(self, token))]
     pub fn fetch(&self, remote_name: &str, token: Option<&str>) -> Result<(), GitError> {
+        const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
         info!(remote = remote_name, "fetching");
         let mut remote = self.repo.find_remote(remote_name)?;
         let mut callbacks = RemoteCallbacks::new();
@@ -137,9 +138,22 @@ impl GitClient {
                 Cred::userpass_plaintext("x-access-token", &tok)
             });
         }
+        // Abort the transfer if it exceeds the timeout.
+        let fetch_start = std::time::Instant::now();
+        let fetch_start_for_cb = fetch_start;
+        callbacks.transfer_progress(move |_stats| {
+            fetch_start_for_cb.elapsed() < FETCH_TIMEOUT
+        });
         let mut fetch_opts = FetchOptions::new();
         fetch_opts.remote_callbacks(callbacks);
-        remote.fetch(&[] as &[&str], Some(&mut fetch_opts), None)?;
+        remote.fetch(&[] as &[&str], Some(&mut fetch_opts), None)
+            .map_err(|e| {
+                if fetch_start.elapsed() >= FETCH_TIMEOUT {
+                    GitError::ApplyFailed(format!("git fetch timed out after {}s", FETCH_TIMEOUT.as_secs()))
+                } else {
+                    e.into()
+                }
+            })?;
         debug!("fetch completed");
         Ok(())
     }

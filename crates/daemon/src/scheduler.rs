@@ -62,6 +62,8 @@ pub struct Scheduler {
     app_config: AppConfig,
     /// Set of repo IDs currently being synced, to prevent overlapping runs.
     running_repos: Arc<tokio::sync::Mutex<HashSet<String>>>,
+    /// Handles for in-flight sync tasks, for graceful shutdown.
+    pub sync_handles: Arc<tokio::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
 impl Scheduler {
@@ -84,6 +86,7 @@ impl Scheduler {
             db,
             app_config,
             running_repos: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+            sync_handles: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -389,14 +392,16 @@ impl Scheduler {
                             error = %e,
                             "clone failed, initializing empty git repo"
                         );
-                        let _ = std::process::Command::new("git")
+                        let _ = tokio::process::Command::new("git")
                             .args(["init", "--initial-branch", &repo.git_branch])
                             .current_dir(&git_repo_path)
-                            .output();
-                        let _ = std::process::Command::new("git")
+                            .output()
+                            .await;
+                        let _ = tokio::process::Command::new("git")
                             .args(["remote", "add", "origin", &clone_url])
                             .current_dir(&git_repo_path)
-                            .output();
+                            .output()
+                            .await;
                         match GitClient::new(&git_repo_path) {
                             Ok(c) => c,
                             Err(e) => {
@@ -465,7 +470,8 @@ impl Scheduler {
 
             info!(repo_name = %repo_name, repo_id = %repo_id, "starting per-repo sync cycle");
 
-            tokio::spawn(async move {
+            let sync_handles = self.sync_handles.clone();
+            let handle = tokio::spawn(async move {
                 let result = engine.run_sync_cycle().await;
 
                 match &result {
@@ -509,6 +515,14 @@ impl Scheduler {
                 let mut running = running_repos.lock().await;
                 running.remove(&repo_id);
             });
+
+            // Track the handle for graceful shutdown.
+            {
+                let mut handles = sync_handles.lock().await;
+                // Clean up completed handles while we're here.
+                handles.retain(|h| !h.is_finished());
+                handles.push(handle);
+            }
         }
     }
 }
