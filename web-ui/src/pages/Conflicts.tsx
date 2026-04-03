@@ -9,6 +9,7 @@ export default function Conflicts() {
   const { data: conflicts, isLoading } = useQuery({
     queryKey: ['conflicts', filter],
     queryFn: () => api.getConflicts(filter || undefined),
+    refetchInterval: 10000,
   });
 
   if (isLoading) {

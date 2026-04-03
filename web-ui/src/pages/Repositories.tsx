@@ -596,6 +596,9 @@ export default function Repositories() {
                       <label className="block text-sm text-gray-400 mb-1">Auto Merge</label>
                       <button
                         type="button"
+                        role="switch"
+                        aria-checked={form.auto_merge}
+                        aria-label="Auto merge"
                         onClick={() => setField('auto_merge', !form.auto_merge)}
                         className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                           form.auto_merge ? 'bg-blue-600' : 'bg-gray-600'
@@ -612,6 +615,9 @@ export default function Repositories() {
                       <label className="block text-sm text-gray-400 mb-1">Enabled</label>
                       <button
                         type="button"
+                        role="switch"
+                        aria-checked={form.enabled}
+                        aria-label="Enabled"
                         onClick={() => setField('enabled', !form.enabled)}
                         className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                           form.enabled ? 'bg-green-600' : 'bg-gray-600'

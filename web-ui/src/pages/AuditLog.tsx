@@ -42,8 +42,9 @@ export default function AuditLog() {
   const successParam = successFilter === 'failure' ? false : successFilter === 'success' ? true : undefined;
 
   const { data: response, isLoading, isError, error } = useQuery({
-    queryKey: ['audit', PAGE_SIZE, page, successFilter],
+    queryKey: ['audit', PAGE_SIZE, page, successFilter, actionFilter],
     queryFn: () => api.getAuditLog(PAGE_SIZE, page, successParam),
+    refetchInterval: 15000,
   });
 
   if (isLoading) {
