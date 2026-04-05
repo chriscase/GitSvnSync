@@ -334,6 +334,11 @@ impl SyncEngine {
         for change in svn_changes {
             if self.is_echo_commit(&change.message) {
                 debug!(rev = change.revision, "skipping echo SVN revision");
+                // Still advance the watermark so we don't re-fetch this
+                // echo commit on every subsequent cycle.
+                let _ = self
+                    .db
+                    .set_state("last_svn_rev", &change.revision.to_string());
                 continue;
             }
 
@@ -482,6 +487,9 @@ impl SyncEngine {
         for change in git_changes {
             if self.is_echo_commit(&change.message) {
                 debug!(sha = %change.sha, "skipping echo Git commit");
+                // Still advance the watermark so we don't re-fetch this
+                // echo commit on every subsequent cycle.
+                let _ = self.db.set_state("last_git_hash", &change.sha);
                 continue;
             }
 
@@ -615,20 +623,39 @@ impl SyncEngine {
     // -----------------------------------------------------------------------
 
     async fn fetch_svn_changes(&self) -> Result<Vec<SvnChangeSet>, SyncError> {
-        // Check the state table first (written by sync_svn_to_git), then fall
-        // back to commit_map / sync_records for databases created by older
-        // versions.
+        // Check the state table first (written by sync_svn_to_git), then the
+        // watermarks table (written by import), then fall back to commit_map /
+        // sync_records for databases created by older versions.
         let last_rev = match self
             .db
             .get_state("last_svn_rev")
             .map_err(SyncError::DatabaseError)?
         {
             Some(s) => s.parse::<i64>().unwrap_or(0),
-            None => self
-                .db
-                .get_last_svn_revision()
-                .map_err(SyncError::DatabaseError)?
-                .unwrap_or(0),
+            None => {
+                // Import writes to the watermarks table with key "svn_rev",
+                // so check there before falling back to sync_records.
+                if let Some(wm) = self
+                    .db
+                    .get_watermark("svn_rev")
+                    .map_err(SyncError::DatabaseError)?
+                {
+                    let rev = wm.parse::<i64>().unwrap_or(0);
+                    if rev > 0 {
+                        // Promote to kv_state so subsequent cycles don't
+                        // repeat this fallback.
+                        let _ = self.db.set_state("last_svn_rev", &rev.to_string());
+                        rev
+                    } else {
+                        0
+                    }
+                } else {
+                    self.db
+                        .get_last_svn_revision()
+                        .map_err(SyncError::DatabaseError)?
+                        .unwrap_or(0)
+                }
+            }
         };
 
         info!(since_rev = last_rev, "fetching SVN changes");
@@ -646,6 +673,10 @@ impl SyncEngine {
             .log(last_rev + 1, head_rev)
             .await
             .map_err(SyncError::SvnError)?;
+
+        // Track the highest revision we've seen (echo or not) so we can
+        // advance the watermark even when all entries are echoes.
+        let max_rev = entries.iter().map(|e| e.revision).max();
 
         let change_sets: Vec<SvnChangeSet> = entries
             .into_iter()
@@ -670,6 +701,14 @@ impl SyncEngine {
             })
             .collect();
 
+        // If we filtered out echo commits but have no real changes, advance
+        // the watermark so we don't re-fetch the same echoes next cycle.
+        if change_sets.is_empty() {
+            if let Some(rev) = max_rev {
+                let _ = self.db.set_state("last_svn_rev", &rev.to_string());
+            }
+        }
+
         debug!(count = change_sets.len(), "fetched SVN change sets");
         Ok(change_sets)
     }
@@ -680,19 +719,36 @@ impl SyncEngine {
         let token = self.config.github.token.as_deref();
         git.fetch("origin", token).map_err(SyncError::GitError)?;
 
-        // Check the state table first (written by sync_git_to_svn), then fall
-        // back to commit_map / sync_records for databases created by older
-        // versions.
+        // Check the state table first (written by sync_git_to_svn), then the
+        // watermarks table (written by import), then fall back to commit_map /
+        // sync_records for databases created by older versions.
         let last_hash = match self
             .db
             .get_state("last_git_hash")
             .map_err(SyncError::DatabaseError)?
         {
             Some(s) if !s.is_empty() => Some(s),
-            _ => self
-                .db
-                .get_last_git_hash()
-                .map_err(SyncError::DatabaseError)?,
+            _ => {
+                // Import writes to the watermarks table with key "git_sha".
+                if let Some(wm) = self
+                    .db
+                    .get_watermark("git_sha")
+                    .map_err(SyncError::DatabaseError)?
+                {
+                    if !wm.is_empty() {
+                        // Promote to kv_state so subsequent cycles don't
+                        // repeat this fallback.
+                        let _ = self.db.set_state("last_git_hash", &wm);
+                        Some(wm)
+                    } else {
+                        None
+                    }
+                } else {
+                    self.db
+                        .get_last_git_hash()
+                        .map_err(SyncError::DatabaseError)?
+                }
+            }
         };
 
         info!(since_sha = ?last_hash, "fetching Git changes");
@@ -702,8 +758,10 @@ impl SyncEngine {
             .map_err(SyncError::GitError)?;
 
         let mut change_sets: Vec<GitChangeSet> = Vec::new();
+        let mut last_seen_sha: Option<String> = None;
         for c in commits {
             if self.is_echo_commit(&c.message) {
+                last_seen_sha = Some(c.sha);
                 continue;
             }
             // Populate changed_files from the commit's diff.
@@ -724,6 +782,14 @@ impl SyncEngine {
                 message: c.message,
                 changed_files,
             });
+        }
+
+        // If we skipped echo commits but found no real changes, advance
+        // the git watermark so we don't re-fetch the same echoes next cycle.
+        if change_sets.is_empty() {
+            if let Some(sha) = last_seen_sha {
+                let _ = self.db.set_state("last_git_hash", &sha);
+            }
         }
 
         // Reverse so oldest commits are replayed first.  get_commits_since
