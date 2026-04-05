@@ -1,6 +1,6 @@
 # Enterprise Soak/Canary Validation Runbook
 
-Staged soak protocol for validating GitSvnSync before production enablement on GitHub Enterprise (Cloud/Server) with legacy SVN.
+Staged soak protocol for validating RepoSync before production enablement on GitHub Enterprise (Cloud/Server) with legacy SVN.
 
 > **Scope note:** This runbook covers `enterprise-soak.sh`, which runs **local-only**
 > repeated-cycle stability tests using `file://` SVN repos and the log-probe subsystem.
@@ -13,7 +13,7 @@ Staged soak protocol for validating GitSvnSync before production enablement on G
 
 ```
 ┌─────────────┐     ┌────────────────┐     ┌──────────────┐
-│ SVN Server   │◄───►│ GitSvnSync     │◄───►│ GitHub       │
+│ SVN Server   │◄───►│ RepoSync       │◄───►│ GitHub       │
 │ (on-prem/    │     │ daemon         │     │ Enterprise   │
 │  hosted)     │     │                │     │ (Cloud/      │
 │              │     │ personal.db    │     │  Server)     │
@@ -41,7 +41,7 @@ Staged soak protocol for validating GitSvnSync before production enablement on G
 - [ ] SVN server accessible from daemon host (`svn info <url>`)
 - [ ] GitHub API accessible (`curl -H "Authorization: token <pat>" https://<api>/user`)
 - [ ] Target GitHub repo exists and is writable
-- [ ] Personal config file validated (`gitsvnsync-personal --config <path> status`)
+- [ ] Personal config file validated (`reposync-personal --config <path> status`)
 - [ ] Data directory writable with sufficient disk space (100MB minimum for soak)
 
 ## Running the Soak
@@ -66,7 +66,7 @@ scripts/enterprise-soak.sh --cycles 20 --max-error-rate 0
 
 1. **Synthetic canary commit**: Injects a unique file into SVN with timestamped content
 2. **Content verification**: Reads back the committed file and verifies byte-exact match
-3. **Log probe**: Runs `gitsvnsync-personal log-probe` to verify logging subsystem health
+3. **Log probe**: Runs `reposync-personal log-probe` to verify logging subsystem health
 4. **Health snapshot**: Records SVN head revision, disk usage, and timing
 
 ### Enterprise-Specific Validation (Live)
@@ -158,12 +158,12 @@ If issues are discovered after production enablement:
 
 1. Stop the daemon:
    ```bash
-   gitsvnsync-personal --config <path> stop
+   reposync-personal --config <path> stop
    ```
 
 2. Verify daemon stopped:
    ```bash
-   gitsvnsync-personal --config <path> status
+   reposync-personal --config <path> status
    # Should show "○ Not running"
    ```
 
@@ -187,7 +187,7 @@ If issues are discovered after production enablement:
 
 6. Restart with corrected configuration:
    ```bash
-   gitsvnsync-personal --config <path> start --foreground
+   reposync-personal --config <path> start --foreground
    # Watch output until satisfied, then restart in background mode
    ```
 
@@ -211,6 +211,6 @@ When investigating a soak or production failure, collect:
 - [ ] GitHub API rate limit status (`X-RateLimit-*` headers)
 - [ ] Network connectivity test results
 - [ ] Environment variables (sanitized — no tokens)
-- [ ] Daemon process status (`ps aux | grep gitsvnsync`)
+- [ ] Daemon process status (`ps aux | grep reposync`)
 - [ ] Disk space (`df -h`)
 - [ ] Soak artifact bundle (if from a scripted run)

@@ -13,13 +13,13 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
-use gitsvnsync_core::config::AppConfig;
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::file_policy::FilePolicy;
-use gitsvnsync_core::git::GitClient;
-use gitsvnsync_core::identity::IdentityMapper;
-use gitsvnsync_core::import::{self, ImportConfig, ImportProgress, ImportPhase};
-use gitsvnsync_core::svn::SvnClient;
+use reposync_core::config::AppConfig;
+use reposync_core::db::Database;
+use reposync_core::file_policy::FilePolicy;
+use reposync_core::git::GitClient;
+use reposync_core::identity::IdentityMapper;
+use reposync_core::import::{self, ImportConfig, ImportProgress, ImportPhase};
+use reposync_core::svn::SvnClient;
 
 use crate::api::auth::validate_session_with_role;
 use crate::api::status::AppError;
@@ -490,8 +490,8 @@ async fn apply_config(
 
         if let Some(ref password) = body.svn_password {
             if !password.is_empty() {
-                match gitsvnsync_core::crypto::get_or_create_encryption_key(db) {
-                    Ok(key) => match gitsvnsync_core::crypto::encrypt_credential(password, &key) {
+                match reposync_core::crypto::get_or_create_encryption_key(db) {
+                    Ok(key) => match reposync_core::crypto::encrypt_credential(password, &key) {
                         Ok((ct, nonce)) => {
                             let _ = db.store_encrypted_secret("svn_password", &ct, &nonce);
                             // Remove legacy plaintext if present
@@ -507,8 +507,8 @@ async fn apply_config(
 
         if let Some(ref token) = body.git_token {
             if !token.is_empty() {
-                match gitsvnsync_core::crypto::get_or_create_encryption_key(db) {
-                    Ok(key) => match gitsvnsync_core::crypto::encrypt_credential(token, &key) {
+                match reposync_core::crypto::get_or_create_encryption_key(db) {
+                    Ok(key) => match reposync_core::crypto::encrypt_credential(token, &key) {
                         Ok((ct, nonce)) => {
                             let _ = db.store_encrypted_secret("git_token", &ct, &nonce);
                             let _ = db.set_state("secret_git_token", "");
@@ -523,7 +523,7 @@ async fn apply_config(
 
         if let Some(ref password) = body.web_admin_password {
             if !password.is_empty() {
-                match gitsvnsync_core::crypto::hash_password(password) {
+                match reposync_core::crypto::hash_password(password) {
                     Ok(hash) => {
                         let _ = db.set_state("secret_admin_password_hash", &hash);
                         // Remove legacy plaintext if present
@@ -550,7 +550,7 @@ async fn apply_config(
         // Check if a default repository already exists (update it), otherwise create one.
         let existing_repos = db.list_repositories().unwrap_or_default();
         if let Some(existing) = existing_repos.into_iter().next() {
-            let updated = gitsvnsync_core::models::Repository {
+            let updated = reposync_core::models::Repository {
                 svn_url: body.svn_url.clone(),
                 svn_branch: body.svn_trunk_path.clone().unwrap_or_default(),
                 svn_username: body.svn_username.clone(),
@@ -570,7 +570,7 @@ async fn apply_config(
                 Err(e) => warnings.push(format!("Failed to update repository: {}", e)),
             }
         } else {
-            let new_repo = gitsvnsync_core::models::Repository {
+            let new_repo = reposync_core::models::Repository {
                 id: uuid::Uuid::new_v4().to_string(),
                 name: body.git_repo.clone(),
                 svn_url: body.svn_url.clone(),
@@ -605,7 +605,7 @@ async fn apply_config(
 
     // LFS check
     if body.lfs_threshold.unwrap_or(0) > 0 {
-        match gitsvnsync_core::lfs::preflight_check() {
+        match reposync_core::lfs::preflight_check() {
             Ok(version) => {
                 info!("LFS preflight passed: {}", version);
             }
@@ -828,7 +828,7 @@ async fn spawn_import_task(state: &Arc<AppState>) -> Result<(), AppError> {
     let identity_mapper = IdentityMapper::new(&config.identity)
         .map_err(|e| AppError::Internal(format!("failed to init identity mapper: {}", e)))?;
     let file_policy = FilePolicy::from(&config.sync);
-    let db_path = config.daemon.data_dir.join("gitsvnsync.db");
+    let db_path = config.daemon.data_dir.join("reposync.db");
     let import_db = Database::new(&db_path)
         .map_err(|e| AppError::Internal(format!("failed to open db: {}", e)))?;
 

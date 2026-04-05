@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Setup the complete GitSvnSync test environment
+# Setup the complete RepoSync test environment
 # Usage: ./tests/scripts/setup-test-env.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 TESTS_DIR="$PROJECT_DIR/tests"
 
-echo "==> GitSvnSync Test Environment Setup"
+echo "==> RepoSync Test Environment Setup"
 echo "    Project: $PROJECT_DIR"
 echo ""
 
@@ -31,7 +31,7 @@ else
 fi
 
 # Build the project first
-echo "==> Building GitSvnSync..."
+echo "==> Building RepoSync..."
 cd "$PROJECT_DIR"
 cargo build 2>&1 | tail -5
 
@@ -62,7 +62,7 @@ echo "==> Test environment ready!"
 echo ""
 echo "    SVN Server:    http://localhost:8081/svn/testrepo"
 echo "    Gitea:         http://localhost:3000"
-echo "    GitSvnSync:    http://localhost:8080"
+echo "    RepoSync:    http://localhost:8080"
 echo ""
 echo "    Run tests:     make test-e2e"
 echo "    Tear down:     make test-env-down"

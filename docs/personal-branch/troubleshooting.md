@@ -1,6 +1,6 @@
 # Personal Branch Mode: Troubleshooting
 
-Common issues and solutions for GitSvnSync Personal Branch Mode.
+Common issues and solutions for RepoSync Personal Branch Mode.
 
 ## Table of Contents
 
@@ -25,25 +25,25 @@ Common issues and solutions for GitSvnSync Personal Branch Mode.
 The `doctor` command runs a comprehensive health check on your personal branch setup. Start here whenever something seems wrong:
 
 ```bash
-gitsvnsync personal doctor
+reposync personal doctor
 ```
 
 Example output:
 
 ```
-GitSvnSync Doctor
+RepoSync Doctor
 ═════════════════
 
   [OK]  Configuration     Valid
-  [OK]  Data Directory    /home/user/.local/share/gitsvnsync
+  [OK]  Data Directory    /home/user/.local/share/reposync
   [OK]  Database          OK
-  [OK]  Git Repository    /home/user/.local/share/gitsvnsync/git-repo
-  [OK]  SVN Working Copy  /home/user/.local/share/gitsvnsync/svn-wc
+  [OK]  Git Repository    /home/user/.local/share/reposync/git-repo
+  [OK]  SVN Working Copy  /home/user/.local/share/reposync/svn-wc
   [!!]  Daemon            Not running
   [OK]  Watermarks        SVN: r1042, Git: a3f7b2c
 
   ! 1 issue(s) found:
-    1. Start daemon with: gitsvnsync personal start
+    1. Start daemon with: reposync personal start
 ```
 
 The doctor checks:
@@ -63,38 +63,38 @@ The doctor checks:
 **Step 1**: Run the doctor to identify the issue:
 
 ```bash
-gitsvnsync personal doctor
+reposync personal doctor
 ```
 
 **Step 2**: Check if the daemon is running:
 
 ```bash
-gitsvnsync personal status
+reposync personal status
 ```
 
 If it shows "Stopped", restart the daemon:
 
 ```bash
-gitsvnsync personal start
+reposync personal start
 ```
 
 **Step 3**: Check the log file for errors:
 
 ```bash
-tail -50 ~/.local/share/gitsvnsync/personal.log
+tail -50 ~/.local/share/reposync/personal.log
 ```
 
 **Step 4**: Run the daemon in foreground mode to observe live output:
 
 ```bash
-gitsvnsync personal stop
-gitsvnsync personal start --foreground
+reposync personal stop
+reposync personal start --foreground
 ```
 
 **Step 5**: Check for unresolved conflicts blocking sync:
 
 ```bash
-gitsvnsync personal conflicts list
+reposync personal conflicts list
 ```
 
 If conflicts exist, resolve them (see [Handling Conflicts](workflows.md#handling-conflicts)) and the sync should resume.
@@ -106,43 +106,43 @@ If conflicts exist, resolve them (see [Handling Conflicts](workflows.md#handling
 svn info --username your_username https://svn.example.com/repos/project/trunk
 
 # Test GitHub API access
-curl -H "Authorization: token $GITSVNSYNC_GITHUB_TOKEN" https://api.github.com/user
+curl -H "Authorization: token $REPOSYNC_GITHUB_TOKEN" https://api.github.com/user
 ```
 
 ## Conflict Won't Resolve
 
-**Symptom**: Running `gitsvnsync personal conflicts resolve` fails or the conflict keeps reappearing.
+**Symptom**: Running `reposync personal conflicts resolve` fails or the conflict keeps reappearing.
 
 **Common causes**:
 
 1. **Invalid conflict ID**: The conflict ID shown in the list may be truncated. Use the full ID:
 
    ```bash
-   gitsvnsync personal conflicts list
+   reposync personal conflicts list
    # Note the full ID from the table, then resolve:
-   gitsvnsync personal conflicts resolve abc12345-full-id --accept git
+   reposync personal conflicts resolve abc12345-full-id --accept git
    ```
 
 2. **Invalid resolution value**: The `--accept` flag only accepts `svn` or `git`:
 
    ```bash
    # Correct:
-   gitsvnsync personal conflicts resolve abc12345 --accept svn
-   gitsvnsync personal conflicts resolve abc12345 --accept git
+   reposync personal conflicts resolve abc12345 --accept svn
+   reposync personal conflicts resolve abc12345 --accept git
 
    # Wrong:
-   gitsvnsync personal conflicts resolve abc12345 --accept mine
+   reposync personal conflicts resolve abc12345 --accept mine
    ```
 
 3. **Conflict reappears after resolution**: If new changes arrive to the same file on both sides before the resolved version is applied, a new conflict is created. This is expected behavior. Resolve the new conflict, and coordinate with your team to avoid concurrent edits to the same file.
 
 **Manual resolution steps** (if automated resolution is not working):
 
-1. Stop the daemon: `gitsvnsync personal stop`
-2. Identify the conflicting file from `gitsvnsync personal conflicts list`
+1. Stop the daemon: `reposync personal stop`
+2. Identify the conflicting file from `reposync personal conflicts list`
 3. Manually inspect the SVN and Git versions of the file
 4. Decide which version to keep and resolve via CLI
-5. Restart the daemon: `gitsvnsync personal start`
+5. Restart the daemon: `reposync personal start`
 
 ## GitHub Push Rejected
 
@@ -169,13 +169,13 @@ The GitHub token must have `repo` scope (or `contents:write` for fine-grained to
 **Verify**:
 
 ```bash
-curl -H "Authorization: token $GITSVNSYNC_GITHUB_TOKEN" https://api.github.com/user
+curl -H "Authorization: token $REPOSYNC_GITHUB_TOKEN" https://api.github.com/user
 ```
 
 If the response shows the correct user, but pushes still fail, check token scopes:
 
 ```bash
-curl -sI -H "Authorization: token $GITSVNSYNC_GITHUB_TOKEN" https://api.github.com/user | grep x-oauth-scopes
+curl -sI -H "Authorization: token $REPOSYNC_GITHUB_TOKEN" https://api.github.com/user | grep x-oauth-scopes
 ```
 
 ### Repository does not exist
@@ -204,7 +204,7 @@ svn info https://svn.example.com/repos/project/trunk
 
 ```bash
 # Test API access
-curl -v -H "Authorization: token $GITSVNSYNC_GITHUB_TOKEN" https://api.github.com/rate_limit
+curl -v -H "Authorization: token $REPOSYNC_GITHUB_TOKEN" https://api.github.com/rate_limit
 ```
 
 Check the response for:
@@ -218,13 +218,13 @@ Check the response for:
 GitHub personal access tokens can expire. If you are using a fine-grained token with an expiration date, generate a new token and update the environment variable:
 
 ```bash
-export GITSVNSYNC_GITHUB_TOKEN=ghp_new_token_here
+export REPOSYNC_GITHUB_TOKEN=ghp_new_token_here
 ```
 
 Then restart the daemon:
 
 ```bash
-gitsvnsync personal stop && gitsvnsync personal start
+reposync personal stop && reposync personal start
 ```
 
 ### Intermittent failures
@@ -238,21 +238,21 @@ The daemon retries on the next polling cycle automatically. Transient network er
 **Step 1**: Verify the credentials work manually:
 
 ```bash
-svn info --username your_username --password "$GITSVNSYNC_SVN_PASSWORD" \
+svn info --username your_username --password "$REPOSYNC_SVN_PASSWORD" \
   https://svn.example.com/repos/project/trunk
 ```
 
 **Step 2**: Check that the environment variable is set:
 
 ```bash
-echo $GITSVNSYNC_SVN_PASSWORD
+echo $REPOSYNC_SVN_PASSWORD
 ```
 
 If the password is not set, the daemon starts but cannot authenticate. Set the variable and restart:
 
 ```bash
-export GITSVNSYNC_SVN_PASSWORD='your-password-here'
-gitsvnsync personal stop && gitsvnsync personal start
+export REPOSYNC_SVN_PASSWORD='your-password-here'
+reposync personal stop && reposync personal start
 ```
 
 **Step 3**: Verify the `password_env` field in your config points to the correct variable name:
@@ -261,7 +261,7 @@ gitsvnsync personal stop && gitsvnsync personal start
 [svn]
 url = "https://svn.example.com/repos/project/trunk"
 username = "your_username"
-password_env = "GITSVNSYNC_SVN_PASSWORD"
+password_env = "REPOSYNC_SVN_PASSWORD"
 ```
 
 The `password_env` field specifies the *name* of the environment variable, not the password itself. The password is never stored in the config file.
@@ -269,7 +269,7 @@ The `password_env` field specifies the *name* of the environment variable, not t
 **Step 4**: Check for special characters in the password. If your SVN password contains shell-special characters (`!`, `$`, `` ` ``, `\`), make sure to use single quotes when setting the environment variable:
 
 ```bash
-export GITSVNSYNC_SVN_PASSWORD='p@ss!w0rd$pecial'
+export REPOSYNC_SVN_PASSWORD='p@ss!w0rd$pecial'
 ```
 
 **Step 5**: If the SVN server requires certificate acceptance, run an SVN command manually first to accept the certificate, then restart the daemon:
@@ -287,21 +287,21 @@ svn info --username your_username https://svn.example.com/repos/project/trunk
 
 ```bash
 # Stop the daemon
-gitsvnsync personal stop
+reposync personal stop
 
 # Locate the database
-ls -la ~/.local/share/gitsvnsync/personal.db
+ls -la ~/.local/share/reposync/personal.db
 
 # Try SQLite recovery
-sqlite3 ~/.local/share/gitsvnsync/personal.db ".recover" | \
-  sqlite3 ~/.local/share/gitsvnsync/personal.db.recovered
+sqlite3 ~/.local/share/reposync/personal.db ".recover" | \
+  sqlite3 ~/.local/share/reposync/personal.db.recovered
 
 # Replace the original
-mv ~/.local/share/gitsvnsync/personal.db ~/.local/share/gitsvnsync/personal.db.corrupt
-mv ~/.local/share/gitsvnsync/personal.db.recovered ~/.local/share/gitsvnsync/personal.db
+mv ~/.local/share/reposync/personal.db ~/.local/share/reposync/personal.db.corrupt
+mv ~/.local/share/reposync/personal.db.recovered ~/.local/share/reposync/personal.db
 
 # Restart
-gitsvnsync personal start
+reposync personal start
 ```
 
 ### Option B: Delete and re-import
@@ -310,16 +310,16 @@ If recovery fails, delete the database and re-import from SVN. This rebuilds all
 
 ```bash
 # Stop the daemon
-gitsvnsync personal stop
+reposync personal stop
 
 # Remove the corrupted database
-rm ~/.local/share/gitsvnsync/personal.db
+rm ~/.local/share/reposync/personal.db
 
 # Re-import (snapshot for speed, or full for complete history)
-gitsvnsync personal import --snapshot
+reposync personal import --snapshot
 
 # Restart
-gitsvnsync personal start
+reposync personal start
 ```
 
 After re-import, the watermarks are reset to the current SVN HEAD. Any PRs merged before the re-import that were not yet synced to SVN will need to be manually replayed or re-merged.
@@ -336,7 +336,7 @@ The database uses SQLite with WAL mode for crash resilience, but abrupt terminat
 
 ## Daemon Won't Start
 
-**Symptom**: `gitsvnsync personal start` reports an error or exits immediately.
+**Symptom**: `reposync personal start` reports an error or exits immediately.
 
 ### Config validation error (`sync_direct_pushes`)
 
@@ -358,29 +358,29 @@ sync_direct_pushes = false   # only merged PRs are synced (default)
 If the daemon crashed or was killed without cleanup, a stale PID file may block startup:
 
 ```bash
-gitsvnsync personal status
+reposync personal status
 ```
 
 If status shows "Running" but the daemon is not actually alive, the PID file is stale. The doctor command detects and cleans up stale PID files automatically:
 
 ```bash
-gitsvnsync personal doctor
+reposync personal doctor
 ```
 
 To manually clean up:
 
 ```bash
 # Find the PID file
-cat ~/.local/share/gitsvnsync/personal.pid
+cat ~/.local/share/reposync/personal.pid
 
 # Check if the process is actually running
-ps -p $(cat ~/.local/share/gitsvnsync/personal.pid)
+ps -p $(cat ~/.local/share/reposync/personal.pid)
 
 # If the process is not running, remove the stale PID file
-rm ~/.local/share/gitsvnsync/personal.pid
+rm ~/.local/share/reposync/personal.pid
 
 # Now start the daemon
-gitsvnsync personal start
+reposync personal start
 ```
 
 ### Already running
@@ -394,7 +394,7 @@ Daemon is already running (PID 12345)
 Stop the existing daemon first if you want to restart:
 
 ```bash
-gitsvnsync personal stop && gitsvnsync personal start
+reposync personal stop && reposync personal start
 ```
 
 ### Config file not found
@@ -402,17 +402,17 @@ gitsvnsync personal stop && gitsvnsync personal start
 If the config file does not exist at the expected path:
 
 ```
-Error: failed to load personal config: file not found: /home/user/.config/gitsvnsync/personal.toml
+Error: failed to load personal config: file not found: /home/user/.config/reposync/personal.toml
 ```
 
 Either create the config with the init wizard or specify the correct path:
 
 ```bash
 # Create a new config
-gitsvnsync personal init
+reposync personal init
 
 # Or specify a custom path
-gitsvnsync personal --personal-config /path/to/config.toml start
+reposync personal --personal-config /path/to/config.toml start
 ```
 
 ### Missing data directory
@@ -420,7 +420,7 @@ gitsvnsync personal --personal-config /path/to/config.toml start
 If the data directory does not exist, the daemon creates it automatically on start. If this fails due to permissions:
 
 ```bash
-mkdir -p ~/.local/share/gitsvnsync
+mkdir -p ~/.local/share/reposync
 ```
 
 ### Database not initialized
@@ -428,8 +428,8 @@ mkdir -p ~/.local/share/gitsvnsync
 If you haven't run the initial import, the daemon may fail to start because there is no database:
 
 ```bash
-gitsvnsync personal import --snapshot
-gitsvnsync personal start
+reposync personal import --snapshot
+reposync personal start
 ```
 
 ## PR Not Syncing to SVN
@@ -448,7 +448,7 @@ PRs merged to other branches are ignored.
 **Step 2**: Check the PR sync log:
 
 ```bash
-gitsvnsync personal pr-log
+reposync personal pr-log
 ```
 
 Look for the PR number. Possible statuses:
@@ -458,24 +458,24 @@ Look for the PR number. Possible statuses:
 - **failed**: The PR sync failed. Check the sync log for the error:
 
   ```bash
-  gitsvnsync personal log --limit 50
+  reposync personal log --limit 50
   ```
 
 **Step 3**: Check if the daemon is running and poll timing:
 
 ```bash
-gitsvnsync personal status
+reposync personal status
 ```
 
 The daemon polls GitHub for merged PRs every `poll_interval_secs` (default 30 seconds). If you just merged the PR, wait for at least one polling cycle.
 
-**Step 4**: Ensure the PR's commits are not all echo commits. If every commit in the PR contains the `[gitsvnsync]` sync marker (meaning they all originated from SVN), the daemon correctly skips the PR to avoid echo loops.
+**Step 4**: Ensure the PR's commits are not all echo commits. If every commit in the PR contains the `[reposync]` sync marker (meaning they all originated from SVN), the daemon correctly skips the PR to avoid echo loops.
 
 **Step 5**: Run in foreground mode to observe the next sync cycle:
 
 ```bash
-gitsvnsync personal stop
-gitsvnsync personal start --foreground
+reposync personal stop
+reposync personal start --foreground
 ```
 
 Watch the output for messages about the PR being detected, skipped, or encountering errors.
@@ -494,7 +494,7 @@ These policies are enforced across all sync paths: initial import, SVN-to-Git, a
 **Step 1**: Check the audit log for skip events:
 
 ```bash
-sqlite3 ~/.local/share/gitsvnsync/personal.db \
+sqlite3 ~/.local/share/reposync/personal.db \
   "SELECT timestamp, action, details FROM audit_log WHERE action = 'file_policy_skip' ORDER BY timestamp DESC LIMIT 20;"
 ```
 
@@ -513,7 +513,7 @@ ignore_patterns = ["*.log", "build/**", "*.tmp"]
 ```bash
 # Edit your config to raise the size limit or remove the pattern
 # Then re-import to pick up the file
-gitsvnsync personal import --snapshot
+reposync personal import --snapshot
 ```
 
 Files blocked by policy are never silently passed through. Every skip produces a structured log warning and an audit entry.
@@ -526,25 +526,25 @@ If sync state becomes inconsistent and you need to start fresh, you can delete t
 
 ```bash
 # Stop the daemon
-gitsvnsync personal stop
+reposync personal stop
 
 # Back up the existing database (optional)
-cp ~/.local/share/gitsvnsync/personal.db ~/.local/share/gitsvnsync/personal.db.bak
+cp ~/.local/share/reposync/personal.db ~/.local/share/reposync/personal.db.bak
 
 # Delete the database
-rm ~/.local/share/gitsvnsync/personal.db
+rm ~/.local/share/reposync/personal.db
 
 # Optionally delete the Git repo and SVN working copy for a clean slate
-rm -rf ~/.local/share/gitsvnsync/git-repo
-rm -rf ~/.local/share/gitsvnsync/svn-wc
+rm -rf ~/.local/share/reposync/git-repo
+rm -rf ~/.local/share/reposync/svn-wc
 
 # Re-import
-gitsvnsync personal import --snapshot   # fast: single commit from SVN HEAD
+reposync personal import --snapshot   # fast: single commit from SVN HEAD
 # OR
-gitsvnsync personal import --full       # slow: replay all SVN history
+reposync personal import --full       # slow: replay all SVN history
 
 # Restart
-gitsvnsync personal start
+reposync personal start
 ```
 
 ### Partial reset (watermarks only)
@@ -552,17 +552,17 @@ gitsvnsync personal start
 If the Git repo and SVN working copy are in a good state but the watermarks are wrong, you can reset just the watermarks using SQLite directly:
 
 ```bash
-gitsvnsync personal stop
+reposync personal stop
 
 # Reset SVN watermark to a specific revision
-sqlite3 ~/.local/share/gitsvnsync/personal.db \
+sqlite3 ~/.local/share/reposync/personal.db \
   "UPDATE watermarks SET value = '1040' WHERE key = 'svn_rev';"
 
 # Reset Git watermark to a specific commit
-sqlite3 ~/.local/share/gitsvnsync/personal.db \
+sqlite3 ~/.local/share/reposync/personal.db \
   "UPDATE watermarks SET value = 'abc123def456' WHERE key = 'git_sha';"
 
-gitsvnsync personal start
+reposync personal start
 ```
 
 Use this approach with caution. Setting watermarks to incorrect values can cause duplicate commits or missed revisions.
@@ -574,7 +574,7 @@ Use this approach with caution. Setting watermarks to incorrect values can cause
 The log file is located in the data directory:
 
 ```
-~/.local/share/gitsvnsync/personal.log
+~/.local/share/reposync/personal.log
 ```
 
 If you configured a custom `data_dir` in your config, the log file is at `{data_dir}/personal.log`.
@@ -585,10 +585,10 @@ The daemon also prints the log file path when it starts in background mode.
 
 ```bash
 # View recent logs
-tail -100 ~/.local/share/gitsvnsync/personal.log
+tail -100 ~/.local/share/reposync/personal.log
 
 # Follow logs in real time
-tail -f ~/.local/share/gitsvnsync/personal.log
+tail -f ~/.local/share/reposync/personal.log
 ```
 
 ### Increasing verbosity
@@ -605,23 +605,23 @@ For maximum verbosity, use `trace`. For normal operation, `info` is recommended.
 Alternatively, override the log level with the `RUST_LOG` environment variable when running in foreground mode:
 
 ```bash
-RUST_LOG=trace gitsvnsync personal start --foreground
+RUST_LOG=trace reposync personal start --foreground
 ```
 
 The `RUST_LOG` variable supports per-module filtering:
 
 ```bash
 # Debug sync engine, info for everything else
-RUST_LOG=info,gitsvnsync_personal::engine=debug gitsvnsync personal start --foreground
+RUST_LOG=info,reposync_personal::engine=debug reposync personal start --foreground
 
 # Trace SVN client operations
-RUST_LOG=info,gitsvnsync_core::svn=trace gitsvnsync personal start --foreground
+RUST_LOG=info,reposync_core::svn=trace reposync personal start --foreground
 ```
 
 ## Getting Help
 
-- Run diagnostics: `gitsvnsync personal doctor`
-- Check status: `gitsvnsync personal status`
-- View sync history: `gitsvnsync personal log`
-- View PR history: `gitsvnsync personal pr-log`
-- File an issue: https://github.com/chriscase/GitSvnSync/issues
+- Run diagnostics: `reposync personal doctor`
+- Check status: `reposync personal status`
+- View sync history: `reposync personal log`
+- View PR history: `reposync personal pr-log`
+- File an issue: https://github.com/chriscase/RepoSync/issues

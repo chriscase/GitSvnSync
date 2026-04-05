@@ -186,8 +186,8 @@ echo "=========================================="
 echo "  TEST 4: Watermark integrity"
 echo "=========================================="
 
-SANDBOX_WM=$(sqlite3 /opt/reposync/gitsvnsync.db "SELECT last_svn_rev, sync_status, total_syncs FROM repositories WHERE id = '$SANDBOX_ID'")
-LARGE_WM=$(sqlite3 /opt/reposync/gitsvnsync.db "SELECT last_svn_rev, sync_status, total_syncs FROM repositories WHERE id = '$LARGE_ID'")
+SANDBOX_WM=$(sqlite3 /opt/reposync/reposync.db "SELECT last_svn_rev, sync_status, total_syncs FROM repositories WHERE id = '$SANDBOX_ID'")
+LARGE_WM=$(sqlite3 /opt/reposync/reposync.db "SELECT last_svn_rev, sync_status, total_syncs FROM repositories WHERE id = '$LARGE_ID'")
 echo "  Sandbox watermark: $SANDBOX_WM"
 echo "  Large watermark: $LARGE_WM"
 
@@ -205,4 +205,4 @@ echo "  FAILED: $FAIL"
 echo "  TOTAL:  $((PASS+FAIL))"
 echo ""
 echo "  Scheduler log:"
-grep "per-repo sync cycle" /tmp/gitsvnsync.log | tail -10
+grep "per-repo sync cycle" /tmp/reposync.log | tail -10

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# GitSvnSync installer
-# Usage: curl -fsSL https://github.com/chriscase/GitSvnSync/releases/latest/download/install.sh | bash
+# RepoSync installer
+# Usage: curl -fsSL https://github.com/chriscase/RepoSync/releases/latest/download/install.sh | bash
 
-VERSION="${GITSVNSYNC_VERSION:-latest}"
-INSTALL_DIR="${GITSVNSYNC_INSTALL_DIR:-/usr/local/bin}"
-CONFIG_DIR="/etc/gitsvnsync"
-DATA_DIR="/var/lib/gitsvnsync"
+VERSION="${REPOSYNC_VERSION:-latest}"
+INSTALL_DIR="${REPOSYNC_INSTALL_DIR:-/usr/local/bin}"
+CONFIG_DIR="/etc/reposync"
+DATA_DIR="/var/lib/reposync"
 
-REPO="chriscase/GitSvnSync"
+REPO="chriscase/RepoSync"
 
 # Detect platform
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -29,7 +29,7 @@ esac
 
 TARGET="${ARCH}-${PLATFORM}"
 
-echo "==> GitSvnSync Installer"
+echo "==> RepoSync Installer"
 echo "    Platform: ${OS}/${ARCH}"
 echo "    Version:  ${VERSION}"
 echo ""
@@ -41,19 +41,19 @@ if [ "$VERSION" = "latest" ]; then
 fi
 
 # Download
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/gitsvnsync-${VERSION}-${TARGET}.tar.gz"
+DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/reposync-${VERSION}-${TARGET}.tar.gz"
 echo "==> Downloading from ${DOWNLOAD_URL}"
 
 TMP_DIR=$(mktemp -d)
 trap "rm -rf ${TMP_DIR}" EXIT
 
-curl -fsSL "$DOWNLOAD_URL" -o "${TMP_DIR}/gitsvnsync.tar.gz"
-tar -xzf "${TMP_DIR}/gitsvnsync.tar.gz" -C "${TMP_DIR}"
+curl -fsSL "$DOWNLOAD_URL" -o "${TMP_DIR}/reposync.tar.gz"
+tar -xzf "${TMP_DIR}/reposync.tar.gz" -C "${TMP_DIR}"
 
 # Install binaries
 echo "==> Installing binaries to ${INSTALL_DIR}"
-sudo install -m 755 "${TMP_DIR}/gitsvnsync-daemon" "${INSTALL_DIR}/gitsvnsync-daemon"
-sudo install -m 755 "${TMP_DIR}/gitsvnsync" "${INSTALL_DIR}/gitsvnsync"
+sudo install -m 755 "${TMP_DIR}/reposync-daemon" "${INSTALL_DIR}/reposync-daemon"
+sudo install -m 755 "${TMP_DIR}/reposync" "${INSTALL_DIR}/reposync"
 
 # Create config directory
 if [ ! -d "$CONFIG_DIR" ]; then
@@ -72,32 +72,32 @@ fi
 
 # Create system user if running as root
 if [ "$(id -u)" = "0" ] || [ -n "${SUDO_USER:-}" ]; then
-    if ! id -u gitsvnsync &>/dev/null; then
-        echo "==> Creating gitsvnsync system user"
-        sudo useradd -r -s /usr/sbin/nologin -d "$DATA_DIR" gitsvnsync || true
+    if ! id -u reposync &>/dev/null; then
+        echo "==> Creating reposync system user"
+        sudo useradd -r -s /usr/sbin/nologin -d "$DATA_DIR" reposync || true
     fi
-    sudo chown -R gitsvnsync:gitsvnsync "$DATA_DIR"
-    sudo chown -R gitsvnsync:gitsvnsync "$CONFIG_DIR"
+    sudo chown -R reposync:reposync "$DATA_DIR"
+    sudo chown -R reposync:reposync "$CONFIG_DIR"
 fi
 
 # Install systemd service
 if command -v systemctl &>/dev/null; then
     echo "==> Installing systemd service"
-    sudo cp "${TMP_DIR}/gitsvnsync.service" /etc/systemd/system/gitsvnsync.service
+    sudo cp "${TMP_DIR}/reposync.service" /etc/systemd/system/reposync.service
     sudo systemctl daemon-reload
-    echo "    Run: sudo systemctl enable --now gitsvnsync"
+    echo "    Run: sudo systemctl enable --now reposync"
 fi
 
 echo ""
-echo "==> GitSvnSync ${VERSION} installed successfully!"
+echo "==> RepoSync ${VERSION} installed successfully!"
 echo ""
 echo "Next steps:"
 echo "  1. Edit ${CONFIG_DIR}/config.toml with your SVN and GitHub settings"
 echo "  2. Edit ${CONFIG_DIR}/authors.toml with your author mappings"
 echo "  3. Create ${CONFIG_DIR}/env with your secrets:"
-echo "       GITSVNSYNC_SVN_PASSWORD=your-svn-password"
-echo "       GITSVNSYNC_GITHUB_TOKEN=your-github-token"
-echo "       GITSVNSYNC_ADMIN_PASSWORD=your-dashboard-password"
-echo "       GITSVNSYNC_SESSION_SECRET=$(openssl rand -hex 32)"
-echo "  4. Start the daemon: sudo systemctl enable --now gitsvnsync"
+echo "       REPOSYNC_SVN_PASSWORD=your-svn-password"
+echo "       REPOSYNC_GITHUB_TOKEN=your-github-token"
+echo "       REPOSYNC_ADMIN_PASSWORD=your-dashboard-password"
+echo "       REPOSYNC_SESSION_SECRET=$(openssl rand -hex 32)"
+echo "  4. Start the daemon: sudo systemctl enable --now reposync"
 echo "  5. Open http://your-server:8080 for the dashboard"

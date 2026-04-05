@@ -1,10 +1,8 @@
-import { LoadingSpinner } from '../components/LoadingSpinner';
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api';
 import DiffViewer from '../components/DiffViewer';
-import { ConfirmModal } from '../components/ConfirmModal';
 
 export default function ConflictDetail() {
   const { id } = useParams<{ id: string }>();
@@ -12,8 +10,6 @@ export default function ConflictDetail() {
   const queryClient = useQueryClient();
   const [mergedContent, setMergedContent] = useState('');
   const [activeTab, setActiveTab] = useState<'diff' | 'edit'>('diff');
-  const [resolveError, setResolveError] = useState<string | null>(null);
-  const [confirmAction, setConfirmAction] = useState<{ resolution: string; label: string } | null>(null);
 
   const { data: conflict, isLoading } = useQuery({
     queryKey: ['conflict', id],
@@ -22,16 +18,15 @@ export default function ConflictDetail() {
   });
 
   const resolveMutation = useMutation({
-    mutationFn: ({ resolution, merged_content }: { resolution: string; merged_content?: string }) =>
-      api.resolveConflict(id!, resolution, merged_content),
+    mutationFn: ({ resolution }: { resolution: string }) =>
+      api.resolveConflict(id!, resolution),
     onSuccess: () => {
-      setResolveError(null);
       queryClient.invalidateQueries({ queryKey: ['conflicts'] });
       queryClient.invalidateQueries({ queryKey: ['conflict', id] });
       navigate('/conflicts');
     },
     onError: (err: Error) => {
-      setResolveError(`Resolution failed: ${err.message}`);
+      alert(`Resolution failed: ${err.message}`);
     },
   });
 
@@ -44,35 +39,30 @@ export default function ConflictDetail() {
   });
 
   if (isLoading || !conflict) {
-    return <LoadingSpinner />;
+    return <div className="text-center py-8 text-gray-500">Loading...</div>;
   }
 
   const isResolved = conflict.status === 'resolved';
 
   return (
     <div className="space-y-6">
-      {resolveError && (
-        <div className="bg-red-900/50 border border-red-700 text-red-300 px-4 py-3 rounded-md">
-          {resolveError}
-        </div>
-      )}
       <div className="flex items-center justify-between">
         <div>
           <button
             onClick={() => navigate('/conflicts')}
-            className="text-blue-400 hover:text-blue-300 text-sm mb-2"
+            className="text-blue-600 hover:text-blue-900 text-sm mb-2"
           >
             &larr; Back to Conflicts
           </button>
-          <h1 className="text-2xl font-bold text-gray-100">
+          <h1 className="text-2xl font-bold text-gray-900">
             <code>{conflict.file_path}</code>
           </h1>
         </div>
         <span
           className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
             isResolved
-              ? 'bg-green-900/50 text-green-300'
-              : 'bg-red-900/50 text-red-300'
+              ? 'bg-green-100 text-green-800'
+              : 'bg-red-100 text-red-800'
           }`}
         >
           {conflict.status}
@@ -80,35 +70,35 @@ export default function ConflictDetail() {
       </div>
 
       {/* Metadata */}
-      <div className="bg-gray-800 shadow rounded-lg p-4 grid grid-cols-4 gap-4 text-sm border border-gray-700">
+      <div className="bg-white shadow rounded-lg p-4 grid grid-cols-4 gap-4 text-sm">
         <div>
-          <span className="text-gray-400">Type</span>
-          <p className="font-medium capitalize text-gray-200">{conflict.conflict_type}</p>
+          <span className="text-gray-500">Type</span>
+          <p className="font-medium capitalize">{conflict.conflict_type}</p>
         </div>
         <div>
-          <span className="text-gray-400">SVN Revision</span>
-          <p className="font-mono text-gray-200">{conflict.svn_revision ?? '-'}</p>
+          <span className="text-gray-500">SVN Revision</span>
+          <p className="font-mono">{conflict.svn_revision ?? '-'}</p>
         </div>
         <div>
-          <span className="text-gray-400">Git SHA</span>
-          <p className="font-mono truncate text-gray-200">{conflict.git_hash ?? '-'}</p>
+          <span className="text-gray-500">Git SHA</span>
+          <p className="font-mono truncate">{conflict.git_hash ?? '-'}</p>
         </div>
         <div>
-          <span className="text-gray-400">Created</span>
-          <p className="text-gray-200">{new Date(conflict.created_at).toLocaleString()}</p>
+          <span className="text-gray-500">Created</span>
+          <p>{new Date(conflict.created_at).toLocaleString()}</p>
         </div>
       </div>
 
       {/* Tabs */}
       {!isResolved && (
-        <div className="border-b border-gray-700">
+        <div className="border-b border-gray-200">
           <nav className="-mb-px flex space-x-8">
             <button
               onClick={() => setActiveTab('diff')}
               className={`py-4 px-1 border-b-2 font-medium text-sm ${
                 activeTab === 'diff'
-                  ? 'border-blue-500 text-blue-400'
-                  : 'border-transparent text-gray-400 hover:text-gray-300 hover:border-gray-600'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
               Side-by-Side Diff
@@ -122,8 +112,8 @@ export default function ConflictDetail() {
               }}
               className={`py-4 px-1 border-b-2 font-medium text-sm ${
                 activeTab === 'edit'
-                  ? 'border-blue-500 text-blue-400'
-                  : 'border-transparent text-gray-400 hover:text-gray-300 hover:border-gray-600'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
               Manual Edit
@@ -134,7 +124,7 @@ export default function ConflictDetail() {
 
       {/* Content */}
       {activeTab === 'diff' ? (
-        <div className="bg-gray-800 shadow rounded-lg overflow-hidden border border-gray-700">
+        <div className="bg-white shadow rounded-lg overflow-hidden">
           <DiffViewer
             oldValue={conflict.svn_content ?? ''}
             newValue={conflict.git_content ?? ''}
@@ -143,31 +133,31 @@ export default function ConflictDetail() {
           />
         </div>
       ) : (
-        <div className="bg-gray-800 shadow rounded-lg p-4 border border-gray-700">
-          <label className="block text-sm font-medium text-gray-300 mb-2">
+        <div className="bg-white shadow rounded-lg p-4">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
             Edit merged content:
           </label>
           <textarea
             value={mergedContent}
             onChange={(e) => setMergedContent(e.target.value)}
-            className="w-full h-96 font-mono text-sm border border-gray-600 bg-gray-700 text-gray-100 rounded-md p-3 focus:ring-blue-500 focus:border-blue-500"
+            className="w-full h-96 font-mono text-sm border border-gray-300 rounded-md p-3 focus:ring-blue-500 focus:border-blue-500"
           />
         </div>
       )}
 
       {/* Resolution Actions */}
       {!isResolved && (
-        <div className="bg-gray-800 shadow rounded-lg p-4 flex items-center justify-between border border-gray-700">
+        <div className="bg-white shadow rounded-lg p-4 flex items-center justify-between">
           <div className="flex space-x-3">
             <button
-              onClick={() => setConfirmAction({ resolution: 'accept_svn', label: 'Accept SVN version' })}
+              onClick={() => resolveMutation.mutate({ resolution: 'accept_svn' })}
               disabled={resolveMutation.isPending}
               className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:opacity-50 text-sm font-medium"
             >
               Accept SVN
             </button>
             <button
-              onClick={() => setConfirmAction({ resolution: 'accept_git', label: 'Accept Git version' })}
+              onClick={() => resolveMutation.mutate({ resolution: 'accept_git' })}
               disabled={resolveMutation.isPending}
               className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm font-medium"
             >
@@ -176,7 +166,7 @@ export default function ConflictDetail() {
             {activeTab === 'edit' && (
               <button
                 onClick={() =>
-                  resolveMutation.mutate({ resolution: 'custom', merged_content: mergedContent })
+                  resolveMutation.mutate({ resolution: 'custom' })
                 }
                 disabled={resolveMutation.isPending}
                 className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 text-sm font-medium"
@@ -188,7 +178,7 @@ export default function ConflictDetail() {
           <button
             onClick={() => deferMutation.mutate()}
             disabled={deferMutation.isPending}
-            className="px-4 py-2 bg-gray-700 text-gray-300 rounded-md hover:bg-gray-600 disabled:opacity-50 text-sm"
+            className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 disabled:opacity-50 text-sm"
           >
             Defer
           </button>
@@ -197,8 +187,8 @@ export default function ConflictDetail() {
 
       {/* Resolution info */}
       {isResolved && (
-        <div className="bg-green-900/30 border border-green-700 rounded-lg p-4">
-          <p className="text-green-300">
+        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+          <p className="text-green-800">
             Resolved as <strong>{conflict.resolution}</strong>
             {conflict.resolved_by && <> by {conflict.resolved_by}</>}
             {conflict.resolved_at && (
@@ -207,20 +197,6 @@ export default function ConflictDetail() {
           </p>
         </div>
       )}
-      <ConfirmModal
-        isOpen={!!confirmAction}
-        title="Resolve Conflict"
-        message={`Are you sure you want to ${confirmAction?.label ?? ''}? This cannot be undone.`}
-        confirmLabel="Resolve"
-        cancelLabel="Cancel"
-        onConfirm={() => {
-          if (confirmAction) {
-            resolveMutation.mutate({ resolution: confirmAction.resolution });
-          }
-          setConfirmAction(null);
-        }}
-        onCancel={() => setConfirmAction(null)}
-      />
     </div>
   );
 }

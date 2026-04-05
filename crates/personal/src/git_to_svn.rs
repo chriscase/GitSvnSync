@@ -11,12 +11,12 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use tracing::{debug, error, info, instrument, warn};
 
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::file_policy::{FilePolicy, FilePolicyDecision};
-use gitsvnsync_core::git::github::{GitHubClient, GitHubCommit, PullRequest};
-use gitsvnsync_core::git::GitClient;
-use gitsvnsync_core::personal_config::PersonalConfig;
-use gitsvnsync_core::svn::SvnClient;
+use reposync_core::db::Database;
+use reposync_core::file_policy::{FilePolicy, FilePolicyDecision};
+use reposync_core::git::github::{GitHubClient, GitHubCommit, PullRequest};
+use reposync_core::git::GitClient;
+use reposync_core::personal_config::PersonalConfig;
+use reposync_core::svn::SvnClient;
 
 use crate::commit_format::CommitFormatter;
 
@@ -513,13 +513,13 @@ impl GitToSvnSync {
                         match &decision {
                             FilePolicyDecision::Allow => {
                                 // Check if this is an LFS pointer that needs resolution.
-                                let write_content = if gitsvnsync_core::lfs::is_lfs_pointer(
+                                let write_content = if reposync_core::lfs::is_lfs_pointer(
                                     &content,
                                 ) {
                                     // The file in Git is an LFS pointer — resolve
                                     // it to the actual blob content before writing
                                     // to SVN (SVN doesn't understand LFS pointers).
-                                    match gitsvnsync_core::lfs::resolve_lfs_pointer(
+                                    match reposync_core::lfs::resolve_lfs_pointer(
                                         &self.git_repo_path,
                                         &content,
                                     ) {
@@ -577,10 +577,10 @@ impl GitToSvnSync {
                             FilePolicyDecision::LfsTrack { .. } => {
                                 // File exceeds LFS threshold — same LFS pointer
                                 // resolution logic applies.
-                                let write_content = if gitsvnsync_core::lfs::is_lfs_pointer(
+                                let write_content = if reposync_core::lfs::is_lfs_pointer(
                                     &content,
                                 ) {
-                                    match gitsvnsync_core::lfs::resolve_lfs_pointer(
+                                    match reposync_core::lfs::resolve_lfs_pointer(
                                         &self.git_repo_path,
                                         &content,
                                     ) {

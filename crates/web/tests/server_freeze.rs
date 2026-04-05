@@ -20,15 +20,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use axum::Router;
-use gitsvnsync_core::config::{AppConfig, IdentityConfig};
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::git::GitClient;
-use gitsvnsync_core::identity::IdentityMapper;
-use gitsvnsync_core::import::ImportProgress;
-use gitsvnsync_core::svn::SvnClient;
-use gitsvnsync_core::sync_engine::SyncEngine;
-use gitsvnsync_web::api;
-use gitsvnsync_web::AppState;
+use reposync_core::config::{AppConfig, IdentityConfig};
+use reposync_core::db::Database;
+use reposync_core::git::GitClient;
+use reposync_core::identity::IdentityMapper;
+use reposync_core::import::ImportProgress;
+use reposync_core::svn::SvnClient;
+use reposync_core::sync_engine::SyncEngine;
+use reposync_web::api;
+use reposync_web::AppState;
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -233,10 +233,10 @@ async fn build_test_server_with_ldap(
     web_db.initialize().expect("web db init");
 
     // Insert a local user with known bcrypt password hash.
-    let password_hash = gitsvnsync_core::crypto::hash_password(test_password)
+    let password_hash = reposync_core::crypto::hash_password(test_password)
         .expect("hash_password");
     let now = chrono::Utc::now().to_rfc3339();
-    let user = gitsvnsync_core::models::User {
+    let user = reposync_core::models::User {
         id: "test-user-1".to_string(),
         username: "testuser".to_string(),
         display_name: "Test User".to_string(),
@@ -250,7 +250,7 @@ async fn build_test_server_with_ldap(
     web_db.insert_user(&user).expect("insert_user");
 
     // Save LDAP config pointing to an unreachable address (RFC 5737 TEST-NET).
-    let ldap_config = gitsvnsync_core::ldap_auth::LdapConfig {
+    let ldap_config = reposync_core::ldap_auth::LdapConfig {
         url: "ldaps://192.0.2.1:636".to_string(),
         base_dn: "dc=test,dc=invalid".to_string(),
         search_filter: "(sAMAccountName={0})".to_string(),

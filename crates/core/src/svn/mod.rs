@@ -1,4 +1,4 @@
-//! SVN CLI wrapper for GitSvnSync.
+//! SVN CLI wrapper for RepoSync.
 
 pub mod client;
 pub mod parser;

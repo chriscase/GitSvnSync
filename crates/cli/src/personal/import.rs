@@ -3,12 +3,11 @@
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::config::GitProvider;
-use gitsvnsync_core::git::github::GitHubClient;
-use gitsvnsync_core::git::GitClient;
-use gitsvnsync_core::personal_config::PersonalConfig;
-use gitsvnsync_core::svn::SvnClient;
+use reposync_core::db::Database;
+use reposync_core::git::github::GitHubClient;
+use reposync_core::git::GitClient;
+use reposync_core::personal_config::PersonalConfig;
+use reposync_core::svn::SvnClient;
 
 use super::style;
 
@@ -36,7 +35,7 @@ pub async fn run_import(config: &PersonalConfig, mode: &str) -> Result<()> {
 
     // GitHub client
     let github_token = config.github.token.as_deref().unwrap_or("");
-    let github_client = GitHubClient::new(&config.github.api_url, github_token, GitProvider::default());
+    let github_client = GitHubClient::new(&config.github.api_url, github_token);
 
     // Git repository
     let git_repo_path = data_dir.join("git-repo");
@@ -51,15 +50,15 @@ pub async fn run_import(config: &PersonalConfig, mode: &str) -> Result<()> {
         }
     };
 
-    let git_client = std::sync::Arc::new(std::sync::Mutex::new(git_client));
-    let formatter = gitsvnsync_personal::commit_format::CommitFormatter::new(&config.commit_format);
+    let git_client = std::sync::Arc::new(tokio::sync::Mutex::new(git_client));
+    let formatter = reposync_personal::commit_format::CommitFormatter::new(&config.commit_format);
 
     let import_mode = match mode {
-        "snapshot" => gitsvnsync_personal::initial_import::ImportMode::Snapshot,
-        _ => gitsvnsync_personal::initial_import::ImportMode::Full,
+        "snapshot" => reposync_personal::initial_import::ImportMode::Snapshot,
+        _ => reposync_personal::initial_import::ImportMode::Full,
     };
 
-    let importer = gitsvnsync_personal::initial_import::InitialImport {
+    let importer = reposync_personal::initial_import::InitialImport {
         svn_client: &svn_client,
         git_client: &git_client,
         github_client: &github_client,
@@ -87,7 +86,7 @@ pub async fn run_import(config: &PersonalConfig, mode: &str) -> Result<()> {
     println!("  Commits: {}", count);
     println!("  Repository: https://github.com/{}", config.github.repo);
     println!();
-    println!("Next: Run 'gitsvnsync personal start' to begin syncing");
+    println!("Next: Run 'reposync personal start' to begin syncing");
     println!();
 
     Ok(())

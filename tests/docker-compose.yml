@@ -41,7 +41,7 @@ services:
       timeout: 3s
       retries: 10
 
-  gitsvnsync:
+  reposync:
     build:
       context: ../
       dockerfile: Dockerfile
@@ -53,16 +53,16 @@ services:
       gitea:
         condition: service_healthy
     environment:
-      GITSVNSYNC_SVN_PASSWORD: testpass123
-      GITSVNSYNC_GITHUB_TOKEN: test-token
-      GITSVNSYNC_ADMIN_PASSWORD: admin123
-      GITSVNSYNC_SESSION_SECRET: e2e-test-secret-do-not-use-in-production
-      GITSVNSYNC_WEBHOOK_SECRET: webhook-test-secret
+      REPOSYNC_SVN_PASSWORD: testpass123
+      REPOSYNC_GITHUB_TOKEN: test-token
+      REPOSYNC_ADMIN_PASSWORD: admin123
+      REPOSYNC_SESSION_SECRET: e2e-test-secret-do-not-use-in-production
+      REPOSYNC_WEBHOOK_SECRET: webhook-test-secret
     volumes:
-      - sync-data:/var/lib/gitsvnsync
-      - ./fixtures:/etc/gitsvnsync:ro
+      - sync-data:/var/lib/reposync
+      - ./fixtures:/etc/reposync:ro
     command: >
-      gitsvnsync-daemon --config /etc/gitsvnsync/test-config.toml
+      reposync-daemon --config /etc/reposync/test-config.toml
 
 volumes:
   svn-data:
@@ -72,4 +72,4 @@ volumes:
 
 networks:
   default:
-    name: gitsvnsync-test
+    name: reposync-test

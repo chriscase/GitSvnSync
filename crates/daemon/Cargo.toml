@@ -1,24 +1,21 @@
 [package]
-name = "gitsvnsync-daemon"
+name = "reposync-daemon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "GitSvnSync synchronization daemon"
+description = "RepoSync synchronization daemon"
 
 [[bin]]
-name = "gitsvnsync-daemon"
+name = "reposync-daemon"
 path = "src/main.rs"
 
 [dependencies]
-gitsvnsync-core = { path = "../core" }
-gitsvnsync-web = { path = "../web" }
+reposync-core = { path = "../core" }
+reposync-web = { path = "../web" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
-uuid = { workspace = true }
 serde_json = { workspace = true }
-regex-lite = { workspace = true }
-rusqlite = { workspace = true }

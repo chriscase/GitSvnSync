@@ -7,10 +7,10 @@
 use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::git::github::{GitHubClient, GitHubCommit};
-use gitsvnsync_core::models::MergeStrategy;
-use gitsvnsync_core::personal_config::PersonalConfig;
+use reposync_core::db::Database;
+use reposync_core::git::github::{GitHubClient, GitHubCommit};
+use reposync_core::models::MergeStrategy;
+use reposync_core::personal_config::PersonalConfig;
 
 // ---------------------------------------------------------------------------
 // MergedPr — output type

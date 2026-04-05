@@ -10,12 +10,12 @@ use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::file_policy::FilePolicy;
-use gitsvnsync_core::git::GitClient;
-use gitsvnsync_core::identity::IdentityMapper;
-use gitsvnsync_core::import::{self, ImportConfig, ImportPhase, ImportProgress};
-use gitsvnsync_core::svn::SvnClient;
+use reposync_core::db::Database;
+use reposync_core::file_policy::FilePolicy;
+use reposync_core::git::GitClient;
+use reposync_core::identity::IdentityMapper;
+use reposync_core::import::{self, ImportConfig, ImportPhase, ImportProgress};
+use reposync_core::svn::SvnClient;
 
 use crate::api::auth::{validate_session, validate_session_with_role};
 use crate::api::status::AppError;
@@ -132,8 +132,8 @@ struct RepoDetail {
     status: String,
 }
 
-impl From<gitsvnsync_core::models::Repository> for RepoDetail {
-    fn from(r: gitsvnsync_core::models::Repository) -> Self {
+impl From<reposync_core::models::Repository> for RepoDetail {
+    fn from(r: reposync_core::models::Repository) -> Self {
         Self {
             id: r.id,
             name: r.name,
@@ -261,7 +261,7 @@ async fn create_repo(
     }
 
     let now = Utc::now().to_rfc3339();
-    let repo = gitsvnsync_core::models::Repository {
+    let repo = reposync_core::models::Repository {
         id: Uuid::new_v4().to_string(),
         name: body.name,
         svn_url: body.svn_url,
@@ -341,7 +341,7 @@ async fn update_repo(
         .ok_or_else(|| AppError::NotFound("repository not found".into()))?;
 
     let now = Utc::now().to_rfc3339();
-    let updated = gitsvnsync_core::models::Repository {
+    let updated = reposync_core::models::Repository {
         id: id.clone(),
         name: body.name.unwrap_or(existing.name),
         svn_url: body.svn_url.unwrap_or(existing.svn_url),
@@ -397,7 +397,7 @@ async fn delete_repo(
         .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
         .ok_or_else(|| AppError::NotFound("repository not found".into()))?;
 
-    let disabled = gitsvnsync_core::models::Repository {
+    let disabled = reposync_core::models::Repository {
         enabled: false,
         updated_at: Utc::now().to_rfc3339(),
         ..existing
@@ -561,7 +561,7 @@ async fn start_repo_import(
         std::fs::create_dir_all(&git_repo_path)
             .map_err(|e| AppError::Internal(format!("mkdir failed: {}", e)))?;
 
-        let base_clone_url = gitsvnsync_core::git::remote_url::derive_git_remote_url(
+        let base_clone_url = reposync_core::git::remote_url::derive_git_remote_url(
             &repo.git_api_url,
             None,
             &repo.git_repo,
@@ -609,7 +609,7 @@ async fn start_repo_import(
         .map_err(|e| AppError::Internal(format!("failed to create repo dir: {}", e)))?;
 
     // 7. Build clone URL from repo config
-    let clone_url = gitsvnsync_core::git::remote_url::derive_git_remote_url(
+    let clone_url = reposync_core::git::remote_url::derive_git_remote_url(
         &repo.git_api_url,
         None,
         &repo.git_repo,
@@ -658,7 +658,7 @@ async fn start_repo_import(
     let git_client = Arc::new(std::sync::Mutex::new(git_client));
 
     // 9. Create IdentityMapper and FilePolicy (use defaults for per-repo)
-    let identity_config = gitsvnsync_core::config::IdentityConfig::default();
+    let identity_config = reposync_core::config::IdentityConfig::default();
     let identity_mapper = IdentityMapper::new(&identity_config)
         .map_err(|e| AppError::Internal(format!("failed to init identity mapper: {}", e)))?;
 
@@ -670,7 +670,7 @@ async fn start_repo_import(
     let file_policy = FilePolicy::with_lfs(0, vec![], lfs_threshold_bytes, &[]);
 
     // 10. Open a separate DB connection for the import task
-    let db_path = data_dir.join("gitsvnsync.db");
+    let db_path = data_dir.join("reposync.db");
     let import_db = Database::new(&db_path)
         .map_err(|e| AppError::Internal(format!("failed to open db: {}", e)))?;
 
@@ -963,7 +963,7 @@ async fn create_branch_pair(
     let now = Utc::now().to_rfc3339();
     let name = format!("{} / {}", parent.name, body.git_branch);
 
-    let child = gitsvnsync_core::models::Repository {
+    let child = reposync_core::models::Repository {
         id: new_id.clone(),
         name,
         svn_url: parent.svn_url.clone(),

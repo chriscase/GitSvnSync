@@ -1,12 +1,12 @@
 [package]
-name = "gitsvnsync-web"
+name = "reposync-web"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "GitSvnSync web server and API"
+description = "RepoSync web server and API"
 
 [dependencies]
-gitsvnsync-core = { path = "../core" }
+reposync-core = { path = "../core" }
 tokio = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
@@ -20,18 +20,3 @@ uuid = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
-rusqlite = { workspace = true }
-toml = { workspace = true }
-reqwest = { workspace = true }
-subtle = { workspace = true }
-
-
-[dev-dependencies]
-tokio = { workspace = true }
-tempfile = { workspace = true }
-reqwest = { workspace = true }
-serde_json = { workspace = true }
-git2 = { workspace = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-libc = "0.2"

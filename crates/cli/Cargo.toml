@@ -1,17 +1,17 @@
 [package]
-name = "gitsvnsync-cli"
+name = "reposync-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "GitSvnSync command-line management tool"
+description = "RepoSync command-line management tool"
 
 [[bin]]
-name = "gitsvnsync"
+name = "reposync"
 path = "src/main.rs"
 
 [dependencies]
-gitsvnsync-core = { path = "../core" }
-gitsvnsync-personal = { path = "../personal" }
+reposync-core = { path = "../core" }
+reposync-personal = { path = "../personal" }
 tokio = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }

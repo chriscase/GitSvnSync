@@ -641,7 +641,7 @@ pub async fn run_full_import(
 
         // Build commit message
         let message = format!(
-            "{}\n\n[gitsvnsync] imported from SVN r{}\nSVN-Author: {}\nSVN-Date: {}",
+            "{}\n\n[reposync] imported from SVN r{}\nSVN-Author: {}\nSVN-Date: {}",
             entry.message, rev, entry.author, entry.date
         );
 

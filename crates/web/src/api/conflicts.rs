@@ -63,9 +63,9 @@ pub struct ResolveConflictRequest {
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/conflicts", get(list_conflicts))
-        .route("/api/conflicts/:id", get(get_conflict))
-        .route("/api/conflicts/:id/resolve", post(resolve_conflict))
-        .route("/api/conflicts/:id/defer", post(defer_conflict))
+        .route("/api/conflicts/{id}", get(get_conflict))
+        .route("/api/conflicts/{id}/resolve", post(resolve_conflict))
+        .route("/api/conflicts/{id}/defer", post(defer_conflict))
 }
 
 async fn list_conflicts(
@@ -82,7 +82,10 @@ async fn list_conflicts(
     let limit = query.per_page.unwrap_or(20).min(100);
     let status_filter = query.status.as_deref();
 
-    let db = &state.db;
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
     let entries = db
         .list_conflicts(status_filter, limit)
         .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
@@ -115,7 +118,10 @@ async fn get_conflict(
     )
     .await?;
 
-    let db = &state.db;
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
     let conflict = db
         .get_conflict(&id)
         .map_err(|e| AppError::Internal(format!("database error: {}", e)))?
@@ -160,7 +166,10 @@ async fn resolve_conflict(
         }
     };
 
-    let db = &state.db;
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
     db.resolve_conflict(&id, "resolved", resolution, "api")
         .map_err(|e| AppError::Internal(format!("failed to resolve conflict: {}", e)))?;
 
@@ -189,7 +198,10 @@ async fn defer_conflict(
     )
     .await?;
 
-    let db = &state.db;
+    let db = state
+        .db
+        .lock()
+        .map_err(|e| AppError::Internal(format!("db lock: {}", e)))?;
     db.resolve_conflict(&id, "deferred", "deferred", "api")
         .map_err(|e| AppError::Internal(format!("failed to defer conflict: {}", e)))?;
 

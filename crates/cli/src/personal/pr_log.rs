@@ -3,8 +3,8 @@
 use anyhow::{Context, Result};
 use comfy_table::{presets::UTF8_FULL, Cell, ContentArrangement, Table};
 
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::personal_config::PersonalConfig;
+use reposync_core::db::Database;
+use reposync_core::personal_config::PersonalConfig;
 
 use super::style;
 

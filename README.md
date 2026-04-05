@@ -1,10 +1,10 @@
-# GitSvnSync
+# RepoSync
 
 **Bidirectional SVN <-> Git synchronization bridge that just works.**
 
-GitSvnSync synchronizes commits between SVN and Git repositories. It can run as a server daemon for entire teams or as a lightweight personal tool on your laptop. It watches both systems, auto-merges non-conflicting changes, and alerts you only when human intervention is needed.
+RepoSync synchronizes commits between SVN and Git repositories. It can run as a server daemon for entire teams or as a lightweight personal tool on your laptop. It watches both systems, auto-merges non-conflicting changes, and alerts you only when human intervention is needed.
 
-## Why GitSvnSync?
+## Why RepoSync?
 
 Many enterprise teams are stuck on SVN but have access to GitHub Enterprise or GitHub.com. Existing tools don't solve the problem:
 
@@ -14,11 +14,11 @@ Many enterprise teams are stuck on SVN but have access to GitHub Enterprise or G
 | **SubGit** | Commercial, requires disabling writes to both repos |
 | **svn2git** | One-way migration only |
 
-GitSvnSync fills this gap as a **free, open-source, production-grade** solution.
+RepoSync fills this gap as a **free, open-source, production-grade** solution.
 
 ## Two Modes
 
-GitSvnSync supports two distinct workflows depending on your needs:
+RepoSync supports two distinct workflows depending on your needs:
 
 ### Team Mode
 
@@ -50,9 +50,9 @@ See [docs/personal-branch/](docs/personal-branch/) for the full Personal Branch 
 Get up and running in three commands:
 
 ```bash
-gitsvnsync personal init                           # Interactive setup wizard
-gitsvnsync personal import --full                  # Import SVN history to GitHub
-gitsvnsync personal start                          # Start sync daemon
+reposync personal init                           # Interactive setup wizard
+reposync personal import --full                  # Import SVN history to GitHub
+reposync personal start                          # Start sync daemon
 ```
 
 The `init` wizard walks you through connecting your SVN repo and GitHub repo, configuring branch names, and setting up your identity mapping. Once `import --full` completes, `start` launches a background sync daemon on your laptop that watches for new SVN commits and creates PRs in your GitHub repo.
@@ -69,57 +69,57 @@ The `init` wizard walks you through connecting your SVN repo and GitHub repo, co
 
 **From binary release:**
 ```bash
-curl -fsSL https://github.com/chriscase/GitSvnSync/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/chriscase/RepoSync/releases/latest/download/install.sh | bash
 ```
 
 **From source:**
 ```bash
-git clone https://github.com/chriscase/GitSvnSync.git
-cd GitSvnSync
+git clone https://github.com/chriscase/RepoSync.git
+cd RepoSync
 cargo build --release
 ```
 
 **Docker:**
 ```bash
-docker pull ghcr.io/chriscase/gitsvnsync:latest
+docker pull ghcr.io/chriscase/reposync:latest
 ```
 
 ### Configure
 
 ```bash
 # Generate a default config file
-gitsvnsync init --config /etc/gitsvnsync/config.toml
+reposync init --config /etc/reposync/config.toml
 
 # Edit with your SVN and GitHub details
-$EDITOR /etc/gitsvnsync/config.toml
+$EDITOR /etc/reposync/config.toml
 
 # Set up author mappings
-$EDITOR /etc/gitsvnsync/authors.toml
+$EDITOR /etc/reposync/authors.toml
 ```
 
 ### Run
 
 **As a systemd service:**
 ```bash
-sudo cp scripts/gitsvnsync.service /etc/systemd/system/
-sudo systemctl enable gitsvnsync
-sudo systemctl start gitsvnsync
+sudo cp scripts/reposync.service /etc/systemd/system/
+sudo systemctl enable reposync
+sudo systemctl start reposync
 ```
 
 **With Docker:**
 ```bash
 docker run -d \
-  --name gitsvnsync \
+  --name reposync \
   -p 8080:8080 \
-  -v /etc/gitsvnsync:/etc/gitsvnsync:ro \
-  -v /var/lib/gitsvnsync:/var/lib/gitsvnsync \
-  --env-file /etc/gitsvnsync/env \
-  ghcr.io/chriscase/gitsvnsync:latest
+  -v /etc/reposync:/etc/reposync:ro \
+  -v /var/lib/reposync:/var/lib/reposync \
+  --env-file /etc/reposync/env \
+  ghcr.io/chriscase/reposync:latest
 ```
 
 **Directly:**
 ```bash
-gitsvnsync-daemon --config /etc/gitsvnsync/config.toml
+reposync-daemon --config /etc/reposync/config.toml
 ```
 
 ### Access the Dashboard
@@ -134,31 +134,31 @@ See [docs/configuration.md](docs/configuration.md) for the full configuration re
 ```toml
 [daemon]
 poll_interval_secs = 15
-data_dir = "/var/lib/gitsvnsync"
+data_dir = "/var/lib/reposync"
 
 [svn]
 url = "https://svn.company.com/repos/project"
 username = "sync-service"
-password_env = "GITSVNSYNC_SVN_PASSWORD"
+password_env = "REPOSYNC_SVN_PASSWORD"
 
 [github]
 api_url = "https://github.company.com/api/v3"
 repo = "org/project"
-token_env = "GITSVNSYNC_GITHUB_TOKEN"
+token_env = "REPOSYNC_GITHUB_TOKEN"
 
 [identity]
-mapping_file = "/etc/gitsvnsync/authors.toml"
+mapping_file = "/etc/reposync/authors.toml"
 email_domain = "company.com"
 
 [web]
 listen = "0.0.0.0:8080"
 auth_mode = "simple"
-admin_password_env = "GITSVNSYNC_ADMIN_PASSWORD"
+admin_password_env = "REPOSYNC_ADMIN_PASSWORD"
 ```
 
 ## Author Mapping
 
-GitSvnSync transparently maps identities between SVN and Git:
+RepoSync transparently maps identities between SVN and Git:
 
 ```toml
 # authors.toml
@@ -179,7 +179,7 @@ The sync daemon is always visible as the Git committer for audit purposes.
 
 ```
 +-------------------------------------------------+
-|              GitSvnSync Daemon                  |
+|              RepoSync Daemon                    |
 |                                                 |
 |  SVN Watcher --> Sync Engine <-- Git Watcher    |
 |  Identity Mapper   |   Conflict Resolution      |
@@ -199,27 +199,27 @@ See [docs/architecture.md](docs/architecture.md) for the full technical design.
 ### Team Mode Commands
 
 ```bash
-gitsvnsync status                              # Show sync status
-gitsvnsync conflicts list                      # List active conflicts
-gitsvnsync conflicts resolve <id> --accept git # Resolve from CLI
-gitsvnsync sync now                            # Trigger immediate sync
-gitsvnsync identity list                       # Show author mappings
-gitsvnsync audit --limit 20                    # Recent sync history
+reposync status                              # Show sync status
+reposync conflicts list                      # List active conflicts
+reposync conflicts resolve <id> --accept git # Resolve from CLI
+reposync sync now                            # Trigger immediate sync
+reposync identity list                       # Show author mappings
+reposync audit --limit 20                    # Recent sync history
 ```
 
 ### Personal Mode Commands
 
 ```bash
-gitsvnsync personal init                           # Interactive setup wizard
-gitsvnsync personal import --full                  # Import SVN history to GitHub
-gitsvnsync personal start                          # Start sync daemon
-gitsvnsync personal stop                           # Stop sync daemon
-gitsvnsync personal status                         # Show sync dashboard
-gitsvnsync personal log                            # Show sync history
-gitsvnsync personal pr-log                         # Show PR sync history
-gitsvnsync personal doctor                         # Run health checks
-gitsvnsync personal conflicts list                 # List conflicts
-gitsvnsync personal conflicts resolve ID --accept git  # Resolve a conflict
+reposync personal init                           # Interactive setup wizard
+reposync personal import --full                  # Import SVN history to GitHub
+reposync personal start                          # Start sync daemon
+reposync personal stop                           # Stop sync daemon
+reposync personal status                         # Show sync dashboard
+reposync personal log                            # Show sync history
+reposync personal pr-log                         # Show PR sync history
+reposync personal doctor                         # Run health checks
+reposync personal conflicts list                 # List conflicts
+reposync personal conflicts resolve ID --accept git  # Resolve a conflict
 ```
 
 ## Development

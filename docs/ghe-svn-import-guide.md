@@ -99,7 +99,7 @@ Navigate to `http://<reposync-server>:8080/setup` in your browser.
 - Listen address: `0.0.0.0:8080`
 - Auth mode: Simple (password)
 - Poll interval: `30` seconds (for ongoing sync after import)
-- Data directory: `/home/<user>/gitsvnsync-data`
+- Data directory: `/home/<user>/reposync-data`
 
 ### 7. Review (Step 7)
 
@@ -165,7 +165,7 @@ To import multiple SVN branches into separate Git branches, run the wizard multi
 - This is a warning, not an error — files will be committed directly without LFS
 
 ### Daemon won't start
-- Check logs: `tail -50 /tmp/gitsvnsync.log`
+- Check logs: `tail -50 /tmp/reposync.log`
 - The daemon now handles missing git repos gracefully
 - Ensure the data directory exists and is writable
 

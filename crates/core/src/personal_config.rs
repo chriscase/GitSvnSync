@@ -1,4 +1,4 @@
-//! Configuration for GitSvnSync Personal Branch Mode.
+//! Configuration for RepoSync Personal Branch Mode.
 //!
 //! A simplified, single-developer configuration that reuses the existing
 //! `SvnConfig` and `GitHubConfig` patterns from the team-mode [`AppConfig`].
@@ -39,12 +39,6 @@ pub struct PersonalConfig {
     /// Sync behaviour options.
     #[serde(default)]
     pub options: PersonalOptionsConfig,
-
-    /// Optional identity mapping for preserving original SVN authors.
-    /// When set, `import --full` will map SVN usernames to Git identities
-    /// instead of using the single developer identity for all commits.
-    #[serde(default)]
-    pub identity: Option<crate::config::IdentityConfig>,
 }
 
 // ---------------------------------------------------------------------------
@@ -82,7 +76,7 @@ fn default_log_level() -> String {
 
 fn default_personal_data_dir() -> PathBuf {
     // Platform-appropriate default; overridden at runtime via dirs crate
-    PathBuf::from("~/.local/share/gitsvnsync")
+    PathBuf::from("~/.local/share/reposync")
 }
 
 // ---------------------------------------------------------------------------
@@ -215,14 +209,14 @@ Synced-From: svn
 SVN-Revision: r{svn_rev}
 SVN-Author: {svn_author}
 SVN-Date: {svn_date}
-Sync-Marker: [gitsvnsync]"#
+Sync-Marker: [reposync]"#
         .into()
 }
 
 fn default_git_to_svn_template() -> String {
     r#"{original_message}
 
-[gitsvnsync] Synced from Git
+[reposync] Synced from Git
 Git-SHA: {git_sha}
 PR-Number: #{pr_number}
 PR-Branch: {pr_branch}"#
@@ -410,23 +404,23 @@ impl PersonalConfig {
 
     /// Generate a default TOML config template string.
     pub fn default_template() -> &'static str {
-        r#"# GitSvnSync Personal Branch Mode Configuration
+        r#"# RepoSync Personal Branch Mode Configuration
 # See: docs/personal-branch/configuration.md
 
 [personal]
 poll_interval_secs = 30
 log_level = "info"
-# data_dir = "~/.local/share/gitsvnsync"  # auto-detected
+# data_dir = "~/.local/share/reposync"  # auto-detected
 
 [svn]
 url = "https://svn.example.com/repos/project/trunk"
 username = "your_svn_username"
-password_env = "GITSVNSYNC_SVN_PASSWORD"
+password_env = "REPOSYNC_SVN_PASSWORD"
 
 [github]
 api_url = "https://api.github.com"
 repo = "yourname/project-mirror"
-token_env = "GITSVNSYNC_GITHUB_TOKEN"
+token_env = "REPOSYNC_GITHUB_TOKEN"
 default_branch = "main"
 auto_create = true
 private = true
@@ -479,7 +473,7 @@ mod tests {
 [personal]
 poll_interval_secs = 30
 log_level = "debug"
-data_dir = "/tmp/gitsvnsync-personal"
+data_dir = "/tmp/reposync-personal"
 
 [svn]
 url = "https://svn.example.com/repo/trunk"
@@ -500,7 +494,7 @@ svn_username = "jdoe"
 
 [commit_format]
 svn_to_git = "{original_message}\n\nSVN-Revision: r{svn_rev}"
-git_to_svn = "{original_message}\n\n[gitsvnsync] Git-SHA: {git_sha}"
+git_to_svn = "{original_message}\n\n[reposync] Git-SHA: {git_sha}"
 
 [options]
 normalize_line_endings = true

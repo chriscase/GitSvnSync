@@ -21,7 +21,7 @@ export default function DiffViewer({
       leftTitle={leftTitle}
       rightTitle={rightTitle}
       compareMethod={DiffMethod.LINES}
-      useDarkTheme={true}
+      useDarkTheme={false}
       styles={{
         contentText: {
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',

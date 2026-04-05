@@ -1,4 +1,4 @@
-//! Domain model types used throughout GitSvnSync.
+//! Domain model types used throughout RepoSync.
 //!
 //! These types bridge the sync engine, database layer, and web API.
 
@@ -20,7 +20,6 @@ pub struct SyncStatus {
     pub total_conflicts: i64,
     pub active_conflicts: i64,
     pub total_errors: i64,
-    pub last_error_at: Option<String>,
     pub uptime_secs: u64,
 }
 
@@ -107,7 +106,6 @@ impl Conflict {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncRecord {
     pub id: String,
-    pub repo_id: Option<String>,
     pub svn_revision: Option<i64>,
     pub git_hash: Option<String>,
     pub direction: SyncDirection,
@@ -293,94 +291,6 @@ pub struct WebAuditEntry {
     pub details: String,
     pub actor: Option<String>,
     pub success: bool,
-}
-
-// ---------------------------------------------------------------------------
-// Multi-user auth types
-// ---------------------------------------------------------------------------
-
-/// A user account.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct User {
-    pub id: String,
-    pub username: String,
-    pub display_name: String,
-    pub email: String,
-    #[serde(skip_serializing)]
-    pub password_hash: String,
-    pub role: String,
-    pub enabled: bool,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-/// An encrypted credential stored for a user (e.g. SVN password, API token).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserCredential {
-    pub id: String,
-    pub user_id: String,
-    pub service: String,
-    pub server_url: String,
-    pub username: String,
-    #[serde(skip_serializing)]
-    pub encrypted_value: String,
-    #[serde(skip_serializing)]
-    pub nonce: String,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-/// An active user session.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Session {
-    pub token: String,
-    pub user_id: String,
-    pub expires_at: String,
-    pub created_at: String,
-}
-
-// ---------------------------------------------------------------------------
-// Repository (multi-repo support)
-// ---------------------------------------------------------------------------
-
-/// A configured repository for multi-repo sync.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Repository {
-    pub id: String,
-    pub name: String,
-    pub svn_url: String,
-    pub svn_branch: String,
-    pub svn_username: String,
-    pub git_provider: String,
-    pub git_api_url: String,
-    pub git_repo: String,
-    pub git_branch: String,
-    pub sync_mode: String,
-    pub poll_interval_secs: i64,
-    pub lfs_threshold_mb: i64,
-    pub auto_merge: bool,
-    pub enabled: bool,
-    pub created_by: Option<String>,
-    #[serde(default)]
-    pub parent_id: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
-    #[serde(default)]
-    pub last_svn_rev: i64,
-    #[serde(default)]
-    pub last_git_sha: String,
-    #[serde(default)]
-    pub last_sync_at: Option<String>,
-    #[serde(default = "default_sync_status")]
-    pub sync_status: String,
-    #[serde(default)]
-    pub total_syncs: i64,
-    #[serde(default)]
-    pub total_errors: i64,
-}
-
-fn default_sync_status() -> String {
-    "idle".to_string()
 }
 
 // ---------------------------------------------------------------------------

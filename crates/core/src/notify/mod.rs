@@ -61,7 +61,7 @@ impl Notifier {
         }
 
         if let Some(ref email) = self.email {
-            let subject = format!("[GitSvnSync] Conflict detected: {}", conflict.file_path);
+            let subject = format!("[RepoSync] Conflict detected: {}", conflict.file_path);
             let body = format_conflict_email_html(conflict);
             if let Err(e) = email.send(&subject, &body).await {
                 warn!(error = %e, "email notification failed");
@@ -87,15 +87,15 @@ impl Notifier {
         info!("sending sync error notification");
 
         if let Some(ref slack) = self.slack {
-            let message = format!(":x: *GitSvnSync Error*\n```{}```", error);
+            let message = format!(":x: *RepoSync Error*\n```{}```", error);
             let _ = slack.send_message(&message).await;
         }
 
         if let Some(ref email) = self.email {
-            let subject = "[GitSvnSync] Sync Error";
+            let subject = "[RepoSync] Sync Error";
             let body = format!(
                 "<html><body>\
-                <h2 style=\"color: red;\">GitSvnSync Sync Error</h2>\
+                <h2 style=\"color: red;\">RepoSync Sync Error</h2>\
                 <pre>{}</pre>\
                 </body></html>",
                 html_escape(error)
@@ -120,7 +120,7 @@ impl Notifier {
 
         if let Some(ref slack) = self.slack {
             let message = format!(
-                ":white_check_mark: *GitSvnSync Cycle Complete*\n\
+                ":white_check_mark: *RepoSync Cycle Complete*\n\
                  - SVN -> Git: {} commits\n\
                  - Git -> SVN: {} commits\n\
                  - Conflicts: {} ({} auto-resolved)",
@@ -133,10 +133,10 @@ impl Notifier {
         }
 
         if let Some(ref email) = self.email {
-            let subject = "[GitSvnSync] Sync Complete";
+            let subject = "[RepoSync] Sync Complete";
             let body = format!(
                 "<html><body>\
-                <h2>GitSvnSync Sync Cycle Complete</h2>\
+                <h2>RepoSync Sync Cycle Complete</h2>\
                 <table>\
                 <tr><td>SVN -&gt; Git</td><td>{}</td></tr>\
                 <tr><td>Git -&gt; SVN</td><td>{}</td></tr>\
@@ -182,7 +182,7 @@ fn format_conflict_slack(conflict: &Conflict) -> String {
         msg.push_str(&format!("\n*Git SHA:* `{}`", &sha[..8.min(sha.len())]));
     }
 
-    msg.push_str("\n\nPlease resolve this conflict in the GitSvnSync dashboard.");
+    msg.push_str("\n\nPlease resolve this conflict in the RepoSync dashboard.");
     msg
 }
 
@@ -219,7 +219,7 @@ fn format_conflict_email_html(conflict: &Conflict) -> String {
     }
 
     html.push_str("</table>");
-    html.push_str("<p>Please resolve this conflict in the GitSvnSync dashboard.</p>");
+    html.push_str("<p>Please resolve this conflict in the RepoSync dashboard.</p>");
     html.push_str("</body></html>");
     html
 }

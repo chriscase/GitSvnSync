@@ -65,7 +65,7 @@ async fn seed_data(
         ("dchen", "David Chen", "david.chen@mentorg.com"),
         ("egarcia", "Elena Garcia", "elena.garcia@mentorg.com"),
         ("fkumar", "Farid Kumar", "farid.kumar@mentorg.com"),
-        ("sync-svc", "GitSvnSync Bot", "gitsvnsync@mentorg.com"),
+        ("sync-svc", "RepoSync Bot", "reposync@mentorg.com"),
     ];
 
     let now = chrono::Utc::now();
@@ -337,7 +337,7 @@ async fn seed_data(
         AuditData { action: "conflict_resolved", direction: None, svn_rev: Some(1835), git_sha: Some("670c4567"), author: Some("dchen"), details: "Resolved src/utils/logger.rs conflict with custom merge: combined structured logging with file info", success: true, hours_ago: 28 },
         AuditData { action: "sync_cycle", direction: Some("svn_to_git"), svn_rev: Some(1835), git_sha: Some("670c4567"), author: None, details: "Synced r1835 -> 670c4567: Add support for SVN externals", success: true, hours_ago: 28 },
         AuditData { action: "sync_cycle", direction: Some("git_to_svn"), svn_rev: Some(1834), git_sha: Some("781d3456"), author: None, details: "Synced 781d3456 -> r1834: Implement conflict auto-resolution", success: true, hours_ago: 32 },
-        AuditData { action: "daemon_started", direction: None, svn_rev: None, git_sha: None, author: None, details: "GitSvnSync daemon v0.1.0 started - team mode, poll interval 15s", success: true, hours_ago: 48 },
+        AuditData { action: "daemon_started", direction: None, svn_rev: None, git_sha: None, author: None, details: "RepoSync daemon v0.1.0 started - team mode, poll interval 15s", success: true, hours_ago: 48 },
         AuditData { action: "auth_login", direction: None, svn_rev: None, git_sha: None, author: Some("admin"), details: "Dashboard login from 10.20.30.40", success: true, hours_ago: 4 },
         AuditData { action: "config_updated", direction: None, svn_rev: None, git_sha: None, author: Some("admin"), details: "Updated identity mappings: added 8 author entries", success: true, hours_ago: 47 },
     ];

@@ -1,16 +1,16 @@
 [package]
-name = "gitsvnsync-personal"
+name = "reposync-personal"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "GitSvnSync Personal Branch Mode — individual SVN↔Git sync daemon"
+description = "RepoSync Personal Branch Mode — individual SVN↔Git sync daemon"
 
 [[bin]]
-name = "gitsvnsync-personal"
+name = "reposync-personal"
 path = "src/main.rs"
 
 [dependencies]
-gitsvnsync-core = { path = "../core" }
+reposync-core = { path = "../core" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

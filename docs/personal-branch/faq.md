@@ -4,7 +4,7 @@
 
 ### Will my colleagues see my Git commits?
 
-No. When you run `gitsvnsync personal init`, the GitHub repository is created as **private** by default (`private = true` in the config). Only you have access to the GitHub mirror. Your colleagues continue working in SVN as usual and never interact with your GitHub repo.
+No. When you run `reposync personal init`, the GitHub repository is created as **private** by default (`private = true` in the config). Only you have access to the GitHub mirror. Your colleagues continue working in SVN as usual and never interact with your GitHub repo.
 
 The only thing visible in SVN is when your merged PR commits are replayed back. Those commits appear under your normal SVN username, just as if you had committed directly to SVN. The commit messages include metadata trailers (Git SHA, PR number), but this is informational and does not expose the GitHub repository itself.
 
@@ -14,10 +14,10 @@ Tokens and passwords are **never** stored directly in the configuration file. In
 
 ```toml
 [github]
-token_env = "GITSVNSYNC_GITHUB_TOKEN"
+token_env = "REPOSYNC_GITHUB_TOKEN"
 
 [svn]
-password_env = "GITSVNSYNC_SVN_PASSWORD"
+password_env = "REPOSYNC_SVN_PASSWORD"
 ```
 
 At startup, the daemon reads the environment variables and resolves the actual values in memory. Store your secrets in a shell profile, a `.env` file with restricted permissions (`chmod 600`), or a secrets manager.
@@ -32,17 +32,17 @@ When the daemon detects that the SVN HEAD revision is **lower** than the stored 
 
 To recover:
 
-1. Run `gitsvnsync personal doctor` to see the diagnostic output
+1. Run `reposync personal doctor` to see the diagnostic output
 2. Investigate the SVN history to understand what changed
-3. If needed, reset the watermarks with a fresh import: `gitsvnsync personal import --reset`
+3. If needed, reset the watermarks with a fresh import: `reposync personal import --reset`
 
 ### Can I use multiple SVN branches?
 
 Currently, each personal mode configuration supports **one SVN path** (typically a trunk URL). If you need to sync multiple SVN branches, run separate daemon instances with separate config files and data directories:
 
 ```bash
-gitsvnsync personal start --config ~/project-trunk.toml
-gitsvnsync personal start --config ~/project-branch-v2.toml
+reposync personal start --config ~/project-trunk.toml
+reposync personal start --config ~/project-branch-v2.toml
 ```
 
 Each instance maintains its own database, watermarks, and Git repository clone.
@@ -54,8 +54,8 @@ Binary files (images, compiled assets, archives, etc.) are copied as-is during s
 However, **binary files cannot be 3-way merged**. If the same binary file is modified on both sides between sync cycles, a conflict is created and you must choose one version:
 
 ```bash
-gitsvnsync personal conflicts resolve <id> --accept svn   # keep SVN version
-gitsvnsync personal conflicts resolve <id> --accept git   # keep Git version
+reposync personal conflicts resolve <id> --accept svn   # keep SVN version
+reposync personal conflicts resolve <id> --accept git   # keep Git version
 ```
 
 There is no "manual edit" option for binary conflicts. Use `max_file_size` in `[options]` to skip files above a certain size, and `ignore_patterns` to exclude specific paths entirely. Both options are **enforced at runtime** across all sync paths (import, SVN→Git, Git→SVN). Blocked files produce structured log warnings and `file_policy_skip` audit entries — there is no silent pass-through.
@@ -78,7 +78,7 @@ Yes. Set the `api_url` in your configuration to point to your GitHub Enterprise 
 [github]
 api_url = "https://github.yourcompany.com/api/v3"
 repo = "yourname/project-mirror"
-token_env = "GITSVNSYNC_GITHUB_TOKEN"
+token_env = "REPOSYNC_GITHUB_TOKEN"
 ```
 
 The GitHub API client uses this URL for all requests. Generate a personal access token on your GHE instance with `repo` scope.
@@ -115,7 +115,7 @@ Yes, with the following requirements:
 - **Git** must be installed and on your PATH
 - The daemon runs as a background process (no Windows service support yet; use Task Scheduler or run in a terminal)
 
-The data directory defaults to a platform-appropriate location via the `dirs` crate. On Windows this is typically `%APPDATA%\gitsvnsync\`.
+The data directory defaults to a platform-appropriate location via the `dirs` crate. On Windows this is typically `%APPDATA%\reposync\`.
 
 ### Does this work on macOS / Linux?
 
@@ -125,16 +125,16 @@ Yes. On Unix systems, the daemon supports proper signal handling (`SIGTERM`, `SI
 
 ### How do I migrate from git-svn?
 
-GitSvnSync is **not** a drop-in replacement for `git-svn`. It uses a different approach (full SVN exports rather than `git-svn fetch`), and its commit history starts fresh.
+RepoSync is **not** a drop-in replacement for `git-svn`. It uses a different approach (full SVN exports rather than `git-svn fetch`), and its commit history starts fresh.
 
 Recommended migration path:
 
 1. Stop using `git-svn` (no more `git svn dcommit`)
-2. Run `gitsvnsync personal init` and `gitsvnsync personal import` to create a fresh mirror from SVN
+2. Run `reposync personal init` and `reposync personal import` to create a fresh mirror from SVN
 3. Move your in-progress work from your old git-svn repo to branches on the new GitHub mirror
 4. Continue using the PR workflow from there
 
-Attempting to reuse a `git-svn` repository as the GitSvnSync data directory is not supported and will likely cause watermark and commit_map inconsistencies.
+Attempting to reuse a `git-svn` repository as the RepoSync data directory is not supported and will likely cause watermark and commit_map inconsistencies.
 
 ## Multi-User Scenarios
 

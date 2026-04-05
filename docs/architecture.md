@@ -2,11 +2,11 @@
 
 ## System Overview
 
-GitSvnSync is a server daemon that provides bidirectional synchronization between SVN and Git (GitHub) repositories. It runs as a background service on a VM, continuously monitoring both repositories for changes.
+RepoSync is a server daemon that provides bidirectional synchronization between SVN and Git (GitHub) repositories. It runs as a background service on a VM, continuously monitoring both repositories for changes.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    GitSvnSync Daemon (Rust)                     │
+│                    RepoSync Daemon (Rust)                       │
 │                                                                 │
 │  ┌──────────┐   ┌──────────────┐   ┌────────────────────────┐  │
 │  │ SVN      │   │ Sync Engine  │   │ GitHub                 │  │
@@ -89,11 +89,11 @@ SVN and Git represent author identity differently:
 - **Git**: Name + email (`John Smith <jsmith@company.com>`)
 - **Git also has**: Separate Author vs Committer fields
 
-GitSvnSync uses the Author/Committer distinction to preserve audit trail:
+RepoSync uses the Author/Committer distinction to preserve audit trail:
 
 | Direction | Author field | Committer field |
 |-----------|-------------|-----------------|
-| SVN → Git | Original developer (mapped from SVN username) | GitSvnSync daemon |
+| SVN → Git | Original developer (mapped from SVN username) | RepoSync daemon |
 | Git → SVN | `svn:author` set to mapped SVN username | N/A (SVN has no committer) |
 
 ## Database Schema
@@ -118,8 +118,8 @@ Axum-based HTTP server embedded in the daemon:
 ## Crate Structure
 
 ```
-gitsvnsync-core    # Shared library: sync logic, clients, identity, conflicts, DB
-gitsvnsync-daemon  # Binary: daemon entry point, scheduler, signal handling
-gitsvnsync-web     # Library: Axum server, REST API, WebSocket
-gitsvnsync-cli     # Binary: management CLI (status, conflicts, identity, etc.)
+reposync-core    # Shared library: sync logic, clients, identity, conflicts, DB
+reposync-daemon  # Binary: daemon entry point, scheduler, signal handling
+reposync-web     # Library: Axum server, REST API, WebSocket
+reposync-cli     # Binary: management CLI (status, conflicts, identity, etc.)
 ```

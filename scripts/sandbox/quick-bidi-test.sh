@@ -34,4 +34,4 @@ check "Git->SVN" "1" "$((SVN_AFTER - SVN_BEFORE))"
 
 echo ""
 echo "=== RESULT: $PASS/$((PASS+FAIL)) ==="
-grep "per-repo.*Sandbox" /tmp/gitsvnsync.log | tail -5
+grep "per-repo.*Sandbox" /tmp/reposync.log | tail -5

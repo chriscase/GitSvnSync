@@ -16,7 +16,7 @@ export default function SyncStatus({ status }: Props) {
     status.state.charAt(0).toUpperCase() + status.state.slice(1);
 
   return (
-    <div className="flex items-center space-x-2 text-sm text-gray-400">
+    <div className="flex items-center space-x-2 text-sm text-gray-300">
       <span className={`inline-block w-2 h-2 rounded-full ${stateColor}`} />
       <span>{stateLabel}</span>
       {status.last_sync_at && (

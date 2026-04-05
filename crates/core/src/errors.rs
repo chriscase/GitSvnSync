@@ -1,4 +1,4 @@
-//! Comprehensive error types for the GitSvnSync core library.
+//! Comprehensive error types for the RepoSync core library.
 //!
 //! Each subsystem has its own error type derived with `thiserror`, and a
 //! top-level [`CoreError`] enum unifies them all for callers that want a
@@ -273,10 +273,6 @@ pub enum DatabaseError {
     /// Generic I/O error (e.g. file permissions).
     #[error("database I/O error: {0}")]
     IoError(#[from] std::io::Error),
-
-    /// Generic error with a descriptive message.
-    #[error("{0}")]
-    Other(String),
 }
 
 // ---------------------------------------------------------------------------

@@ -8,15 +8,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::git::client::GitClient;
-use gitsvnsync_core::git::github::GitHubClient;
-use gitsvnsync_core::models::PersonalSyncStats;
-use gitsvnsync_core::personal_config::PersonalConfig;
-use gitsvnsync_core::svn::SvnClient;
+use reposync_core::db::Database;
+use reposync_core::git::client::GitClient;
+use reposync_core::git::github::GitHubClient;
+use reposync_core::models::PersonalSyncStats;
+use reposync_core::personal_config::PersonalConfig;
+use reposync_core::svn::SvnClient;
 
 use crate::git_to_svn::GitToSvnSync;
 use crate::pr_monitor::PrMonitor;
@@ -77,7 +77,7 @@ impl PersonalSyncEngine {
 
         // LFS preflight: log warning (non-fatal) if LFS is configured but not available.
         if config.options.lfs_threshold > 0 {
-            match gitsvnsync_core::lfs::preflight_check() {
+            match reposync_core::lfs::preflight_check() {
                 Ok(version) => {
                     info!(
                         version = %version,

@@ -16,12 +16,12 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use gitsvnsync_core::config::{AppConfig, IdentityConfig};
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::git::GitClient;
-use gitsvnsync_core::identity::IdentityMapper;
-use gitsvnsync_core::svn::SvnClient;
-use gitsvnsync_core::sync_engine::SyncEngine;
+use reposync_core::config::{AppConfig, IdentityConfig};
+use reposync_core::db::Database;
+use reposync_core::git::GitClient;
+use reposync_core::identity::IdentityMapper;
+use reposync_core::svn::SvnClient;
+use reposync_core::sync_engine::SyncEngine;
 
 // ===========================================================================
 // Helpers
@@ -209,11 +209,11 @@ data_dir = "{}"
 [svn]
 url = "{}"
 username = ""
-password_env = "GITSVNSYNC_TEST_SVN_PW"
+password_env = "REPOSYNC_TEST_SVN_PW"
 
 [github]
 repo = "test/test-repo"
-token_env = "GITSVNSYNC_TEST_GH_TOKEN"
+token_env = "REPOSYNC_TEST_GH_TOKEN"
 "#,
         data_dir.display(),
         svn_url
@@ -314,7 +314,7 @@ async fn test_team_mode_svn_to_git_sync() {
     // The most recent commit should contain the sync marker.
     let latest_msg = get_git_commit_message(&git_work_dir, 0);
     assert!(
-        latest_msg.contains("[gitsvnsync]"),
+        latest_msg.contains("[reposync]"),
         "expected sync marker in commit message, got: {}",
         latest_msg
     );
@@ -839,7 +839,7 @@ async fn test_team_mode_forced_failure_persists_audit_entry() {
     // --- Verify acceptance criteria ---
 
     // 1. A failed audit entry was persisted.
-    let audit_entries = engine.db().list_audit_log(10, 0).unwrap();
+    let audit_entries = engine.db().list_audit_log(10).unwrap();
     assert!(
         !audit_entries.is_empty(),
         "expected at least 1 audit entry after failed sync"

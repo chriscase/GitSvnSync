@@ -3,7 +3,7 @@
 //! Polls SVN for new revisions beyond the stored watermark and replays each
 //! revision as a Git commit with proper author identity and metadata trailers.
 //! Echo suppression prevents re-syncing commits that originated from the
-//! Git side (identified by the `[gitsvnsync]` marker in the commit message).
+//! Git side (identified by the `[reposync]` marker in the commit message).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -11,11 +11,11 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::file_policy::{FilePolicy, FilePolicyDecision};
-use gitsvnsync_core::git::GitClient;
-use gitsvnsync_core::personal_config::PersonalConfig;
-use gitsvnsync_core::svn::SvnClient;
+use reposync_core::db::Database;
+use reposync_core::file_policy::{FilePolicy, FilePolicyDecision};
+use reposync_core::git::GitClient;
+use reposync_core::personal_config::PersonalConfig;
+use reposync_core::svn::SvnClient;
 
 use crate::commit_format::CommitFormatter;
 
@@ -25,11 +25,11 @@ const WATERMARK_KEY: &str = "svn_rev";
 /// The SVN-to-Git sync engine for personal branch mode.
 ///
 /// Holds references to all required collaborators: SVN client (async), Git
-/// client (sync, behind `Arc<std::sync::Mutex>`), the database for
+/// client (sync, behind `Arc<tokio::sync::Mutex>`), the database for
 /// persistence, and the personal config for identity and template settings.
 pub struct SvnToGitSync {
     svn_client: SvnClient,
-    git_client: Arc<std::sync::Mutex<GitClient>>,
+    git_client: Arc<tokio::sync::Mutex<GitClient>>,
     db: Arc<Database>,
     config: PersonalConfig,
     formatter: CommitFormatter,
@@ -40,7 +40,7 @@ impl SvnToGitSync {
     /// Create a new `SvnToGitSync` instance.
     pub fn new(
         svn_client: SvnClient,
-        git_client: Arc<std::sync::Mutex<GitClient>>,
+        git_client: Arc<tokio::sync::Mutex<GitClient>>,
         db: Arc<Database>,
         config: PersonalConfig,
     ) -> Self {
@@ -72,7 +72,7 @@ impl SvnToGitSync {
     /// successfully synced.
     ///
     /// Revisions are skipped if:
-    /// - The commit message contains the `[gitsvnsync]` echo marker.
+    /// - The commit message contains the `[reposync]` echo marker.
     /// - The revision is already recorded in the `commit_map` table.
     pub async fn sync(&self) -> Result<usize> {
         // 1. Read the current watermark.
@@ -144,7 +144,7 @@ impl SvnToGitSync {
                 .with_context(|| format!("failed to export SVN revision r{}", rev))?;
 
             // 6. Copy exported files into the Git working tree (with policy).
-            let git_client = self.git_client.lock().unwrap();
+            let git_client = self.git_client.lock().await;
             let repo_path = git_client.repo_path().to_path_buf();
             drop(git_client); // Release lock before blocking I/O.
 
@@ -168,7 +168,9 @@ impl SvnToGitSync {
             // 8. Stage all changes and commit using the developer's identity.
             //
             // The GitClient uses git2 (synchronous). We wrap the call in
-            // spawn_blocking so we don't block the async runtime.
+            // spawn_blocking so we don't block the async runtime. Because
+            // the tokio MutexGuard is not Send, we re-acquire the lock
+            // inside the blocking task via block_on.
             let git_sha = {
                 let author_name = self.config.developer.name.clone();
                 let author_email = self.config.developer.email.clone();
@@ -178,7 +180,8 @@ impl SvnToGitSync {
                 let gc = self.git_client.clone();
 
                 tokio::task::spawn_blocking(move || {
-                    let git_client = gc.lock().unwrap();
+                    let rt = tokio::runtime::Handle::current();
+                    let git_client = rt.block_on(gc.lock());
                     git_client.commit(
                         &msg,
                         &author_name,
@@ -201,7 +204,8 @@ impl SvnToGitSync {
             let gc = self.git_client.clone();
 
             tokio::task::spawn_blocking(move || {
-                let git_client = gc.lock().unwrap();
+                let rt = tokio::runtime::Handle::current();
+                let git_client = rt.block_on(gc.lock());
                 git_client.push("origin", &branch, token.as_deref())
             })
             .await
@@ -384,8 +388,8 @@ impl SvnToGitSync {
 
                         // Ensure `.gitattributes` has the appropriate LFS tracking pattern.
                         // Use dst_root (the Git repo root) for .gitattributes placement.
-                        let pattern = gitsvnsync_core::lfs::pattern_for_path(&rel);
-                        if let Err(e) = gitsvnsync_core::lfs::ensure_lfs_tracked(dst_root, &pattern)
+                        let pattern = reposync_core::lfs::pattern_for_path(&rel);
+                        if let Err(e) = reposync_core::lfs::ensure_lfs_tracked(dst_root, &pattern)
                         {
                             warn!(
                                 path = rel.as_str(),

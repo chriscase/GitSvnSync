@@ -1,4 +1,4 @@
-# GitSvnSync — Verification & Hardening Issue Plan
+# RepoSync — Verification & Hardening Issue Plan
 
 > **22 issues** across **6 phases** covering every module, script, and configuration file in the project.
 

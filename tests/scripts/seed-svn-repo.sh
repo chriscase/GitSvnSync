@@ -4,7 +4,7 @@ set -euo pipefail
 # Seed the test SVN repository with sample data
 # Requires: SVN server running at localhost:8081
 
-SVN_URL="${GITSVNSYNC_TEST_SVN_URL:-http://localhost:8081/svn/testrepo}"
+SVN_URL="${REPOSYNC_TEST_SVN_URL:-http://localhost:8081/svn/testrepo}"
 SVN_USER="alice"
 SVN_PASS="testpass123"
 TMP_DIR=$(mktemp -d)
@@ -29,7 +29,7 @@ cd "$TMP_DIR/trunk"
 cat > README.md << 'EOF'
 # Test Project
 
-This is a test project for GitSvnSync E2E testing.
+This is a test project for RepoSync E2E testing.
 EOF
 
 cat > src/main.py << 'PYEOF'

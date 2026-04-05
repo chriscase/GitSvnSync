@@ -1,6 +1,6 @@
 # Identity Mapping
 
-GitSvnSync transparently maps author identities between SVN and Git so that commits always appear under the correct developer's name.
+RepoSync transparently maps author identities between SVN and Git so that commits always appear under the correct developer's name.
 
 ## The Challenge
 
@@ -13,7 +13,7 @@ SVN and Git represent identity differently:
 
 Additionally, Git distinguishes between **Author** (who wrote the code) and **Committer** (who applied it to the repository).
 
-## How GitSvnSync Handles It
+## How RepoSync Handles It
 
 ### SVN → Git
 
@@ -21,10 +21,10 @@ When a commit by `jsmith` is synced from SVN to Git:
 
 ```
 Git Author:    John Smith <jsmith@company.com>    ← original developer
-Git Committer: GitSvnSync <sync@company.com>      ← daemon (audit trail)
+Git Committer: RepoSync <sync@company.com>      ← daemon (audit trail)
 Git Message:   "Original commit message"
                ""
-               "Synced-from: svn r1234 by GitSvnSync"
+               "Synced-from: svn r1234 by RepoSync"
 ```
 
 The mapping from `jsmith` → `John Smith <jsmith@company.com>` comes from:
@@ -41,7 +41,7 @@ When a commit by `John Smith <jsmith@company.com>` is synced from Git to SVN:
 SVN Author:    jsmith                              ← set via svn:author property
 SVN Message:   "Original commit message"
                ""
-               "Synced-from: git abc1234 by GitSvnSync"
+               "Synced-from: git abc1234 by RepoSync"
 ```
 
 The reverse mapping from `John Smith <jsmith@company.com>` → `jsmith` uses the same sources in reverse.
@@ -50,7 +50,7 @@ This requires the SVN server's `pre-revprop-change` hook to allow author modific
 
 ## Mapping File Format
 
-`/etc/gitsvnsync/authors.toml`:
+`/etc/reposync/authors.toml`:
 
 ```toml
 [authors]
@@ -72,12 +72,12 @@ For large organizations, configure LDAP for automatic lookups:
 
 ```toml
 [identity]
-mapping_file = "/etc/gitsvnsync/authors.toml"
+mapping_file = "/etc/reposync/authors.toml"
 email_domain = "company.com"
 ldap_url = "ldaps://ldap.company.com:636"
 ldap_base_dn = "dc=company,dc=com"
-ldap_bind_dn = "cn=gitsvnsync,ou=services,dc=company,dc=com"
-ldap_bind_password_env = "GITSVNSYNC_LDAP_PASSWORD"
+ldap_bind_dn = "cn=reposync,ou=services,dc=company,dc=com"
+ldap_bind_password_env = "REPOSYNC_LDAP_PASSWORD"
 ```
 
 LDAP lookup queries `uid` and `mail` attributes to build the mapping.
@@ -96,9 +96,9 @@ Lookups never fail silently. Unknown users are mapped with a warning in the log.
 ### Via CLI
 
 ```bash
-gitsvnsync identity list                           # Show all mappings
-gitsvnsync identity add jsmith "John Smith" jsmith@company.com
-gitsvnsync identity remove old_user
+reposync identity list                           # Show all mappings
+reposync identity add jsmith "John Smith" jsmith@company.com
+reposync identity remove old_user
 ```
 
 ### Via Web UI
@@ -107,7 +107,7 @@ Navigate to Configuration → Identity Mapping in the web dashboard.
 
 ### Via File
 
-Edit `/etc/gitsvnsync/authors.toml` directly. The daemon reloads it automatically on change.
+Edit `/etc/reposync/authors.toml` directly. The daemon reloads it automatically on change.
 
 ## Security Considerations
 

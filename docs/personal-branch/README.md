@@ -2,7 +2,7 @@
 
 ## What Is Personal Branch Mode?
 
-Personal Branch Mode is a lightweight, single-developer configuration of GitSvnSync. It lets you mirror an SVN repository to your own GitHub account, work on feature branches with pull requests, and have merged commits automatically sync back to SVN -- all from a daemon running on your local machine.
+Personal Branch Mode is a lightweight, single-developer configuration of RepoSync. It lets you mirror an SVN repository to your own GitHub account, work on feature branches with pull requests, and have merged commits automatically sync back to SVN -- all from a daemon running on your local machine.
 
 Instead of deploying a shared server with webhooks and identity mapping, Personal Branch Mode runs as a background process alongside your normal development tools. You get a full Git-native workflow (branches, PRs, code review) while your commits continue to land in SVN exactly where your team expects them.
 
@@ -29,13 +29,13 @@ If your entire team is ready to move to Git, look at the full [team deployment](
 | Setup | Config files + server provisioning | Interactive CLI wizard |
 | SVN hook required | `pre-revprop-change` | None |
 
-Personal Branch Mode strips away everything you do not need when you are the only user. No server to maintain, no hooks to install on the SVN server, no ports to open. Just `gitsvnsync personal init` and you are running.
+Personal Branch Mode strips away everything you do not need when you are the only user. No server to maintain, no hooks to install on the SVN server, no ports to open. Just `reposync personal init` and you are running.
 
 ## Data Flow
 
 ```
 ┌──────────┐         ┌─────────────────┐         ┌──────────┐
-│          │  poll   │  GitSvnSync     │  push   │          │
+│          │  poll   │  RepoSync       │  push   │          │
 │   SVN    │────────>│  Personal       │────────>│  GitHub  │
 │  Server  │<────────│  Daemon         │<────────│  Repo    │
 │          │  commit │  (your laptop)  │  PR API │          │
@@ -62,10 +62,10 @@ When the daemon pushes an SVN revision to GitHub, it records the mapping. When i
 
 ### Interactive CLI Setup Wizard
 
-Run `gitsvnsync personal init` to walk through configuration step by step. The wizard prompts for your SVN URL, credentials, GitHub token, and target repository. It validates connectivity at each step and writes the config file for you.
+Run `reposync personal init` to walk through configuration step by step. The wizard prompts for your SVN URL, credentials, GitHub token, and target repository. It validates connectivity at each step and writes the config file for you.
 
 ```bash
-$ gitsvnsync personal init
+$ reposync personal init
 ? SVN repository URL: https://svn.example.com/repos/project/trunk
 ? SVN username: jdeveloper
 ? SVN password: ********
@@ -75,21 +75,21 @@ $ gitsvnsync personal init
   Repository does not exist. Create it? [Y/n] Y
   Created jdeveloper/project-mirror (private)
   Performing initial import (4521 revisions)...
-  Config written to ~/.config/gitsvnsync/personal.toml
-  Run `gitsvnsync personal start` to begin syncing.
+  Config written to ~/.config/reposync/personal.toml
+  Run `reposync personal start` to begin syncing.
 ```
 
 ### Health Check Doctor Command
 
-The `gitsvnsync personal doctor` command validates your entire setup: SVN connectivity, GitHub token scopes, local Git state, daemon status, and sync lag. It reports problems with specific fix instructions.
+The `reposync personal doctor` command validates your entire setup: SVN connectivity, GitHub token scopes, local Git state, daemon status, and sync lag. It reports problems with specific fix instructions.
 
 ```bash
-$ gitsvnsync personal doctor
+$ reposync personal doctor
 [OK] SVN connection to https://svn.example.com/repos/project/trunk
 [OK] GitHub token has repo scope
 [OK] Local Git repo is clean
 [WARN] Daemon not running (last seen 2h ago)
-  Fix: run `gitsvnsync personal start`
+  Fix: run `reposync personal start`
 [OK] Sync lag: 0 revisions behind SVN, 0 commits behind GitHub
 ```
 

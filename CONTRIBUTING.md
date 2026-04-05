@@ -1,4 +1,4 @@
-# Contributing to GitSvnSync
+# Contributing to RepoSync
 
 Thank you for your interest in contributing! This guide will help you get started.
 
@@ -14,8 +14,8 @@ Thank you for your interest in contributing! This guide will help you get starte
 ### Building
 
 ```bash
-git clone https://github.com/chriscase/GitSvnSync.git
-cd GitSvnSync
+git clone https://github.com/chriscase/RepoSync.git
+cd RepoSync
 cargo build
 ```
 

@@ -1,6 +1,5 @@
 .PHONY: build release test lint clean web-ui test-env-up test-env-down test-all install \
-        deploy deploy-dry-run deploy-no-ui \
-        validate validate-quick validate-soak validate-ghe-live validate-ghe-live-dry-run
+       validate validate-quick validate-soak validate-ghe-live validate-ghe-live-dry-run
 
 # Development
 build:
@@ -36,9 +35,9 @@ test-env-up:
 	@echo "Waiting for services to be healthy..."
 	@sleep 10
 	@echo "Test environment ready!"
-	@echo "  SVN:        http://localhost:8081/svn/testrepo"
-	@echo "  Gitea:      http://localhost:3000"
-	@echo "  GitSvnSync: http://localhost:8080"
+	@echo "  SVN:       http://localhost:8081/svn/testrepo"
+	@echo "  Gitea:     http://localhost:3000"
+	@echo "  RepoSync:  http://localhost:8080"
 
 test-env-down:
 	docker compose -f tests/docker-compose.yml down -v
@@ -56,19 +55,9 @@ test-e2e:
 
 # Installation
 install: release
-	sudo install -m 755 target/release/gitsvnsync-daemon /usr/local/bin/
-	sudo install -m 755 target/release/gitsvnsync /usr/local/bin/
-	@echo "Installed gitsvnsync-daemon and gitsvnsync to /usr/local/bin/"
-
-# Deployment
-deploy:
-	@bash scripts/deploy.sh
-
-deploy-dry-run:
-	@bash scripts/deploy.sh --dry-run
-
-deploy-no-ui:
-	@bash scripts/deploy.sh --no-web-ui
+	sudo install -m 755 target/release/reposync-daemon /usr/local/bin/
+	sudo install -m 755 target/release/reposync /usr/local/bin/
+	@echo "Installed reposync-daemon and reposync to /usr/local/bin/"
 
 # Validation scripts
 validate:
@@ -91,11 +80,11 @@ validate-ghe-live-dry-run:
 
 # Docker
 docker-build:
-	docker build -t gitsvnsync:latest .
+	docker build -t reposync:latest .
 
 docker-run:
 	docker run -d \
-		--name gitsvnsync \
+		--name reposync \
 		-p 8080:8080 \
-		-v $$(pwd)/config.example.toml:/etc/gitsvnsync/config.toml:ro \
-		gitsvnsync:latest
+		-v $$(pwd)/config.example.toml:/etc/reposync/config.toml:ro \
+		reposync:latest

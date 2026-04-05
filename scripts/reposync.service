@@ -1,0 +1,32 @@
+[Unit]
+Description=RepoSync - Bidirectional SVN/Git Synchronization Daemon
+Documentation=https://github.com/chriscase/RepoSync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=reposync
+Group=reposync
+ExecStart=/usr/local/bin/reposync-daemon --config /etc/reposync/config.toml
+Restart=always
+RestartSec=10
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/reposync
+ReadOnlyPaths=/etc/reposync
+PrivateTmp=true
+
+# Environment
+EnvironmentFile=-/etc/reposync/env
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=reposync
+
+[Install]
+WantedBy=multi-user.target

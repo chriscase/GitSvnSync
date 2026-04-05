@@ -1,6 +1,6 @@
 ---
 name: Feature Request
-about: Suggest a feature for GitSvnSync
+about: Suggest a feature for RepoSync
 title: "[Feature] "
 labels: enhancement
 assignees: ''

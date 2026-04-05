@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# GitSvnSync GHE Live Validation Script
+# RepoSync GHE Live Validation Script
 # ============================================================================
 # Real end-to-end bidirectional validation against a live GitHub Enterprise
 # instance and a real SVN repository.  This is NOT a local simulation.
@@ -16,7 +16,7 @@
 #
 # Optional:
 #   GHE_WEB_URL     — Web base URL (defaults derived from GHE_API_URL)
-#   GITSVNSYNC_CONFIG — Path to gitsvnsync personal config (auto-generated if absent)
+#   REPOSYNC_CONFIG — Path to reposync personal config (auto-generated if absent)
 #
 # Usage:
 #   scripts/ghe-live-validation.sh --dry-run                  # preflight only
@@ -73,7 +73,7 @@ Options:
   --cycles N         Number of validation cycles (default: 1)
   --interval N       Seconds between cycles (default: 5)
   --strict           Fail immediately on any scenario failure
-  --config PATH      Path to gitsvnsync personal config
+  --config PATH      Path to reposync personal config
   --artifacts-dir D  Override artifact output directory
   --help             Show this help
 
@@ -257,7 +257,7 @@ MANIFEST
 # Banner
 # ============================================================================
 log "═══════════════════════════════════════════════════════════════"
-log "GitSvnSync GHE Live Validation"
+log "RepoSync GHE Live Validation"
 log "Run ID:    $RUN_ID"
 log "Timestamp: $TIMESTAMP"
 log "Cycles:    $CYCLES | Interval: ${INTERVAL_SEC}s | Strict: $STRICT"
@@ -410,7 +410,7 @@ DATA_DIR="$WORK_DIR/data"
 mkdir -p "$DATA_DIR"
 
 # Ensure binary is built.
-PERSONAL_BIN="$REPO_ROOT/target/debug/gitsvnsync-personal"
+PERSONAL_BIN="$REPO_ROOT/target/debug/reposync-personal"
 if [[ ! -f "$PERSONAL_BIN" ]]; then
     log "Building workspace..."
     if ! cargo build --workspace > "$ARTIFACT_DIR/build-stdout.log" 2> "$ARTIFACT_DIR/build-stderr.log"; then
@@ -442,7 +442,7 @@ if [[ "$REPO_CODE" == "200" ]]; then
     emit_event "provision" "ghe-repo-check" "pass" 0
 elif [[ "$REPO_CODE" == "404" ]]; then
     log "  Repo not found — creating ${GHE_OWNER}/${GHE_REPO}..."
-    CREATE_RESP=$(gh_api POST "/user/repos" "{\"name\":\"${GHE_REPO}\",\"private\":true,\"auto_init\":true,\"description\":\"GitSvnSync live validation canary\"}")
+    CREATE_RESP=$(gh_api POST "/user/repos" "{\"name\":\"${GHE_REPO}\",\"private\":true,\"auto_init\":true,\"description\":\"RepoSync live validation canary\"}")
     CREATE_CODE=$(gh_status "$CREATE_RESP")
     if [[ "$CREATE_CODE" == "201" ]]; then
         log "  ✓ Repo created"
@@ -476,8 +476,8 @@ else
 fi
 
 # Configure git identity and persist auth for subsequent pulls.
-git -C "$GIT_CLONE" config user.name "gitsvnsync-validator"
-git -C "$GIT_CLONE" config user.email "validator@gitsvnsync.local"
+git -C "$GIT_CLONE" config user.name "reposync-validator"
+git -C "$GIT_CLONE" config user.email "validator@reposync.local"
 git -C "$GIT_CLONE" config "http.extraHeader" "Authorization: token ${GHE_TOKEN}"
 
 log "✅ Provisioning complete"
@@ -585,11 +585,11 @@ for cycle in $(seq 1 "$CYCLES"); do
     fi
 
     # ---- Scenario 4b: SVN→Git sync verification ----
-    # After SVN mutations, invoke gitsvnsync to sync SVN→Git and verify files
+    # After SVN mutations, invoke reposync to sync SVN→Git and verify files
     # appear in the Git clone.  This is the *real* sync test — without it, we
-    # are only validating that SVN CLI operations work, not that GitSvnSync
+    # are only validating that SVN CLI operations work, not that RepoSync
     # actually syncs them.
-    log "▶ S4b: SVN→Git sync (invoke gitsvnsync-personal sync)"
+    log "▶ S4b: SVN→Git sync (invoke reposync-personal sync)"
 
     SYNC_CONFIG="$WORK_DIR/sync_config_c${cycle}.toml"
     SYNC_DATA="$WORK_DIR/sync_data_c${cycle}"
@@ -612,8 +612,8 @@ token_env = "GHE_TOKEN"
 default_branch = "main"
 
 [developer]
-name = "gitsvnsync-validator"
-email = "validator@gitsvnsync.local"
+name = "reposync-validator"
+email = "validator@reposync.local"
 svn_username = "${SVN_USERNAME}"
 TOML
 
@@ -646,12 +646,12 @@ TOML
             fi
         fi
     else
-        record_scenario "s4b-svn-to-git-sync" "fail" "gitsvnsync sync exited non-zero"
+        record_scenario "s4b-svn-to-git-sync" "fail" "reposync sync exited non-zero"
         CYCLE_OK=false
     fi
 
     # ---- Scenario 5: Git→ create branch + commit via GHE API ----
-    # GitSvnSync only syncs *merged PR* commits from Git→SVN. Direct pushes to
+    # RepoSync only syncs *merged PR* commits from Git→SVN. Direct pushes to
     # main are NOT replayed. So we must: create branch → commit → open PR →
     # merge PR → sync → verify in SVN.
     log "▶ S5: Git create branch + commit file via PR"
@@ -700,7 +700,7 @@ TOML
     if [[ -f "$CYCLE_DIR/s5-git-sha.txt" ]]; then
         # Open PR.
         PR_CREATE_RESP=$(gh_api POST "/repos/${GHE_OWNER}/${GHE_REPO}/pulls" \
-            "{\"title\":\"Validation: ${CANARY}\",\"head\":\"${PR_BRANCH}\",\"base\":\"main\",\"body\":\"Automated GitSvnSync validation PR\"}")
+            "{\"title\":\"Validation: ${CANARY}\",\"head\":\"${PR_BRANCH}\",\"base\":\"main\",\"body\":\"Automated RepoSync validation PR\"}")
         PR_CREATE_CODE=$(gh_status "$PR_CREATE_RESP")
         PR_NUMBER=$(gh_body "$PR_CREATE_RESP" | jq -r '.number // ""' 2>/dev/null || echo "")
         if [[ "$PR_CREATE_CODE" == "201" && -n "$PR_NUMBER" ]]; then
@@ -733,7 +733,7 @@ TOML
     gh_api DELETE "/repos/${GHE_OWNER}/${GHE_REPO}/git/refs/heads/${PR_BRANCH}" "" > /dev/null 2>&1 || true
 
     # ---- Scenario 7: Git→SVN sync via merged PR ----
-    # This is the critical Git→SVN proof.  We invoke gitsvnsync-personal sync
+    # This is the critical Git→SVN proof.  We invoke reposync-personal sync
     # after the PR merge, then verify:
     #   (a) the PR's file content appears in SVN
     #   (b) the SVN log for the replayed commit contains Git-SHA / PR metadata
@@ -758,8 +758,11 @@ TOML
                 fi
                 CYCLE_OK=false
             else
-                # (b) Verify the replayed SVN commit carries Git/PR metadata.
-                # GitSvnSync formats commit messages with "Git-Commit:" and "PR:" trailers.
+                # (b) Verify the replayed SVN commit carries EXACT Git/PR metadata.
+                # RepoSync formats commit messages with "Git-Commit: <sha>" and
+                # "PR: #N (<branch>)" trailers. We require an exact match to the
+                # values recorded in S6 — a generic "some trailer exists" is not
+                # sufficient to prove this cycle's PR was actually replayed.
                 SVN_LOG_XML=$(svn log "$SVN_URL/$GIT_FILE" --xml -l 3 \
                     --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
                     --non-interactive --no-auth-cache 2>/dev/null || echo "")
@@ -768,35 +771,44 @@ TOML
                 S7_PROOF_DETAILS="content=OK"
                 S7_PASS=true
 
-                # Check for Git-Commit trailer in the SVN log message.
-                if echo "$SVN_LOG_XML" | grep -q "Git-Commit:"; then
-                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, Git-Commit=found"
+                # Load expected values from S6 artifacts.
+                EXPECTED_PR=$(cat "$CYCLE_DIR/s6-pr-number.txt" 2>/dev/null || echo "")
+                EXPECTED_SHA=$(cat "$CYCLE_DIR/s6-merge-sha.txt" 2>/dev/null || echo "")
+
+                # --- Git-Commit trailer: require exact SHA match ---
+                if [[ -z "$EXPECTED_SHA" ]]; then
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, Git-Commit=FAIL(no expected SHA from S6)"
+                    S7_PASS=false
+                elif echo "$SVN_LOG_XML" | grep -q "Git-Commit: ${EXPECTED_SHA}"; then
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, Git-Commit=${EXPECTED_SHA:0:8}=exact"
                 else
-                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, Git-Commit=MISSING"
+                    OBSERVED_SHA=$(echo "$SVN_LOG_XML" | sed -n 's/.*Git-Commit: \([0-9a-f]*\).*/\1/p' | head -1)
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, Git-Commit=MISMATCH(expected=${EXPECTED_SHA:0:8},observed=${OBSERVED_SHA:-MISSING})"
                     S7_PASS=false
                 fi
 
-                # Check for PR number reference in the SVN log message.
-                PR_NUM_FROM_S6=$(cat "$CYCLE_DIR/s6-pr-number.txt" 2>/dev/null || echo "")
-                if [[ -n "$PR_NUM_FROM_S6" ]] && echo "$SVN_LOG_XML" | grep -q "#${PR_NUM_FROM_S6}"; then
-                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, PR=#${PR_NUM_FROM_S6}=found"
-                elif echo "$SVN_LOG_XML" | grep -qE "PR: #[0-9]+"; then
-                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, PR=found(different number)"
+                # --- PR trailer: require exact "#N" match ---
+                if [[ -z "$EXPECTED_PR" ]]; then
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, PR=FAIL(no expected PR# from S6)"
+                    S7_PASS=false
+                elif echo "$SVN_LOG_XML" | grep -q "#${EXPECTED_PR}"; then
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, PR=#${EXPECTED_PR}=exact"
                 else
-                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, PR=MISSING"
+                    OBSERVED_PR=$(echo "$SVN_LOG_XML" | sed -n 's/.*PR: #\([0-9]*\).*/\1/p' | head -1)
+                    S7_PROOF_DETAILS="${S7_PROOF_DETAILS}, PR=MISMATCH(expected=#${EXPECTED_PR},observed=#${OBSERVED_PR:-MISSING})"
                     S7_PASS=false
                 fi
 
                 if $S7_PASS; then
                     record_scenario "s7-git-to-svn-sync" "pass" "$S7_PROOF_DETAILS"
                 else
-                    record_scenario "s7-git-to-svn-sync" "fail" "content OK but metadata missing ($S7_PROOF_DETAILS)"
+                    record_scenario "s7-git-to-svn-sync" "fail" "content OK but provenance mismatch ($S7_PROOF_DETAILS)"
                     CYCLE_OK=false
                 fi
             fi
         else
             SYNC_EXIT=$?
-            record_scenario "s7-git-to-svn-sync" "fail" "gitsvnsync sync exited with code $SYNC_EXIT"
+            record_scenario "s7-git-to-svn-sync" "fail" "reposync sync exited with code $SYNC_EXIT"
             CYCLE_OK=false
         fi
     else
@@ -813,7 +825,7 @@ TOML
     ECHO_FILE="echo_${CANARY}.txt"
     echo "echo-content" > "$SVN_WC/$ECHO_FILE"
     svn add "$SVN_WC/$ECHO_FILE" -q 2>/dev/null || true
-    if svn commit "$SVN_WC" -m "Synced from Git [gitsvnsync] validation echo" \
+    if svn commit "$SVN_WC" -m "Synced from Git [reposync] validation echo" \
         --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
         --non-interactive --no-auth-cache > "$CYCLE_DIR/s8-commit.log" 2>&1; then
         ECHO_REV=$(svn info "$SVN_URL" --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
@@ -821,7 +833,7 @@ TOML
         ECHO_LOG=$(svn log "$SVN_URL" -r "$ECHO_REV" --xml \
             --username "$SVN_USERNAME" --password "$SVN_PASSWORD" \
             --non-interactive --no-auth-cache 2>/dev/null || echo "")
-        if echo "$ECHO_LOG" | grep -q "\[gitsvnsync\]"; then
+        if echo "$ECHO_LOG" | grep -q "\[reposync\]"; then
             record_scenario "s8-echo-marker" "pass" "marker at r$ECHO_REV"
         else
             record_scenario "s8-echo-marker" "fail" "no marker in r$ECHO_REV"
@@ -871,8 +883,8 @@ repo = "${GHE_OWNER}/${GHE_REPO}"
 token_env = "GHE_TOKEN"
 
 [developer]
-name = "gitsvnsync-validator"
-email = "validator@gitsvnsync.local"
+name = "reposync-validator"
+email = "validator@reposync.local"
 svn_username = "${SVN_USERNAME}"
 TOML
 

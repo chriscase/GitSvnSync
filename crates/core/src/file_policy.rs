@@ -257,21 +257,6 @@ impl From<&crate::personal_config::PersonalOptionsConfig> for FilePolicy {
     }
 }
 
-impl From<&crate::config::SyncConfig> for FilePolicy {
-    fn from(sync: &crate::config::SyncConfig) -> Self {
-        if sync.lfs_threshold > 0 || !sync.lfs_patterns.is_empty() {
-            Self::with_lfs(
-                sync.max_file_size,
-                sync.ignore_patterns.clone(),
-                sync.lfs_threshold,
-                &sync.lfs_patterns,
-            )
-        } else {
-            Self::new(sync.max_file_size, sync.ignore_patterns.clone())
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

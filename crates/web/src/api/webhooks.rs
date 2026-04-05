@@ -13,8 +13,6 @@ use tracing::{info, warn};
 use crate::api::status::AppError;
 use crate::AppState;
 
-use gitsvnsync_core::config::GitProvider;
-
 // ---------------------------------------------------------------------------
 // GitHub webhook types
 // ---------------------------------------------------------------------------
@@ -80,40 +78,24 @@ async fn github_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<WebhookResponse>, AppError> {
-    // Determine provider from headers
-    let is_gitea = headers.contains_key("x-gitea-event") || headers.contains_key("x-gitea-signature");
-
     // Verify webhook signature if a secret is configured
-    if state.config.github.webhook_secret.is_none() {
-        tracing::warn!("GitHub webhook secret not configured - webhook payloads are not authenticated");
-    }
     if state.config.github.webhook_secret.is_some() {
-        let (signature, provider) = if is_gitea {
-            let sig = headers.get("x-gitea-signature")
-                .and_then(|v| v.to_str().ok())
-                .ok_or_else(|| AppError::Unauthorized("missing X-Gitea-Signature header".into()))?;
-            (sig.to_string(), GitProvider::Gitea)
-        } else {
-            let sig = headers.get("x-hub-signature-256")
-                .and_then(|v| v.to_str().ok())
-                .ok_or_else(|| AppError::Unauthorized("missing X-Hub-Signature-256 header".into()))?;
-            (sig.to_string(), GitProvider::GitHub)
-        };
+        let signature = headers
+            .get("x-hub-signature-256")
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| AppError::Unauthorized("missing X-Hub-Signature-256 header".into()))?;
 
-        let secret = state.config.github.webhook_secret.as_deref()
-            .ok_or_else(|| AppError::Unauthorized("webhook secret not configured".into()))?;
-
-        if !gitsvnsync_core::git::github::GitHubClient::verify_webhook_signature(
-            &body, &signature, secret, &provider,
-        ) {
-            return Err(AppError::Unauthorized("webhook signature verification failed".into()));
-        }
+        verify_github_signature(
+            &body,
+            signature,
+            state.config.github.webhook_secret.as_deref(),
+        )
+        .map_err(|e| AppError::Unauthorized(format!("webhook verification failed: {}", e)))?;
     }
 
     // Parse the event type
     let event_type = headers
-        .get("x-gitea-event")
-        .or_else(|| headers.get("x-github-event"))
+        .get("x-github-event")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("unknown");
 
@@ -173,22 +155,19 @@ async fn svn_webhook(
     Json(payload): Json<SvnPostCommitPayload>,
 ) -> Result<Json<WebhookResponse>, AppError> {
     // Verify shared secret if configured
-    if state.config.svn.webhook_secret.is_none() {
-        tracing::warn!("SVN webhook secret not configured - webhook payloads are not authenticated");
-    }
     if let Some(ref secret) = state.config.svn.webhook_secret {
         let provided = headers
             .get("x-webhook-secret")
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| AppError::Unauthorized("missing X-Webhook-Secret header".into()))?;
 
-        // Constant-time comparison using subtle crate
-        use subtle::ConstantTimeEq;
-        let matches: bool = if provided.len() == secret.len() {
-            provided.as_bytes().ct_eq(secret.as_bytes()).into()
-        } else {
-            false
-        };
+        // Constant-time comparison
+        let matches = provided.len() == secret.len()
+            && provided
+                .bytes()
+                .zip(secret.bytes())
+                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                == 0;
 
         if !matches {
             return Err(AppError::Unauthorized("invalid webhook secret".into()));
@@ -221,4 +200,30 @@ async fn svn_webhook(
     }))
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
+fn verify_github_signature(
+    payload: &[u8],
+    signature: &str,
+    secret: Option<&str>,
+) -> Result<(), String> {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let secret = secret.ok_or("webhook secret not configured")?;
+
+    let sig_hex = signature
+        .strip_prefix("sha256=")
+        .ok_or("signature must start with sha256=")?;
+
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+        .map_err(|e| format!("HMAC init failed: {}", e))?;
+    mac.update(payload);
+
+    let expected = hex::decode(sig_hex).map_err(|e| format!("invalid hex in signature: {}", e))?;
+
+    mac.verify_slice(&expected)
+        .map_err(|_| "signature mismatch".to_string())
+}

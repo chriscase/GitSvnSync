@@ -1,6 +1,6 @@
 # Conflict Resolution
 
-GitSvnSync automatically handles most synchronization scenarios. Conflicts only arise when both SVN and Git have changes to the same file since the last sync.
+RepoSync automatically handles most synchronization scenarios. Conflicts only arise when both SVN and Git have changes to the same file since the last sync.
 
 ## When Conflicts Occur
 
@@ -49,25 +49,25 @@ These situations are handled automatically:
 
 ```bash
 # List conflicts
-gitsvnsync conflicts list
+reposync conflicts list
 
 # View a specific conflict
-gitsvnsync conflicts show abc-123-def
+reposync conflicts show abc-123-def
 
 # Resolve by accepting one side
-gitsvnsync conflicts resolve abc-123-def --accept svn
-gitsvnsync conflicts resolve abc-123-def --accept git
+reposync conflicts resolve abc-123-def --accept svn
+reposync conflicts resolve abc-123-def --accept git
 ```
 
 ### Notifications
 
-When a conflict is detected, GitSvnSync sends alerts:
+When a conflict is detected, RepoSync sends alerts:
 - **Slack**: Message to configured channel with file path, authors, and dashboard link
 - **Email**: Notification to configured recipients
 
 ## How 3-Way Merge Works
 
-GitSvnSync uses the last synced version as the **base** for merging:
+RepoSync uses the last synced version as the **base** for merging:
 
 ```
 Base (last synced version)

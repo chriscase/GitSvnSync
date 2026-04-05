@@ -1,4 +1,4 @@
-//! GitSvnSync Personal Branch Mode daemon.
+//! RepoSync Personal Branch Mode daemon.
 //!
 //! A lightweight, single-developer tool that mirrors an SVN repo to a personal
 //! GitHub repository. Supports feature branches, PRs, and automatic bidirectional
@@ -23,22 +23,21 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::config::GitProvider;
-use gitsvnsync_core::git::github::GitHubClient;
-use gitsvnsync_core::git::GitClient;
-use gitsvnsync_core::personal_config::PersonalConfig;
-use gitsvnsync_core::svn::SvnClient;
+use reposync_core::db::Database;
+use reposync_core::git::github::GitHubClient;
+use reposync_core::git::GitClient;
+use reposync_core::personal_config::PersonalConfig;
+use reposync_core::svn::SvnClient;
 
 use crate::engine::PersonalSyncEngine;
 use crate::initial_import::{ImportMode, InitialImport};
 
-/// GitSvnSync Personal Branch Mode — individual SVN↔Git sync daemon.
+/// RepoSync Personal Branch Mode — individual SVN↔Git sync daemon.
 #[derive(Parser)]
-#[command(name = "gitsvnsync-personal", version, about)]
+#[command(name = "reposync-personal", version, about)]
 struct Cli {
     /// Path to the personal config file.
-    #[arg(short, long, default_value = "~/.config/gitsvnsync/personal.toml")]
+    #[arg(short, long, default_value = "~/.config/reposync/personal.toml")]
     config: String,
 
     #[command(subcommand)]
@@ -206,7 +205,7 @@ async fn build_engine(config_path: &str) -> Result<(PersonalSyncEngine, Personal
 
     // Create GitHub client.
     let github_token = config.github.token.as_deref().unwrap_or("");
-    let github_client = GitHubClient::new(&config.github.api_url, github_token, GitProvider::default());
+    let github_client = GitHubClient::new(&config.github.api_url, github_token);
 
     let engine = PersonalSyncEngine::new(config.clone(), db, svn_client, git_client, github_client);
     Ok((engine, config))
@@ -234,12 +233,7 @@ async fn cmd_start(config_path: &str, foreground: bool) -> Result<()> {
         daemon::remove_pid_file(&daemon::pid_file_path(data_dir))?;
         result
     } else {
-        eprintln!("WARNING: The --background flag does not truly daemonize the process.");
-        eprintln!("         For production use, run with systemd, launchd, or nohup:");
-        eprintln!("         $ nohup gitsvnsync-personal start --foreground &");
-        eprintln!("         Or use the provided systemd service file.");
-        eprintln!();
-        info!("starting personal sync daemon (note: not truly daemonized, use systemd for production)");
+        info!("starting personal sync daemon in background mode");
         daemon::write_pid_file(&daemon::pid_file_path(data_dir))?;
 
         let shutdown = signals::setup_signal_handlers();
@@ -320,7 +314,7 @@ async fn cmd_import(config_path: &str, mode: ImportMode) -> Result<()> {
 
     // GitHub client.
     let github_token = config.github.token.as_deref().unwrap_or("");
-    let github_client = GitHubClient::new(&config.github.api_url, github_token, GitProvider::default());
+    let github_client = GitHubClient::new(&config.github.api_url, github_token);
 
     // Initialize Git repo for import.
     let git_repo_path = data_dir.join("git-repo");
@@ -338,7 +332,7 @@ async fn cmd_import(config_path: &str, mode: ImportMode) -> Result<()> {
             }
         }
     };
-    let git_client = std::sync::Arc::new(std::sync::Mutex::new(git_client));
+    let git_client = std::sync::Arc::new(tokio::sync::Mutex::new(git_client));
 
     let commit_format = crate::commit_format::CommitFormatter::new(&config.commit_format);
 

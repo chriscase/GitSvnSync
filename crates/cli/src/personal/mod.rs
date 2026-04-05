@@ -16,7 +16,7 @@ pub mod style;
 use anyhow::{Context, Result};
 use clap::Subcommand;
 
-use gitsvnsync_core::personal_config::PersonalConfig;
+use reposync_core::personal_config::PersonalConfig;
 
 /// Personal branch mode subcommands.
 #[derive(Subcommand, Debug)]
@@ -24,7 +24,7 @@ pub enum PersonalCommands {
     /// Interactive setup wizard — creates a personal config file.
     Init {
         /// Output path for the config file.
-        #[arg(short, long, default_value = "~/.config/gitsvnsync/personal.toml")]
+        #[arg(short, long, default_value = "~/.config/reposync/personal.toml")]
         output: String,
     },
 

@@ -1,4 +1,4 @@
-//! GitSvnSync core library.
+//! RepoSync core library.
 //!
 //! This crate provides the foundational components for bidirectional SVN/Git
 //! synchronization: configuration, database persistence, identity mapping,
@@ -6,14 +6,11 @@
 
 pub mod config;
 pub mod conflict;
-pub mod crypto;
 pub mod db;
 pub mod errors;
 pub mod file_policy;
 pub mod git;
 pub mod identity;
-pub mod import;
-pub mod ldap_auth;
 pub mod lfs;
 pub mod models;
 pub mod notify;

@@ -52,8 +52,8 @@ struct UserResponse {
     updated_at: String,
 }
 
-impl From<gitsvnsync_core::models::User> for UserResponse {
-    fn from(u: gitsvnsync_core::models::User) -> Self {
+impl From<reposync_core::models::User> for UserResponse {
+    fn from(u: reposync_core::models::User) -> Self {
         Self {
             id: u.id,
             username: u.username,
@@ -168,11 +168,11 @@ async fn create_user(
         ));
     }
 
-    let password_hash = gitsvnsync_core::crypto::hash_password(&body.password)
+    let password_hash = reposync_core::crypto::hash_password(&body.password)
         .map_err(|e| AppError::Internal(format!("password hashing error: {}", e)))?;
 
     let now = Utc::now().to_rfc3339();
-    let user = gitsvnsync_core::models::User {
+    let user = reposync_core::models::User {
         id: Uuid::new_v4().to_string(),
         username: body.username,
         display_name: body.display_name,
@@ -262,7 +262,7 @@ async fn update_user(
         if new_password.is_empty() {
             return Err(AppError::BadRequest("password cannot be empty".into()));
         }
-        let hash = gitsvnsync_core::crypto::hash_password(new_password)
+        let hash = reposync_core::crypto::hash_password(new_password)
             .map_err(|e| AppError::Internal(format!("password hashing error: {}", e)))?;
         db.update_user_password(&id, &hash)
             .map_err(|e| AppError::Internal(format!("database error: {}", e)))?;
@@ -377,16 +377,16 @@ async fn create_credential(
     let db = &state.db;
 
     // Get encryption key
-    let enc_key = gitsvnsync_core::crypto::get_or_create_encryption_key(&db)
+    let enc_key = reposync_core::crypto::get_or_create_encryption_key(&db)
         .map_err(|e| AppError::Internal(format!("encryption key error: {}", e)))?;
 
     // Encrypt the credential value
     let (encrypted_value, nonce) =
-        gitsvnsync_core::crypto::encrypt_credential(&body.value, &enc_key)
+        reposync_core::crypto::encrypt_credential(&body.value, &enc_key)
             .map_err(|e| AppError::Internal(format!("encryption error: {}", e)))?;
 
     let now = Utc::now().to_rfc3339();
-    let cred = gitsvnsync_core::models::UserCredential {
+    let cred = reposync_core::models::UserCredential {
         id: Uuid::new_v4().to_string(),
         user_id: id,
         service: body.service.clone(),
@@ -569,7 +569,7 @@ async fn save_ldap_config(
             .and_then(|c| c.bind_password)
     };
 
-    let config = gitsvnsync_core::ldap_auth::LdapConfig {
+    let config = reposync_core::ldap_auth::LdapConfig {
         url: body.url,
         base_dn: body.base_dn,
         search_filter: body.search_filter,
@@ -616,7 +616,7 @@ async fn test_ldap_connection(
             .and_then(|c| c.bind_password)
     };
 
-    let config = gitsvnsync_core::ldap_auth::LdapConfig {
+    let config = reposync_core::ldap_auth::LdapConfig {
         url: body.url,
         base_dn: body.base_dn,
         search_filter: body.search_filter,

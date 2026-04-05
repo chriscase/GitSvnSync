@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# GitSvnSync Large-File & LFS E2E Validation Harness
+# RepoSync Large-File & LFS E2E Validation Harness
 # ============================================================================
 # Non-interactive, CI-safe validation of file-policy enforcement and LFS
 # integration using local-only resources. Exercises:
@@ -108,7 +108,7 @@ fi
 # ============================================================================
 log "=== Phase 2: Unit Tests (file_policy + lfs) ==="
 
-cargo test -p gitsvnsync-core -- file_policy lfs 2>&1 | tee "$ARTIFACT_DIR/unit-tests.log" | tail -5
+cargo test -p reposync-core -- file_policy lfs 2>&1 | tee "$ARTIFACT_DIR/unit-tests.log" | tail -5
 PHASE2_EXIT=${PIPESTATUS[0]}
 # Extract the number of tests that ran (e.g. "test result: ok. 28 passed")
 PHASE2_TEST_COUNT=$(grep -oE '[0-9]+ passed' "$ARTIFACT_DIR/unit-tests.log" | head -1 | grep -oE '[0-9]+' || echo "0")
@@ -129,7 +129,7 @@ TOTAL_SCENARIOS=$((TOTAL_SCENARIOS + 1))
 # ============================================================================
 log "=== Phase 3: Integration Tests (file_policy + lfs) ==="
 
-cargo test -p gitsvnsync-personal --test integration -- file_policy lfs 2>&1 | tee "$ARTIFACT_DIR/integration-tests.log" | tail -5
+cargo test -p reposync-personal --test integration -- file_policy lfs 2>&1 | tee "$ARTIFACT_DIR/integration-tests.log" | tail -5
 PHASE3_EXIT=${PIPESTATUS[0]}
 # Extract the number of tests that ran (e.g. "test result: ok. 3 passed")
 PHASE3_TEST_COUNT=$(grep -oE '[0-9]+ passed' "$ARTIFACT_DIR/integration-tests.log" | head -1 | grep -oE '[0-9]+' || echo "0")
@@ -279,7 +279,7 @@ if $SVN_AVAILABLE; then
 
     # Run the Rust integration test that validates this (already passed in Phase 3)
     # Here we verify the .gitattributes utility directly
-    if cargo test -p gitsvnsync-core -- test_ensure_lfs_tracked_creates_file --quiet 2>/dev/null; then
+    if cargo test -p reposync-core -- test_ensure_lfs_tracked_creates_file --quiet 2>/dev/null; then
         scenario_pass "LFS .gitattributes creation"
     else
         scenario_fail "LFS .gitattributes creation" "test_ensure_lfs_tracked_creates_file failed"
@@ -293,7 +293,7 @@ fi
 # --- Scenario 4e: LFS pointer detection ---
 TOTAL_SCENARIOS=$((TOTAL_SCENARIOS + 1))
 log "  Scenario 4e: LFS pointer detection & parsing"
-if cargo test -p gitsvnsync-core -- test_create_and_parse_roundtrip --quiet 2>/dev/null; then
+if cargo test -p reposync-core -- test_create_and_parse_roundtrip --quiet 2>/dev/null; then
     scenario_pass "LFS pointer create/parse roundtrip"
 else
     scenario_fail "LFS pointer roundtrip" "test_create_and_parse_roundtrip failed"

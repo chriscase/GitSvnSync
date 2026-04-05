@@ -7,16 +7,15 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::file_policy::FilePolicy;
-use gitsvnsync_core::git::github::GitHubClient;
-use gitsvnsync_core::git::GitClient;
-use gitsvnsync_core::identity::mapper::IdentityMapper;
-use gitsvnsync_core::personal_config::PersonalConfig;
-use gitsvnsync_core::svn::SvnClient;
+use reposync_core::db::Database;
+use reposync_core::file_policy::FilePolicy;
+use reposync_core::git::github::GitHubClient;
+use reposync_core::git::GitClient;
+use reposync_core::personal_config::PersonalConfig;
+use reposync_core::svn::SvnClient;
 
 use crate::commit_format::CommitFormatter;
 use crate::svn_to_git::SvnToGitSync;
@@ -47,7 +46,7 @@ impl<'a> InitialImport<'a> {
     pub async fn import(&self, mode: ImportMode) -> Result<u64> {
         // LFS preflight: if LFS is configured, verify git-lfs is available.
         if self.config.options.lfs_threshold > 0 {
-            match gitsvnsync_core::lfs::preflight_check() {
+            match reposync_core::lfs::preflight_check() {
                 Ok(version) => {
                     info!(
                         version = %version,
@@ -112,7 +111,7 @@ impl<'a> InitialImport<'a> {
                 name,
                 self.config.github.private,
                 &format!(
-                    "SVN mirror managed by GitSvnSync (source: {})",
+                    "SVN mirror managed by RepoSync (source: {})",
                     self.config.svn.url
                 ),
             )
@@ -157,7 +156,7 @@ impl<'a> InitialImport<'a> {
             .await
             .context("failed to export SVN HEAD")?;
 
-        let git_client = self.git_client.lock().unwrap();
+        let git_client = self.git_client.lock().await;
         let repo_path = git_client.repo_path().to_path_buf();
         drop(git_client);
 
@@ -177,7 +176,7 @@ impl<'a> InitialImport<'a> {
             &chrono::Utc::now().to_rfc3339(),
         );
 
-        let git_client = self.git_client.lock().unwrap();
+        let git_client = self.git_client.lock().await;
         let oid = git_client
             .commit(
                 &message,
@@ -240,26 +239,6 @@ impl<'a> InitialImport<'a> {
     async fn import_full(&self) -> Result<u64> {
         info!("starting full history import");
 
-        // Build identity mapper if configured — allows preserving original SVN authors.
-        let identity_mapper = match &self.config.identity {
-            Some(identity_config) => {
-                match IdentityMapper::new(identity_config) {
-                    Ok(mapper) => {
-                        info!("identity mapper enabled — original SVN authors will be preserved");
-                        Some(mapper)
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "failed to initialize identity mapper, falling back to developer identity");
-                        None
-                    }
-                }
-            }
-            None => {
-                info!("no identity mapping configured — all commits will use developer identity");
-                None
-            }
-        };
-
         // Build file policy from config.
         let policy = FilePolicy::from(&self.config.options);
         if policy.has_constraints() {
@@ -290,7 +269,7 @@ impl<'a> InitialImport<'a> {
             .await
             .context("failed to get SVN log")?;
 
-        let git_client_guard = self.git_client.lock().unwrap();
+        let git_client_guard = self.git_client.lock().await;
         let repo_path = git_client_guard.repo_path().to_path_buf();
         drop(git_client_guard);
 
@@ -343,32 +322,17 @@ impl<'a> InitialImport<'a> {
                 self.formatter
                     .format_svn_to_git(&entry.message, rev, &entry.author, &entry.date);
 
-            // Resolve the Git identity for this commit's author.
-            let (author_name, author_email) = match &identity_mapper {
-                Some(mapper) => match mapper.svn_to_git(&entry.author) {
-                    Ok(identity) => {
-                        debug!(rev, svn_author = %entry.author, git_name = %identity.name, git_email = %identity.email, "mapped SVN author to Git identity");
-                        (identity.name, identity.email)
-                    }
-                    Err(e) => {
-                        debug!(rev, svn_author = %entry.author, error = %e, "identity mapping failed, using developer identity");
-                        (self.config.developer.name.clone(), self.config.developer.email.clone())
-                    }
-                },
-                None => (self.config.developer.name.clone(), self.config.developer.email.clone()),
-            };
-
-            let git_client = self.git_client.lock().unwrap();
+            let git_client = self.git_client.lock().await;
             match git_client.commit(
                 &message,
-                &author_name,
-                &author_email,
+                &self.config.developer.name,
+                &self.config.developer.email,
                 &self.config.developer.name,
                 &self.config.developer.email,
             ) {
                 Ok(oid) => {
                     let sha = oid.to_string();
-                    debug!(rev, sha = %sha, author = %author_name, "committed revision");
+                    debug!(rev, sha = %sha, "committed revision");
 
                     self.db
                         .insert_commit_map(
@@ -376,7 +340,10 @@ impl<'a> InitialImport<'a> {
                             &sha,
                             "svn_to_git",
                             &entry.author,
-                            &format!("{} <{}>", author_name, author_email),
+                            &format!(
+                                "{} <{}>",
+                                self.config.developer.name, self.config.developer.email
+                            ),
                         )
                         .ok();
 
@@ -392,7 +359,7 @@ impl<'a> InitialImport<'a> {
 
         // Push all at once
         if count > 0 {
-            let git_client = self.git_client.lock().unwrap();
+            let git_client = self.git_client.lock().await;
             let token = self.config.github.token.as_deref();
             git_client
                 .push("origin", &self.config.github.default_branch, token)
@@ -407,7 +374,7 @@ impl<'a> InitialImport<'a> {
                 .ok();
         }
 
-        let git_client = self.git_client.lock().unwrap();
+        let git_client = self.git_client.lock().await;
         if let Ok(sha) = git_client.get_head_sha() {
             self.db.set_watermark("git_sha", &sha).ok();
         }

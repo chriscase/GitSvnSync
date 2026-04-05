@@ -3,26 +3,26 @@
 Personal Branch Mode is configured via a TOML file. The default location is:
 
 ```
-~/.config/gitsvnsync/personal.toml
+~/.config/reposync/personal.toml
 ```
 
 You can override the config file path with the `--config` flag on any command:
 
 ```bash
-gitsvnsync personal start --config /path/to/my-config.toml
+reposync personal start --config /path/to/my-config.toml
 ```
 
-Or set the `GITSVNSYNC_CONFIG` environment variable:
+Or set the `REPOSYNC_CONFIG` environment variable:
 
 ```bash
-export GITSVNSYNC_CONFIG="/path/to/my-config.toml"
+export REPOSYNC_CONFIG="/path/to/my-config.toml"
 ```
 
 ## Full Configuration File
 
 ```toml
 [personal]
-data_dir = "~/.local/share/gitsvnsync"
+data_dir = "~/.local/share/reposync"
 poll_interval_secs = 30
 
 [svn]
@@ -69,7 +69,7 @@ General settings for the Personal Branch Mode daemon.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `data_dir` | string | `"~/.local/share/gitsvnsync"` | Directory where GitSvnSync stores its SQLite database, cloned repositories, and sync state. Tilde (`~`) is expanded to your home directory. |
+| `data_dir` | string | `"~/.local/share/reposync"` | Directory where RepoSync stores its SQLite database, cloned repositories, and sync state. Tilde (`~`) is expanded to your home directory. |
 | `poll_interval_secs` | integer | `30` | How often (in seconds) the daemon checks SVN for new revisions and GitHub for merged PRs. Lower values give faster sync but increase load on both servers. |
 | `log_level` | string | `"info"` | Minimum tracing level: `trace`, `debug`, `info`, `warn`, `error`. Applied as the default filter when the `RUST_LOG` environment variable is not set. If `RUST_LOG` is set, it takes precedence. |
 
@@ -192,7 +192,7 @@ Behavioral options that control how files and changes are synced.
 
 ## Environment Variables
 
-Fields ending in `_env` tell GitSvnSync to read the actual value from an environment variable at startup. This keeps secrets out of config files.
+Fields ending in `_env` tell RepoSync to read the actual value from an environment variable at startup. This keeps secrets out of config files.
 
 | Config Field | Recommended Env Var | Description |
 |--------------|-------------------|-------------|
@@ -212,7 +212,7 @@ export MY_SVN_PASS="my-actual-password"
 Add these to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) so they persist across sessions:
 
 ```bash
-# GitSvnSync secrets
+# RepoSync secrets
 export SVN_PASSWORD="your-svn-password"
 export GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxx"
 ```
@@ -226,10 +226,10 @@ Reload your shell or run `source ~/.zshrc` before starting the daemon.
 The daemon searches for the config file in this order:
 
 1. Path specified by `--config` flag
-2. Path in the `GITSVNSYNC_CONFIG` environment variable
-3. `~/.config/gitsvnsync/personal.toml` (default)
+2. Path in the `REPOSYNC_CONFIG` environment variable
+3. `~/.config/reposync/personal.toml` (default)
 
-The `gitsvnsync personal init` wizard writes to the default location. The parent directory is created automatically if it does not exist.
+The `reposync personal init` wizard writes to the default location. The parent directory is created automatically if it does not exist.
 
 ---
 
@@ -266,7 +266,7 @@ For organizations running GitHub Enterprise on their own infrastructure:
 
 ```toml
 [personal]
-data_dir = "~/.local/share/gitsvnsync"
+data_dir = "~/.local/share/reposync"
 poll_interval_secs = 15
 
 [svn]
@@ -381,7 +381,7 @@ For quick reference, here are all fields and their defaults:
 
 | Field | Default |
 |-------|---------|
-| `personal.data_dir` | `"~/.local/share/gitsvnsync"` |
+| `personal.data_dir` | `"~/.local/share/reposync"` |
 | `personal.poll_interval_secs` | `30` |
 | `personal.log_level` | `"info"` |
 | `svn.url` | *(required, no default)* |

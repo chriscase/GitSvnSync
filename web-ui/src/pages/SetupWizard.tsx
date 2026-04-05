@@ -103,14 +103,14 @@ const DEFAULT_DATA: WizardData = {
 
   web_listen: '0.0.0.0:8080',
   web_auth_mode: 'simple',
-  web_admin_password_env: 'GITSVNSYNC_ADMIN_PASSWORD',
+  web_admin_password_env: 'REPOSYNC_ADMIN_PASSWORD',
   web_oauth_client_id: '',
   web_oauth_client_secret_env: '',
   web_oauth_allowed_users: '',
 
   daemon_poll_interval: 60,
   daemon_log_level: 'info',
-  daemon_data_dir: '/var/lib/gitsvnsync',
+  daemon_data_dir: '/var/lib/reposync',
 
   notif_slack_webhook_env: '',
   notif_email_smtp: '',
@@ -1123,7 +1123,7 @@ function IdentityStep({
           name="identity_mapping_file"
           value={data.identity_mapping_file}
           onChange={(v) => update({ identity_mapping_file: v })}
-          placeholder="/etc/gitsvnsync/authors.toml"
+          placeholder="/etc/reposync/authors.toml"
           help="Optional: path to a TOML file with explicit mappings"
           mono
         />
@@ -1243,7 +1243,7 @@ function ServerAuthStep({
               value={data.web_admin_password_env}
               onChange={(v) => update({ web_admin_password_env: v })}
               error={errors.web_admin_password_env}
-              placeholder="GITSVNSYNC_ADMIN_PASSWORD"
+              placeholder="REPOSYNC_ADMIN_PASSWORD"
               mono
               required
             />
@@ -1311,7 +1311,7 @@ function ServerAuthStep({
             value={data.daemon_data_dir}
             onChange={(v) => update({ daemon_data_dir: v })}
             error={errors.daemon_data_dir}
-            placeholder="/var/lib/gitsvnsync"
+            placeholder="/var/lib/reposync"
             mono
             required
           />
@@ -1328,7 +1328,7 @@ function ServerAuthStep({
               name="notif_slack_webhook_env"
               value={data.notif_slack_webhook_env}
               onChange={(v) => update({ notif_slack_webhook_env: v })}
-              placeholder="GITSVNSYNC_SLACK_WEBHOOK"
+              placeholder="REPOSYNC_SLACK_WEBHOOK"
               help="Leave empty to disable Slack notifications"
               mono
             />
@@ -1346,7 +1346,7 @@ function ServerAuthStep({
             name="notif_email_from"
             value={data.notif_email_from}
             onChange={(v) => update({ notif_email_from: v })}
-            placeholder="gitsvnsync@company.com"
+            placeholder="reposync@company.com"
           />
           <div className="md:col-span-2">
             <FormField

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# GitSvnSync Enterprise Soak/Canary Validation Script
+# RepoSync Enterprise Soak/Canary Validation Script
 # ============================================================================
 # Non-interactive, CI-safe repeated-cycle soak test for enterprise readiness.
 # Runs configurable sync cycles against local SVN+Git repos with synthetic
@@ -96,7 +96,7 @@ trap cleanup EXIT
 # Preflight checks
 # ============================================================================
 log "═══════════════════════════════════════════════════════════════"
-log "GitSvnSync Enterprise Soak Validation"
+log "RepoSync Enterprise Soak Validation"
 log "Timestamp: $TIMESTAMP"
 log "Cycles: $CYCLES | Interval: ${INTERVAL_SEC}s | Dry-run: $DRY_RUN"
 log "Max error rate: $MAX_ERROR_RATE"
@@ -132,7 +132,7 @@ env | sort | grep -v -iE '(token|password|secret|key|credential|auth)' \
 } > "$ARTIFACT_DIR/tool-versions.txt"
 
 # Verify binary is built.
-PERSONAL_BIN="$REPO_ROOT/target/debug/gitsvnsync-personal"
+PERSONAL_BIN="$REPO_ROOT/target/debug/reposync-personal"
 if [[ ! -f "$PERSONAL_BIN" ]]; then
     log "Building workspace first..."
     if ! cargo build --workspace > "$ARTIFACT_DIR/build-stdout.log" 2> "$ARTIFACT_DIR/build-stderr.log"; then
@@ -228,7 +228,7 @@ for cycle in $(seq 1 "$CYCLES"); do
     echo "$CANARY_CONTENT" > "$SVN_WC/$CANARY_FILE"
     svn add "$SVN_WC/$CANARY_FILE" -q 2>/dev/null || true
 
-    if svn commit "$SVN_WC" -m "Soak canary cycle $cycle [gitsvnsync-soak]" \
+    if svn commit "$SVN_WC" -m "Soak canary cycle $cycle [reposync-soak]" \
         --non-interactive -q 2>"$CYCLE_DIR/svn-commit-stderr.log"; then
         SVN_REV=$(svn info "$SVN_URL" --show-item revision --no-newline 2>/dev/null || echo "?")
         emit_event "cycle-$cycle" "svn-commit" "pass" 0 "svn_rev=$SVN_REV"
@@ -271,11 +271,11 @@ data_dir = "$PROBE_DATA"
 [svn]
 url = "$SVN_URL"
 username = "test"
-password_env = "GITSVNSYNC_TEST_SVN_PW"
+password_env = "REPOSYNC_TEST_SVN_PW"
 
 [github]
 repo = "test/test"
-token_env = "GITSVNSYNC_TEST_GH_TOKEN"
+token_env = "REPOSYNC_TEST_GH_TOKEN"
 
 [developer]
 name = "Soak Test"
@@ -372,7 +372,7 @@ cat > "$SUMMARY_FILE" <<SUMMARY
 ## Rollback Procedure
 
 If issues are found post-enablement:
-1. Stop the gitsvnsync daemon: \`gitsvnsync-personal stop\`
+1. Stop the reposync daemon: \`reposync-personal stop\`
 2. Review \`{data_dir}/personal.log\` and audit DB for last known-good state
 3. Reset watermarks if needed: \`sqlite3 personal.db "UPDATE watermarks SET value='<rev>' WHERE key='svn_rev'"\`
 4. Restart with previous known-good config

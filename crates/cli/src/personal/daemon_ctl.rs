@@ -4,12 +4,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::config::GitProvider;
-use gitsvnsync_core::git::github::GitHubClient;
-use gitsvnsync_core::git::GitClient;
-use gitsvnsync_core::personal_config::PersonalConfig;
-use gitsvnsync_core::svn::SvnClient;
+use reposync_core::db::Database;
+use reposync_core::git::github::GitHubClient;
+use reposync_core::git::GitClient;
+use reposync_core::personal_config::PersonalConfig;
+use reposync_core::svn::SvnClient;
 
 use super::style;
 
@@ -18,7 +17,7 @@ pub async fn run_start(config: &PersonalConfig, foreground: bool) -> Result<()> 
     let data_dir = &config.personal.data_dir;
 
     // Check if already running
-    if let Some(pid) = gitsvnsync_personal::daemon::is_running(data_dir)? {
+    if let Some(pid) = reposync_personal::daemon::is_running(data_dir)? {
         println!(
             "{}",
             style::warn(&format!("Daemon is already running (PID {})", pid))
@@ -26,7 +25,7 @@ pub async fn run_start(config: &PersonalConfig, foreground: bool) -> Result<()> 
         return Ok(());
     }
 
-    println!("Starting GitSvnSync Personal daemon...");
+    println!("Starting RepoSync Personal daemon...");
 
     // Ensure data directory exists
     std::fs::create_dir_all(data_dir).context("failed to create data directory")?;
@@ -45,9 +44,9 @@ pub async fn run_start(config: &PersonalConfig, foreground: bool) -> Result<()> 
     let git_client = GitClient::new(&git_repo_path).context("failed to open git repository")?;
 
     let github_token = config.github.token.as_deref().unwrap_or("");
-    let github_client = GitHubClient::new(&config.github.api_url, github_token, GitProvider::default());
+    let github_client = GitHubClient::new(&config.github.api_url, github_token);
 
-    let engine = gitsvnsync_personal::engine::PersonalSyncEngine::new(
+    let engine = reposync_personal::engine::PersonalSyncEngine::new(
         config.clone(),
         db,
         svn_client,
@@ -55,8 +54,8 @@ pub async fn run_start(config: &PersonalConfig, foreground: bool) -> Result<()> 
         github_client,
     );
 
-    let pid_path = gitsvnsync_personal::daemon::pid_file_path(data_dir);
-    gitsvnsync_personal::daemon::write_pid_file(&pid_path)?;
+    let pid_path = reposync_personal::daemon::pid_file_path(data_dir);
+    reposync_personal::daemon::write_pid_file(&pid_path)?;
 
     println!(
         "{}",
@@ -80,16 +79,16 @@ pub async fn run_start(config: &PersonalConfig, foreground: bool) -> Result<()> 
     if !foreground {
         println!();
         println!("  Logs: {}", data_dir.join("personal.log").display());
-        println!("  Stop: gitsvnsync personal stop");
+        println!("  Stop: reposync personal stop");
     }
 
-    let shutdown = gitsvnsync_personal::signals::setup_signal_handlers();
+    let shutdown = reposync_personal::signals::setup_signal_handlers();
     let interval = Duration::from_secs(config.personal.poll_interval_secs);
 
     let result =
-        gitsvnsync_personal::scheduler::run_polling_loop(&engine, interval, shutdown).await;
+        reposync_personal::scheduler::run_polling_loop(&engine, interval, shutdown).await;
 
-    gitsvnsync_personal::daemon::remove_pid_file(&pid_path)?;
+    reposync_personal::daemon::remove_pid_file(&pid_path)?;
     result
 }
 
@@ -97,7 +96,7 @@ pub async fn run_start(config: &PersonalConfig, foreground: bool) -> Result<()> 
 pub fn run_stop(config: &PersonalConfig) -> Result<()> {
     let data_dir = &config.personal.data_dir;
 
-    match gitsvnsync_personal::daemon::stop_daemon(data_dir)? {
+    match reposync_personal::daemon::stop_daemon(data_dir)? {
         true => {
             println!("{}", style::success("Daemon stopped gracefully"));
         }

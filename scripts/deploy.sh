@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-# deploy.sh - Push, build, install, and restart GitSvnSync on the dev server
+# deploy.sh - Push, build, install, and restart RepoSync on the dev server
 # =============================================================================
 # Usage:
 #   scripts/deploy.sh [--branch <branch>] [--no-web-ui] [--dry-run]
 #
 # Requires:
 #   - SSH alias "rk10" in ~/.ssh/config (with ControlMaster recommended)
-#   - git remote "server" pointing to rk10:GitSvnSync
+#   - git remote "server" pointing to rk10:RepoSync
 #   - Rust toolchain available on rk10 (via rustup)
 #   - chrisc has sudo rights for: install, systemctl daemon-reload, systemctl restart
 #
@@ -24,7 +24,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ---- Configuration -----------------------------------------------------------
 SSH_HOST="rk10"
-REMOTE_REPO_DIR="~/GitSvnSync"
+REMOTE_REPO_DIR="~/RepoSync"
 REMOTE_STATIC_DIR="/usr/local/bin/static"
 BRANCH="${DEPLOY_BRANCH:-main}"
 BUILD_WEB_UI=true
@@ -60,7 +60,7 @@ cd "$REPO_ROOT"
 
 if ! git remote get-url server &>/dev/null; then
     echo "ERROR: git remote 'server' not found."
-    echo "       Run: git remote add server rk10:GitSvnSync"
+    echo "       Run: git remote add server rk10:RepoSync"
     exit 1
 fi
 
@@ -105,8 +105,8 @@ if [[ "$BUILD_WEB_UI" == "true" ]]; then
     run rsync -az --delete \
         -e "ssh" \
         "$REPO_ROOT/web-ui/dist/" \
-        "$SSH_HOST:~/gitsvnsync-web-ui-dist/"
-    log "Web UI synced to ~/gitsvnsync-web-ui-dist/ on server"
+        "$SSH_HOST:~/reposync-web-ui-dist/"
+    log "Web UI synced to ~/reposync-web-ui-dist/ on server"
 else
     step "Phase 2: Skipping web UI build (--no-web-ui)"
 fi
@@ -126,7 +126,7 @@ if [[ "$BUILD_WEB_UI" == "true" && "$DRY_RUN" != "true" ]]; then
     INSTALL_WEB_UI_CMD="
 echo '[remote] Installing web UI static files...'
 sudo mkdir -p ${REMOTE_STATIC_DIR}
-sudo rsync -a --delete ~/gitsvnsync-web-ui-dist/ ${REMOTE_STATIC_DIR}/
+sudo rsync -a --delete ~/reposync-web-ui-dist/ ${REMOTE_STATIC_DIR}/
 echo '[remote] Web UI installed to ${REMOTE_STATIC_DIR}/'
 "
 fi
@@ -157,26 +157,26 @@ BUILD_END=\$(date +%s)
 echo '[remote] Build complete in '\$(( BUILD_END - BUILD_START ))' seconds'
 
 echo '[remote] Installing binaries to /usr/local/bin/...'
-sudo install -m 755 target/release/gitsvnsync-daemon /usr/local/bin/gitsvnsync-daemon
-sudo install -m 755 target/release/gitsvnsync        /usr/local/bin/gitsvnsync
+sudo install -m 755 target/release/reposync-daemon /usr/local/bin/reposync-daemon
+sudo install -m 755 target/release/reposync        /usr/local/bin/reposync
 
 ${INSTALL_WEB_UI_CMD}
 
-echo '[remote] Restarting gitsvnsync service...'
+echo '[remote] Restarting reposync service...'
 sudo systemctl daemon-reload
-sudo systemctl restart gitsvnsync
+sudo systemctl restart reposync
 
 sleep 1
-if systemctl is-active --quiet gitsvnsync; then
-    echo '[remote] gitsvnsync service is ACTIVE'
+if systemctl is-active --quiet reposync; then
+    echo '[remote] reposync service is ACTIVE'
 else
-    echo '[remote] ERROR: gitsvnsync service failed to start'
-    sudo journalctl -u gitsvnsync -n 30 --no-pager
+    echo '[remote] ERROR: reposync service failed to start'
+    sudo journalctl -u reposync -n 30 --no-pager
     exit 1
 fi
 
 echo '[remote] Deployed version:'
-/usr/local/bin/gitsvnsync --version 2>/dev/null || true
+/usr/local/bin/reposync --version 2>/dev/null || true
 "
 
 if [[ "$DRY_RUN" == "true" ]]; then

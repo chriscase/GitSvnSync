@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 ###############################################################################
-# GitSvnSync — Verification & Hardening Issue Creator
+# RepoSync — Verification & Hardening Issue Creator
 #
 # Usage:
 #   export GITHUB_TOKEN=ghp_...
@@ -14,9 +14,9 @@
 ###############################################################################
 set -euo pipefail
 
-REPO="chriscase/GitSvnSync"
+REPO="chriscase/RepoSync"
 
-echo "=== GitSvnSync Verification Issue Creator ==="
+echo "=== RepoSync Verification Issue Creator ==="
 echo "Repository: $REPO"
 echo ""
 
@@ -1842,4 +1842,4 @@ echo "    Claude Haiku (fast, cheap):  #${ISSUE_NUMBERS[compile]:-??}, #${ISSUE_
 echo "    Claude Sonnet (balanced):    #${ISSUE_NUMBERS[tests]:-??}, #${ISSUE_NUMBERS[github]:-??}, #${ISSUE_NUMBERS[db]:-??}, #${ISSUE_NUMBERS[identity]:-??}, #${ISSUE_NUMBERS[config]:-??}, #${ISSUE_NUMBERS[daemon]:-??}, #${ISSUE_NUMBERS[cli]:-??}, #${ISSUE_NUMBERS[ws]:-??}, #${ISSUE_NUMBERS[webui-verify]:-??}, #${ISSUE_NUMBERS[cicd]:-??}, #${ISSUE_NUMBERS[docker]:-??}, #${ISSUE_NUMBERS[e2e]:-??}"
 echo "    Claude Opus (deep analysis): #${ISSUE_NUMBERS[svn]:-??}, #${ISSUE_NUMBERS[git]:-??}, #${ISSUE_NUMBERS[conflict]:-??}, #${ISSUE_NUMBERS[sync-engine]:-??}, #${ISSUE_NUMBERS[api]:-??}, #${ISSUE_NUMBERS[webhooks]:-??}, #${ISSUE_NUMBERS[security]:-??}"
 echo ""
-echo "Done! Review issues at: https://github.com/chriscase/GitSvnSync/issues"
+echo "Done! Review issues at: https://github.com/chriscase/RepoSync/issues"

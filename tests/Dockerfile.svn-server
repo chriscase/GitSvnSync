@@ -16,8 +16,8 @@ RUN svnadmin create /var/svn/testrepo
 RUN printf '#!/bin/sh\nexit 0\n' > /var/svn/testrepo/hooks/pre-revprop-change && \
     chmod +x /var/svn/testrepo/hooks/pre-revprop-change
 
-# Post-commit hook that notifies GitSvnSync daemon
-RUN printf '#!/bin/sh\nREPOS="$1"\nREV="$2"\ncurl -s -X POST http://gitsvnsync:8080/webhook/svn \\\n  -H "Content-Type: application/json" \\\n  -d "{\\\"repository\\\": \\\"$REPOS\\\", \\\"revision\\\": $REV}" || true\n' > /var/svn/testrepo/hooks/post-commit && \
+# Post-commit hook that notifies RepoSync daemon
+RUN printf '#!/bin/sh\nREPOS="$1"\nREV="$2"\ncurl -s -X POST http://reposync:8080/webhook/svn \\\n  -H "Content-Type: application/json" \\\n  -d "{\\\"repository\\\": \\\"$REPOS\\\", \\\"revision\\\": $REV}" || true\n' > /var/svn/testrepo/hooks/post-commit && \
     chmod +x /var/svn/testrepo/hooks/post-commit
 
 # Set permissions

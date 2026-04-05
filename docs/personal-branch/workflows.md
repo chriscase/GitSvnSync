@@ -1,6 +1,6 @@
 # Personal Branch Mode: Day-to-Day Workflows
 
-This guide covers everyday usage of GitSvnSync Personal Branch Mode after initial setup is complete. For setup instructions, see the [getting started guide](../getting-started.md).
+This guide covers everyday usage of RepoSync Personal Branch Mode after initial setup is complete. For setup instructions, see the [getting started guide](../getting-started.md).
 
 ## Table of Contents
 
@@ -78,7 +78,7 @@ Synced-From: svn
 SVN-Revision: r1042
 SVN-Author: alice
 SVN-Date: 2025-06-15T14:23:07Z
-Sync-Marker: [gitsvnsync]
+Sync-Marker: [reposync]
 ```
 
 The trailers provide full traceability:
@@ -89,7 +89,7 @@ The trailers provide full traceability:
 | `SVN-Revision: r1042` | The original SVN revision number |
 | `SVN-Author: alice` | The SVN username that made the original commit |
 | `SVN-Date: 2025-06-15T14:23:07Z` | The timestamp of the SVN commit |
-| `Sync-Marker: [gitsvnsync]` | Echo suppression marker -- prevents the daemon from syncing this commit back to SVN |
+| `Sync-Marker: [reposync]` | Echo suppression marker -- prevents the daemon from syncing this commit back to SVN |
 
 The Git commit's author is set to your configured developer identity (from `[developer]` in the config), and the commit is pushed to `origin/main` automatically.
 
@@ -100,7 +100,7 @@ When a PR is merged to `main` on GitHub, the daemon replays each commit to SVN. 
 ```
 Add search endpoint with pagination
 
-[gitsvnsync] Synced from Git
+[reposync] Synced from Git
 Git-SHA: a3f7b2c9d1e4
 PR-Number: #42
 PR-Branch: feature/add-search-endpoint
@@ -110,7 +110,7 @@ The metadata fields provide traceability back to Git:
 
 | Field | Purpose |
 |-------|---------|
-| `[gitsvnsync]` | Echo suppression marker -- prevents the daemon from syncing this commit back to Git |
+| `[reposync]` | Echo suppression marker -- prevents the daemon from syncing this commit back to Git |
 | `Git-SHA: a3f7b2c9d1e4` | The original Git commit hash |
 | `PR-Number: #42` | The GitHub pull request number |
 | `PR-Branch: feature/add-search-endpoint` | The source branch of the pull request |
@@ -124,7 +124,7 @@ Conflicts occur when both SVN and Git have changes to the same file between sync
 ### Listing Conflicts
 
 ```bash
-gitsvnsync personal conflicts list
+reposync personal conflicts list
 ```
 
 This displays a table of active conflicts:
@@ -144,10 +144,10 @@ Resolve a conflict by accepting either the SVN version or the Git version:
 
 ```bash
 # Accept the SVN version (discard Git changes)
-gitsvnsync personal conflicts resolve abc12345 --accept svn
+reposync personal conflicts resolve abc12345 --accept svn
 
 # Accept the Git version (discard SVN changes)
-gitsvnsync personal conflicts resolve abc12345 --accept git
+reposync personal conflicts resolve abc12345 --accept git
 ```
 
 Once resolved, the daemon applies the chosen version on the next sync cycle and resumes normal operation.
@@ -168,13 +168,13 @@ If `auto_merge = true` (the default), the daemon attempts a 3-way merge automati
 View the current sync state at a glance:
 
 ```bash
-gitsvnsync personal status
+reposync personal status
 ```
 
 Example output:
 
 ```
-GitSvnSync Personal Branch
+RepoSync Personal Branch
 ══════════════════════════
 
   Status     Running (PID 12345)
@@ -201,8 +201,8 @@ The status shows:
 View a chronological log of all sync operations:
 
 ```bash
-gitsvnsync personal log
-gitsvnsync personal log --limit 50
+reposync personal log
+reposync personal log --limit 50
 ```
 
 Example output:
@@ -220,8 +220,8 @@ Sync History (last 20)
 View a detailed log of pull requests that have been synced to SVN:
 
 ```bash
-gitsvnsync personal pr-log
-gitsvnsync personal pr-log --limit 50
+reposync personal pr-log
+reposync personal pr-log --limit 50
 ```
 
 Example output:
@@ -247,7 +247,7 @@ The PR log shows the merge strategy detected for each PR, the number of commits,
 Start the daemon in the background:
 
 ```bash
-gitsvnsync personal start
+reposync personal start
 ```
 
 Output:
@@ -257,8 +257,8 @@ Daemon started (PID 12345)
 Polling SVN every 30 seconds
 Watching for merged PRs on yourname/project-mirror
 
-  Logs: ~/.local/share/gitsvnsync/personal.log
-  Stop: gitsvnsync personal stop
+  Logs: ~/.local/share/reposync/personal.log
+  Stop: reposync personal stop
 ```
 
 ### Running in Foreground for Debugging
@@ -266,7 +266,7 @@ Watching for merged PRs on yourname/project-mirror
 For troubleshooting, run the daemon in the foreground with live log output:
 
 ```bash
-gitsvnsync personal start --foreground
+reposync personal start --foreground
 ```
 
 In foreground mode, all log output goes to stdout/stderr instead of the log file. The daemon runs until you press Ctrl+C or send SIGTERM.
@@ -281,13 +281,13 @@ log_level = "debug"
 Or set the `RUST_LOG` environment variable:
 
 ```bash
-RUST_LOG=debug gitsvnsync personal start --foreground
+RUST_LOG=debug reposync personal start --foreground
 ```
 
 ### Stopping the Daemon
 
 ```bash
-gitsvnsync personal stop
+reposync personal stop
 ```
 
 The daemon receives SIGTERM and shuts down gracefully, completing any in-progress sync cycle before exiting. If the daemon does not exit within 5 seconds, the stop command reports an error.
@@ -297,7 +297,7 @@ The daemon receives SIGTERM and shuts down gracefully, completing any in-progres
 Stop and start the daemon in sequence:
 
 ```bash
-gitsvnsync personal stop && gitsvnsync personal start
+reposync personal stop && reposync personal start
 ```
 
 ### Checking if the Daemon is Running
@@ -305,18 +305,18 @@ gitsvnsync personal stop && gitsvnsync personal start
 Use the status command to see whether the daemon is active:
 
 ```bash
-gitsvnsync personal status
+reposync personal status
 ```
 
 The first line shows "Running (PID XXXXX)" or "Stopped".
 
 ### Custom Config File Location
 
-By default, the CLI looks for the config at `~/.config/gitsvnsync/personal.toml`. To use a different location:
+By default, the CLI looks for the config at `~/.config/reposync/personal.toml`. To use a different location:
 
 ```bash
-gitsvnsync personal --personal-config /path/to/my-config.toml start
-gitsvnsync personal --personal-config /path/to/my-config.toml status
+reposync personal --personal-config /path/to/my-config.toml start
+reposync personal --personal-config /path/to/my-config.toml status
 ```
 
 This flag works with all personal subcommands.

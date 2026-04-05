@@ -4,18 +4,18 @@
 
 ### Daemon won't start
 
-**Symptom**: `systemctl start gitsvnsync` fails
+**Symptom**: `systemctl start reposync` fails
 
 **Check logs**:
 ```bash
-journalctl -u gitsvnsync -n 50 --no-pager
+journalctl -u reposync -n 50 --no-pager
 ```
 
 **Common causes**:
 - Config file not found → verify path in service file
-- Missing environment variables → check `/etc/gitsvnsync/env`
+- Missing environment variables → check `/etc/reposync/env`
 - Port already in use → check `ss -tlnp | grep 8080`
-- Database permissions → verify `gitsvnsync` user owns data directory
+- Database permissions → verify `reposync` user owns data directory
 
 ### SVN authentication failure
 
@@ -24,7 +24,7 @@ journalctl -u gitsvnsync -n 50 --no-pager
 **Debug**:
 ```bash
 # Test SVN credentials manually
-svn info --username sync-service --password "$GITSVNSYNC_SVN_PASSWORD" https://svn.company.com/repos/project
+svn info --username sync-service --password "$REPOSYNC_SVN_PASSWORD" https://svn.company.com/repos/project
 ```
 
 **Common causes**:
@@ -39,9 +39,9 @@ svn info --username sync-service --password "$GITSVNSYNC_SVN_PASSWORD" https://s
 **Debug**:
 ```bash
 # Test GitHub token manually
-curl -H "Authorization: token $GITSVNSYNC_GITHUB_TOKEN" https://api.github.com/user
+curl -H "Authorization: token $REPOSYNC_GITHUB_TOKEN" https://api.github.com/user
 # For GHE:
-curl -H "Authorization: token $GITSVNSYNC_GITHUB_TOKEN" https://github.company.com/api/v3/user
+curl -H "Authorization: token $REPOSYNC_GITHUB_TOKEN" https://github.company.com/api/v3/user
 ```
 
 **Common causes**:
@@ -55,7 +55,7 @@ curl -H "Authorization: token $GITSVNSYNC_GITHUB_TOKEN" https://github.company.c
 
 **Debug**:
 ```bash
-gitsvnsync identity list
+reposync identity list
 ```
 
 **Common causes**:
@@ -69,13 +69,13 @@ gitsvnsync identity list
 
 **Check sync status**:
 ```bash
-gitsvnsync status
-gitsvnsync audit --limit 10
+reposync status
+reposync audit --limit 10
 ```
 
 **Common causes**:
-- Daemon not running → `systemctl status gitsvnsync`
-- Sync is paused due to unresolved conflict → `gitsvnsync conflicts list`
+- Daemon not running → `systemctl status reposync`
+- Sync is paused due to unresolved conflict → `reposync conflicts list`
 - Webhook not configured (relying on polling) → check poll interval
 - Echo suppression false positive → check commit mapping table
 
@@ -96,19 +96,19 @@ gitsvnsync audit --limit 10
 **Recovery**:
 ```bash
 # Stop daemon
-sudo systemctl stop gitsvnsync
+sudo systemctl stop reposync
 
 # Attempt recovery
-sqlite3 /var/lib/gitsvnsync/gitsvnsync.db ".recover" | sqlite3 /var/lib/gitsvnsync/gitsvnsync-recovered.db
+sqlite3 /var/lib/reposync/reposync.db ".recover" | sqlite3 /var/lib/reposync/reposync-recovered.db
 
 # Replace and restart
-mv /var/lib/gitsvnsync/gitsvnsync.db /var/lib/gitsvnsync/gitsvnsync.db.corrupt
-mv /var/lib/gitsvnsync/gitsvnsync-recovered.db /var/lib/gitsvnsync/gitsvnsync.db
-sudo systemctl start gitsvnsync
+mv /var/lib/reposync/reposync.db /var/lib/reposync/reposync.db.corrupt
+mv /var/lib/reposync/reposync-recovered.db /var/lib/reposync/reposync.db
+sudo systemctl start reposync
 ```
 
 ## Getting Help
 
-- Check logs: `journalctl -u gitsvnsync -f` or `docker logs gitsvnsync`
-- CLI diagnostics: `gitsvnsync status` and `gitsvnsync validate --config /etc/gitsvnsync/config.toml`
-- File an issue: https://github.com/chriscase/GitSvnSync/issues
+- Check logs: `journalctl -u reposync -f` or `docker logs reposync`
+- CLI diagnostics: `reposync status` and `reposync validate --config /etc/reposync/config.toml`
+- File an issue: https://github.com/chriscase/RepoSync/issues

@@ -2,8 +2,8 @@
 
 use anyhow::{Context, Result};
 
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::personal_config::PersonalConfig;
+use reposync_core::db::Database;
+use reposync_core::personal_config::PersonalConfig;
 
 use super::style;
 
@@ -14,7 +14,7 @@ pub fn run_log(config: &PersonalConfig, limit: u32) -> Result<()> {
     let db = Database::new(&db_path).context("failed to open database")?;
 
     let entries = db
-        .list_audit_log(limit, 0)
+        .list_audit_log(limit)
         .context("failed to list audit entries")?;
 
     if entries.is_empty() {

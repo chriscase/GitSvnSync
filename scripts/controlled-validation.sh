@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# GitSvnSync Controlled-Environment Validation Script
+# RepoSync Controlled-Environment Validation Script
 # ============================================================================
 # Non-interactive, CI-safe, one-command validation of the full sync pipeline
 # using local-only resources (file:// SVN repos, local Git repos).
@@ -129,7 +129,7 @@ trap cleanup EXIT
 # Preflight checks
 # ============================================================================
 log "═══════════════════════════════════════════════════════════════"
-log "GitSvnSync Controlled-Environment Validation (local)"
+log "RepoSync Controlled-Environment Validation (local)"
 log "Timestamp: $TIMESTAMP"
 log "Artifact dir: $ARTIFACT_DIR"
 log "Quick mode: $QUICK_MODE"
@@ -293,10 +293,10 @@ fi
 log "▶ 4b: Echo suppression marker"
 echo "echo_content" > "$SVN_WC/echo_test.txt"
 svn add "$SVN_WC/echo_test.txt" -q 2>/dev/null || true
-svn commit "$SVN_WC" -m "Synced from Git [gitsvnsync] echo marker" --non-interactive -q
+svn commit "$SVN_WC" -m "Synced from Git [reposync] echo marker" --non-interactive -q
 ECHO_REV=$(svn info "$SVN_URL" --show-item revision --no-newline 2>/dev/null || echo "0")
 ECHO_LOG=$(svn log "$SVN_URL" -r "$ECHO_REV" --xml 2>/dev/null || echo "")
-if echo "$ECHO_LOG" | grep -q "\[gitsvnsync\]"; then
+if echo "$ECHO_LOG" | grep -q "\[reposync\]"; then
     record_scenario "4b-echo-marker" "pass" "echo marker found in r$ECHO_REV"
     emit_event "local-svn" "4b-echo" "pass" 0 "svn_rev=$ECHO_REV"
 else
@@ -371,7 +371,7 @@ PROBE_DIR="$ARTIFACT_DIR/log-probe"
 PROBE_DATA="$WORK_DIR/probe_data"
 mkdir -p "$PROBE_DIR" "$PROBE_DATA"
 
-PERSONAL_BIN="$REPO_ROOT/target/debug/gitsvnsync-personal"
+PERSONAL_BIN="$REPO_ROOT/target/debug/reposync-personal"
 
 if [[ -f "$PERSONAL_BIN" ]]; then
     cat > "$WORK_DIR/probe_config.toml" <<TOML
@@ -382,11 +382,11 @@ data_dir = "$PROBE_DATA"
 [svn]
 url = "file:///tmp/nonexistent"
 username = "test"
-password_env = "GITSVNSYNC_TEST_SVN_PW"
+password_env = "REPOSYNC_TEST_SVN_PW"
 
 [github]
 repo = "test/test"
-token_env = "GITSVNSYNC_TEST_GH_TOKEN"
+token_env = "REPOSYNC_TEST_GH_TOKEN"
 
 [developer]
 name = "Test User"

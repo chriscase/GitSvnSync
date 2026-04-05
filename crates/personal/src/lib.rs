@@ -1,7 +1,7 @@
-//! GitSvnSync Personal Branch Mode library.
+//! RepoSync Personal Branch Mode library.
 //!
 //! Public API for the personal sync engine, used by both the standalone binary
-//! and the `gitsvnsync personal` CLI subcommands.
+//! and the `reposync personal` CLI subcommands.
 
 pub mod commit_format;
 pub mod daemon;

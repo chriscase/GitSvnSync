@@ -12,7 +12,7 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/chriscase/GitSvnSync"
+repository = "https://github.com/chriscase/RepoSync"
 description = "Bidirectional SVN ↔ Git synchronization bridge"
 
 [workspace.dependencies]
@@ -81,17 +81,6 @@ regex-lite = "0.1"
 
 # Glob pattern matching
 glob-match = "0.2"
-
-# LDAP authentication
-ldap3 = "0.11"
-
-# Password hashing & encryption
-bcrypt = "0.15"
-aes-gcm = "0.10"
-rand = "0.8"
-base64 = "0.22"
-subtle = "2"
-
 
 # Testing
 tempfile = "3"

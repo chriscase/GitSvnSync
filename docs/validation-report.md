@@ -1,6 +1,6 @@
 # Validation Report
 
-This report answers whether GitSvnSync’s automated tests actually create SVN/Git repositories, execute sync use cases, and verify results.
+This report answers whether RepoSync’s automated tests actually create SVN/Git repositories, execute sync use cases, and verify results.
 
 ## Direct Answer
 
@@ -25,7 +25,7 @@ This report answers whether GitSvnSync’s automated tests actually create SVN/G
 1. `cargo test --workspace`
 2. `cargo clippy --workspace --all-targets -- -D warnings`
 3. `cargo test --workspace -- --ignored`
-4. `cargo test -p gitsvnsync-personal --test integration -- --nocapture`
+4. `cargo test -p reposync-personal --test integration -- --nocapture`
 5. `docker compose -f tests/docker-compose.yml up -d --build` *(attempted for containerized team-mode smoke test)*
 
 ## Results
@@ -33,7 +33,7 @@ This report answers whether GitSvnSync’s automated tests actually create SVN/G
 - `cargo test --workspace`: **PASS**
 - `cargo clippy --workspace --all-targets -- -D warnings`: **PASS**
 - `cargo test --workspace -- --ignored`: **PASS**
-- `cargo test -p gitsvnsync-personal --test integration -- --nocapture`: **PASS**
+- `cargo test -p reposync-personal --test integration -- --nocapture`: **PASS**
   - Integration tests run and pass, but output includes repeated:
     - `SKIPPED: svn/svnadmin not found in PATH`
   - This confirms SVN-backed paths are conditionally skipped when SVN tooling is unavailable.

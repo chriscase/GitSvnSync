@@ -1,6 +1,6 @@
 # Controlled-Environment Validation Guide
 
-One-command local validation of the full GitSvnSync sync pipeline. Run this before any production deployment to verify end-to-end correctness.
+One-command local validation of the full RepoSync sync pipeline. Run this before any production deployment to verify end-to-end correctness.
 
 ## Prerequisites
 
@@ -45,13 +45,13 @@ Static analysis with `-D warnings` to catch lints.
 ### Phase 4: Live SVN Scenarios
 Creates real local SVN repos and exercises:
 - **Basic SVN commits** — multiple revisions verified
-- **Echo suppression** — `[gitsvnsync]` marker detection
+- **Echo suppression** — `[reposync]` marker detection
 - **Conflict path** — file modification tracking
 - **File deletion** — propagation verification
 - **Nested directories** — deep path handling
 
 ### Phase 5: Log Probe
-Spawns the real `gitsvnsync-personal` binary with the `log-probe` subcommand and verifies:
+Spawns the real `reposync-personal` binary with the `log-probe` subcommand and verifies:
 - Log file created at `{data_dir}/personal.log`
 - Log messages appear with correct markers
 
@@ -113,7 +113,7 @@ Fields: `timestamp`, `phase`, `action`, `status`, `duration_ms`, plus optional `
 2. **Test failure**: Check `cargo-test/stderr.log` for failing test names and assertions.
 3. **Clippy failure**: Check `clippy/stderr.log` for lint violations.
 4. **SVN scenario failure**: Check `live-scenarios/` and `timeline.log` for which scenario failed.
-5. **Log probe failure**: Check `log-probe/stderr.log` and verify the binary exists at `target/debug/gitsvnsync-personal`.
+5. **Log probe failure**: Check `log-probe/stderr.log` and verify the binary exists at `target/debug/reposync-personal`.
 6. **Secret leak**: Check `redaction/` — review the flagged file and determine if it's a real leak or false positive.
 
 ## Cleanup

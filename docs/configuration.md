@@ -1,6 +1,6 @@
 # Configuration Reference
 
-GitSvnSync is configured via a TOML file, typically at `/etc/gitsvnsync/config.toml`.
+RepoSync is configured via a TOML file, typically at `/etc/reposync/config.toml`.
 
 ## [daemon]
 
@@ -8,7 +8,7 @@ GitSvnSync is configured via a TOML file, typically at `/etc/gitsvnsync/config.t
 |-----|------|---------|-------------|
 | `poll_interval_secs` | integer | `15` | Seconds between polling for new changes |
 | `log_level` | string | `"info"` | Log level: trace, debug, info, warn, error |
-| `data_dir` | string | `"/var/lib/gitsvnsync"` | Directory for SQLite database and state |
+| `data_dir` | string | `"/var/lib/reposync"` | Directory for SQLite database and state |
 
 ## [svn]
 
@@ -102,12 +102,12 @@ All sensitive values are stored in environment variables (never in config files)
 
 | Variable | Description |
 |----------|-------------|
-| `GITSVNSYNC_SVN_PASSWORD` | SVN service account password |
-| `GITSVNSYNC_GITHUB_TOKEN` | GitHub PAT or App token |
-| `GITSVNSYNC_WEBHOOK_SECRET` | GitHub webhook secret |
-| `GITSVNSYNC_ADMIN_PASSWORD` | Web dashboard password |
-| `GITSVNSYNC_SESSION_SECRET` | Session cookie signing secret |
-| `GITSVNSYNC_SLACK_WEBHOOK` | Slack incoming webhook URL |
-| `GITSVNSYNC_LDAP_PASSWORD` | LDAP bind password |
-| `GITSVNSYNC_OAUTH_CLIENT_ID` | GitHub OAuth App client ID |
-| `GITSVNSYNC_OAUTH_SECRET` | GitHub OAuth App secret |
+| `REPOSYNC_SVN_PASSWORD` | SVN service account password |
+| `REPOSYNC_GITHUB_TOKEN` | GitHub PAT or App token |
+| `REPOSYNC_WEBHOOK_SECRET` | GitHub webhook secret |
+| `REPOSYNC_ADMIN_PASSWORD` | Web dashboard password |
+| `REPOSYNC_SESSION_SECRET` | Session cookie signing secret |
+| `REPOSYNC_SLACK_WEBHOOK` | Slack incoming webhook URL |
+| `REPOSYNC_LDAP_PASSWORD` | LDAP bind password |
+| `REPOSYNC_OAUTH_CLIENT_ID` | GitHub OAuth App client ID |
+| `REPOSYNC_OAUTH_SECRET` | GitHub OAuth App secret |

@@ -4,30 +4,30 @@
 [daemon]
 poll_interval_secs = 5
 log_level = "debug"
-data_dir = "/var/lib/gitsvnsync"
+data_dir = "/var/lib/reposync"
 
 [svn]
 url = "http://svn-server/svn/testrepo"
 username = "sync-service"
-password_env = "GITSVNSYNC_SVN_PASSWORD"
+password_env = "REPOSYNC_SVN_PASSWORD"
 layout = "standard"
 
 [github]
 api_url = "http://gitea:3000/api/v1"
 repo = "testorg/testrepo"
-token_env = "GITSVNSYNC_GITHUB_TOKEN"
-webhook_secret_env = "GITSVNSYNC_WEBHOOK_SECRET"
+token_env = "REPOSYNC_GITHUB_TOKEN"
+webhook_secret_env = "REPOSYNC_WEBHOOK_SECRET"
 default_branch = "main"
 
 [identity]
-mapping_file = "/etc/gitsvnsync/authors.toml"
+mapping_file = "/etc/reposync/authors.toml"
 email_domain = "testcorp.com"
 
 [web]
 listen = "0.0.0.0:8080"
-session_secret_env = "GITSVNSYNC_SESSION_SECRET"
+session_secret_env = "REPOSYNC_SESSION_SECRET"
 auth_mode = "simple"
-admin_password_env = "GITSVNSYNC_ADMIN_PASSWORD"
+admin_password_env = "REPOSYNC_ADMIN_PASSWORD"
 
 [sync]
 mode = "direct"

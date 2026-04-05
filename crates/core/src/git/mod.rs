@@ -1,4 +1,4 @@
-//! Git operations for GitSvnSync.
+//! Git operations for RepoSync.
 
 pub mod client;
 pub mod github;

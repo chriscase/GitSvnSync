@@ -1,6 +1,6 @@
 # Personal Branch Mode: 5-Minute Quickstart
 
-Personal Branch Mode lets a single developer mirror an SVN repository to a personal GitHub repo. You work in Git with branches and PRs, and GitSvnSync handles syncing changes back to SVN when PRs are merged. No server required -- it runs as a local daemon on your machine.
+Personal Branch Mode lets a single developer mirror an SVN repository to a personal GitHub repo. You work in Git with branches and PRs, and RepoSync handles syncing changes back to SVN when PRs are merged. No server required -- it runs as a local daemon on your machine.
 
 ## Prerequisites
 
@@ -18,23 +18,23 @@ Before you begin, make sure you have:
 ### Option A: Install from crates.io
 
 ```bash
-cargo install gitsvnsync-cli
+cargo install reposync-cli
 ```
 
 ### Option B: Build from source
 
 ```bash
-git clone https://github.com/chriscase/GitSvnSync.git
-cd GitSvnSync
+git clone https://github.com/chriscase/RepoSync.git
+cd RepoSync
 cargo build --release
 # Copy the binary to your PATH
-cp target/release/gitsvnsync ~/.cargo/bin/
+cp target/release/reposync ~/.cargo/bin/
 ```
 
 Verify the installation:
 
 ```bash
-gitsvnsync --version
+reposync --version
 ```
 
 ## Step 2: Initialize Configuration
@@ -42,7 +42,7 @@ gitsvnsync --version
 Run the interactive setup wizard:
 
 ```bash
-gitsvnsync personal init
+reposync personal init
 ```
 
 The wizard will prompt you for:
@@ -54,7 +54,7 @@ The wizard will prompt you for:
 5. **GitHub repository** -- in `owner/repo` format (e.g., `jdoe/project-mirror`)
 6. **Poll interval** -- how often to check SVN for new commits (default: 30 seconds)
 
-The wizard writes its configuration to `~/.config/gitsvnsync/personal.toml`. You can edit this file directly afterward.
+The wizard writes its configuration to `~/.config/reposync/personal.toml`. You can edit this file directly afterward.
 
 **Set your secrets as environment variables** (add these to your shell profile):
 
@@ -68,7 +68,7 @@ export GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxx"
 Pull the full SVN history into your GitHub mirror:
 
 ```bash
-gitsvnsync personal import --full
+reposync personal import --full
 ```
 
 This clones the SVN repository, converts the history to Git commits, and pushes everything to your GitHub repository. Depending on the size of your SVN history, this may take anywhere from a few seconds to several hours.
@@ -90,19 +90,19 @@ Pushed to github.com/jdoe/project-mirror
 Start the background sync process:
 
 ```bash
-gitsvnsync personal start
+reposync personal start
 ```
 
 The daemon runs in the foreground by default. To run it in the background:
 
 ```bash
-gitsvnsync personal start --daemon
+reposync personal start --daemon
 ```
 
 Check that it is running:
 
 ```bash
-gitsvnsync personal status
+reposync personal status
 ```
 
 You should see output like:
@@ -118,7 +118,7 @@ Last sync:      r847 <-> abc1234
 To stop the daemon later:
 
 ```bash
-gitsvnsync personal stop
+reposync personal stop
 ```
 
 ## Step 5: Work with Branches and PRs
@@ -160,7 +160,7 @@ gh pr create --title "Add login page" --body "Implements the login form with val
 
 ### 5. Merge the PR
 
-Once you are satisfied, merge the PR on GitHub (via the web UI or CLI). GitSvnSync detects the merge and commits the changes to SVN automatically.
+Once you are satisfied, merge the PR on GitHub (via the web UI or CLI). RepoSync detects the merge and commits the changes to SVN automatically.
 
 ### 6. Watch it sync
 

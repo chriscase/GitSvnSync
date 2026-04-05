@@ -51,7 +51,7 @@ impl ConflictResolver {
     /// Resolve a conflict with custom merged content.
     pub fn accept_merged(
         conflict_id: &str,
-        merged_content: &str,
+        _merged_content: &str,
         resolved_by: &str,
         db: &Database,
     ) -> Result<(), ConflictError> {
@@ -59,11 +59,7 @@ impl ConflictResolver {
             conflict_id,
             resolved_by, "resolving conflict: accept merged content"
         );
-        Self::apply_resolution(conflict_id, "accept_merged", resolved_by, db)?;
-        // Store the merged content in the resolved_content column
-        db.store_resolved_content(conflict_id, merged_content)
-            .map_err(ConflictError::DatabaseError)?;
-        Ok(())
+        Self::apply_resolution(conflict_id, "accept_merged", resolved_by, db)
     }
 
     /// Defer resolution of a conflict.

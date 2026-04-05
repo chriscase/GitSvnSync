@@ -4,11 +4,11 @@ Technical deep dive for contributors working on the personal branch sync engine.
 
 ## System Overview
 
-Personal Branch Mode is a simplified, single-developer variant of the GitSvnSync daemon. It runs on your local machine (or a VM), continuously mirroring an SVN path to a private GitHub repository and replaying merged pull requests back to SVN.
+Personal Branch Mode is a simplified, single-developer variant of the RepoSync daemon. It runs on your local machine (or a VM), continuously mirroring an SVN path to a private GitHub repository and replaying merged pull requests back to SVN.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│               gitsvnsync-personal daemon (Rust)                     │
+│               reposync-personal daemon (Rust)                     │
 │                                                                     │
 │  ┌───────────────┐   ┌──────────────────┐   ┌───────────────────┐  │
 │  │ SvnToGitSync  │   │ PersonalSync     │   │ PrMonitor         │  │
@@ -91,28 +91,28 @@ The cycle always runs both phases (SVN-to-Git and Git-to-SVN) in sequence. If SV
 The workspace contains five crates:
 
 ```
-gitsvnsync/
+reposync/
   crates/
     core/             # Shared library: SVN client, Git client, GitHub API,
                       # database, config, models, conflict detection/merging,
                       # identity mapping, notifications
-                      # -> gitsvnsync-core
+                      # -> reposync-core
 
     personal/         # Personal sync daemon binary + engine library
                       # Modules: engine, svn_to_git, git_to_svn, pr_monitor,
                       # commit_format, scheduler, daemon, signals, initial_import
-                      # -> gitsvnsync-personal (binary + lib)
+                      # -> reposync-personal (binary + lib)
 
     cli/              # Unified CLI binary
                       # Personal subcommands: init, import, start/stop/status,
                       # conflicts, doctor, log, pr-log
-                      # -> gitsvnsync (binary)
+                      # -> reposync (binary)
 
     daemon/           # Team-mode daemon binary (server deployment)
-                      # -> gitsvnsync-daemon
+                      # -> reposync-daemon
 
     web/              # Axum web server, REST API, WebSocket (team mode)
-                      # -> gitsvnsync-web
+                      # -> reposync-web
 ```
 
 Personal mode uses `core` + `personal` + `cli`. The `daemon` and `web` crates are team-mode only.
@@ -201,11 +201,11 @@ Indexed on `created_at` and `action`.
 
 When the daemon syncs a commit from SVN to Git, that new Git commit could be detected on the next Git-to-SVN pass as "new work" and synced back, creating an infinite loop. The same applies in reverse.
 
-GitSvnSync prevents this with a two-layer suppression mechanism:
+RepoSync prevents this with a two-layer suppression mechanism:
 
 ### Layer 1: Commit message marker
 
-Every synced commit message includes the `[gitsvnsync]` marker string, embedded in a metadata trailer block. The `CommitFormatter::is_sync_marker()` function checks for this marker.
+Every synced commit message includes the `[reposync]` marker string, embedded in a metadata trailer block. The `CommitFormatter::is_sync_marker()` function checks for this marker.
 
 SVN-to-Git commit message example:
 
@@ -216,7 +216,7 @@ Synced-From: svn
 SVN-Revision: r42
 SVN-Author: alice
 SVN-Date: 2025-01-15T10:30:00Z
-Sync-Marker: [gitsvnsync]
+Sync-Marker: [reposync]
 ```
 
 Git-to-SVN commit message example:
@@ -224,7 +224,7 @@ Git-to-SVN commit message example:
 ```
 Add search endpoint
 
-[gitsvnsync] Synced from Git
+[reposync] Synced from Git
 Git-SHA: abc123def456
 PR-Number: #42
 PR-Branch: feature/search
@@ -284,8 +284,8 @@ Change detected on both sides
              ▼
      User resolves via CLI:
      ┌────────────────────────────────────┐
-     │ gitsvnsync personal conflicts list │
-     │ gitsvnsync personal conflicts      │
+     │ reposync personal conflicts list │
+     │ reposync personal conflicts      │
      │   resolve <id> --accept svn        │
      │   resolve <id> --accept git        │
      └────────────────────────────────────┘
@@ -352,7 +352,7 @@ Step-by-step sequence for syncing one SVN revision to Git:
 3. If HEAD <= watermark, return (nothing to do)
 4. Fetch `svn log` entries for range `(watermark+1)..HEAD`
 5. For each entry:
-   a. **Echo check**: skip if message contains `[gitsvnsync]`
+   a. **Echo check**: skip if message contains `[reposync]`
    b. **Idempotency check**: skip if `svn_rev` exists in `commit_map`
    c. `svn export` the revision to a temp directory
    d. Copy exported files into the Git working tree (skips `.git/` at root)
@@ -374,7 +374,7 @@ Step-by-step sequence for syncing merged PRs back to SVN:
    b. Fetch the PR's commits from GitHub API
    c. Detect merge strategy (merge/squash/rebase)
    d. Insert a `pending` record into `pr_sync_log`
-   e. Filter out echo commits (containing `[gitsvnsync]`)
+   e. Filter out echo commits (containing `[reposync]`)
    f. For each non-echo commit:
       - `svn update` the working copy to HEAD
       - Copy changed files from Git repo to SVN working copy
@@ -417,7 +417,7 @@ The daemon writes a PID file to `{data_dir}/daemon.pid` for the CLI to check dae
 
 ## CLI Commands (Personal Mode)
 
-All personal commands live under `gitsvnsync personal`:
+All personal commands live under `reposync personal`:
 
 | Command      | Description                                      |
 |-------------|--------------------------------------------------|

@@ -1,4 +1,4 @@
-//! GitSvnSync command-line management tool.
+//! RepoSync command-line management tool.
 //!
 //! Provides subcommands for inspecting sync status, managing conflicts,
 //! editing identity mappings, viewing the audit log, and generating /
@@ -16,20 +16,20 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use gitsvnsync_core::config::AppConfig;
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::identity::IdentityMapper;
+use reposync_core::config::AppConfig;
+use reposync_core::db::Database;
+use reposync_core::identity::IdentityMapper;
 
 // ---------------------------------------------------------------------------
 // CLI argument definitions
 // ---------------------------------------------------------------------------
 
-/// GitSvnSync command-line management tool.
+/// RepoSync command-line management tool.
 #[derive(Parser, Debug)]
 #[command(
-    name = "gitsvnsync",
+    name = "reposync",
     version,
-    about = "Manage and inspect a GitSvnSync synchronization bridge"
+    about = "Manage and inspect a RepoSync synchronization bridge"
 )]
 struct Cli {
     /// Path to the TOML configuration file.
@@ -37,7 +37,7 @@ struct Cli {
         short,
         long,
         global = true,
-        default_value = "/etc/gitsvnsync/config.toml"
+        default_value = "/etc/reposync/config.toml"
     )]
     config: PathBuf,
 
@@ -71,7 +71,7 @@ enum Commands {
     /// Generate a default configuration file.
     Init {
         /// Output path for the generated config file.
-        #[arg(short, long, default_value = "./gitsvnsync.toml")]
+        #[arg(short, long, default_value = "./reposync.toml")]
         output: PathBuf,
     },
 
@@ -88,7 +88,7 @@ enum Commands {
     /// Personal Branch Mode — individual SVN↔Git sync.
     Personal {
         /// Path to the personal config file.
-        #[arg(long, default_value = "~/.config/gitsvnsync/personal.toml")]
+        #[arg(long, default_value = "~/.config/reposync/personal.toml")]
         personal_config: String,
 
         #[command(subcommand)]
@@ -202,7 +202,7 @@ fn load_config(path: &PathBuf) -> Result<AppConfig> {
 }
 
 fn open_database(config: &AppConfig) -> Result<Database> {
-    let db_path = config.daemon.data_dir.join("gitsvnsync.db");
+    let db_path = config.daemon.data_dir.join("reposync.db");
     let db = Database::new(&db_path).context("failed to open database")?;
     db.initialize().context("failed to initialize database")?;
     Ok(db)
@@ -213,13 +213,13 @@ fn open_database(config: &AppConfig) -> Result<Database> {
 // ---------------------------------------------------------------------------
 
 fn cmd_init(output: &PathBuf) -> Result<()> {
-    let default_config = r#"# GitSvnSync Configuration
+    let default_config = r#"# RepoSync Configuration
 # See documentation for all available options.
 
 [daemon]
 poll_interval_secs = 60
 log_level = "info"
-data_dir = "/var/lib/gitsvnsync"
+data_dir = "/var/lib/reposync"
 
 [svn]
 url = "https://svn.example.com/repo"
@@ -249,7 +249,7 @@ admin_password_env = "ADMIN_PASSWORD"
 [notifications]
 # slack_webhook_url_env = "SLACK_WEBHOOK_URL"
 # email_smtp = "smtp.example.com:587"
-# email_from = "gitsvnsync@example.com"
+# email_from = "reposync@example.com"
 # email_recipients = ["admin@example.com"]
 
 [sync]
@@ -273,11 +273,11 @@ sync_tags = true
     println!("  1. Edit the config file with your SVN and GitHub details");
     println!("  2. Set the referenced environment variables (SVN_PASSWORD, GITHUB_TOKEN, etc.)");
     println!(
-        "  3. Validate with: gitsvnsync validate --config {}",
+        "  3. Validate with: reposync validate --config {}",
         output.display()
     );
     println!(
-        "  4. Start the daemon: gitsvnsync-daemon --config {}",
+        "  4. Start the daemon: reposync-daemon --config {}",
         output.display()
     );
 
@@ -380,8 +380,8 @@ fn cmd_status(db: &Database) -> Result<()> {
 
     let total_errors = db.count_errors().context("failed to count errors")?;
 
-    println!("GitSvnSync Status");
-    println!("=================");
+    println!("RepoSync Status");
+    println!("===============");
     println!();
     println!("  Sync state       : {}", state);
     println!(
@@ -541,14 +541,14 @@ async fn cmd_sync(_db: &Database, config: &AppConfig, action: SyncAction) -> Res
             println!("Triggering immediate sync cycle...");
             println!();
 
-            let svn_client = gitsvnsync_core::svn::SvnClient::new(
+            let svn_client = reposync_core::svn::SvnClient::new(
                 &config.svn.url,
                 &config.svn.username,
                 config.svn.password.as_deref().unwrap_or(""),
             );
 
             let git_repo_path = config.daemon.data_dir.join("git-repo");
-            let git_client = gitsvnsync_core::git::GitClient::new(&git_repo_path)
+            let git_client = reposync_core::git::GitClient::new(&git_repo_path)
                 .context("failed to open Git repository")?;
 
             let identity = IdentityMapper::new(&config.identity)
@@ -556,11 +556,11 @@ async fn cmd_sync(_db: &Database, config: &AppConfig, action: SyncAction) -> Res
 
             // Open a dedicated database connection for the sync engine
             let engine_db = {
-                let db_path = config.daemon.data_dir.join("gitsvnsync.db");
+                let db_path = config.daemon.data_dir.join("reposync.db");
                 Database::new(&db_path).context("failed to open engine database")?
             };
 
-            let engine = gitsvnsync_core::sync_engine::SyncEngine::new(
+            let engine = reposync_core::sync_engine::SyncEngine::new(
                 config.clone(),
                 engine_db,
                 svn_client,
@@ -568,16 +568,11 @@ async fn cmd_sync(_db: &Database, config: &AppConfig, action: SyncAction) -> Res
                 Arc::new(identity),
             );
 
-            let spinner = indicatif::ProgressBar::new_spinner();
-            spinner.set_message("Running sync cycle...");
-            spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-
             let result = engine
                 .run_sync_cycle()
                 .await
                 .map_err(|e| anyhow::anyhow!("sync cycle failed: {}", e))?;
 
-            spinner.finish_and_clear();
             println!("Sync cycle completed:");
             println!("  SVN -> Git : {} operations", result.svn_to_git_count);
             println!("  Git -> SVN : {} operations", result.git_to_svn_count);
@@ -616,7 +611,7 @@ fn cmd_identity(config: &AppConfig, action: IdentityAction) -> Result<()> {
 
 fn cmd_audit(db: &Database, limit: u32) -> Result<()> {
     let entries = db
-        .list_audit_log(limit, 0)
+        .list_audit_log(limit)
         .context("failed to list audit entries")?;
 
     if entries.is_empty() {

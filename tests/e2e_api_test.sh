@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# GitSvnSync E2E API Test Script
+# RepoSync E2E API Test Script
 # =============================================================================
 # Tests all REST API endpoints against a running daemon instance.
 #
@@ -101,7 +101,7 @@ parse_response() {
 # ---------------------------------------------------------------------------
 
 echo -e "\n${CYAN}========================================${NC}"
-echo -e "${CYAN}  GitSvnSync E2E API Tests${NC}"
+echo -e "${CYAN}  RepoSync E2E API Tests${NC}"
 echo -e "${CYAN}  Server: $BASE_URL${NC}"
 echo -e "${CYAN}========================================${NC}\n"
 

@@ -2,15 +2,15 @@
 
 use anyhow::Result;
 
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::personal_config::PersonalConfig;
+use reposync_core::db::Database;
+use reposync_core::personal_config::PersonalConfig;
 
 use super::style;
 
 /// Run a health check on the personal branch setup.
 pub fn run_doctor(config: &PersonalConfig) -> Result<()> {
     println!();
-    println!("{}", style::header("GitSvnSync Doctor"));
+    println!("{}", style::header("RepoSync Doctor"));
     println!("{}", "═".repeat(17));
     println!();
 
@@ -66,7 +66,7 @@ pub fn run_doctor(config: &PersonalConfig) -> Result<()> {
         }
     } else {
         println!("  {}", style::warn("Database          Not initialized"));
-        issues.push("Run 'gitsvnsync personal import' to initialize".to_string());
+        issues.push("Run 'reposync personal import' to initialize".to_string());
     }
 
     // 4. Git repository
@@ -81,7 +81,7 @@ pub fn run_doctor(config: &PersonalConfig) -> Result<()> {
         issues.push("Git repo directory exists but is not initialized".to_string());
     } else {
         println!("  {}", style::warn("Git Repository    Not cloned"));
-        issues.push("Run 'gitsvnsync personal import' to set up".to_string());
+        issues.push("Run 'reposync personal import' to set up".to_string());
     }
 
     // 5. SVN working copy
@@ -99,14 +99,14 @@ pub fn run_doctor(config: &PersonalConfig) -> Result<()> {
     }
 
     // 6. Daemon status
-    match gitsvnsync_personal::daemon::is_running(data_dir) {
+    match reposync_personal::daemon::is_running(data_dir) {
         Ok(Some(pid)) => println!(
             "  {}",
             style::success(&format!("Daemon            Running (PID {})", pid))
         ),
         Ok(None) => {
             println!("  {}", style::warn("Daemon            Not running"));
-            issues.push("Start daemon with: gitsvnsync personal start".to_string());
+            issues.push("Start daemon with: reposync personal start".to_string());
         }
         Err(e) => {
             println!(

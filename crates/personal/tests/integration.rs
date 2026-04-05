@@ -16,15 +16,15 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::git::GitClient;
-use gitsvnsync_core::personal_config::{
+use reposync_core::db::Database;
+use reposync_core::git::GitClient;
+use reposync_core::personal_config::{
     CommitFormatConfig, DeveloperConfig, PersonalConfig, PersonalGitHubConfig,
     PersonalOptionsConfig, PersonalSection, PersonalSvnConfig,
 };
-use gitsvnsync_core::svn::SvnClient;
-use gitsvnsync_personal::commit_format::CommitFormatter;
-use gitsvnsync_personal::svn_to_git::SvnToGitSync;
+use reposync_core::svn::SvnClient;
+use reposync_personal::commit_format::CommitFormatter;
+use reposync_personal::svn_to_git::SvnToGitSync;
 
 // ===========================================================================
 // Helper functions
@@ -251,13 +251,13 @@ fn make_test_config(svn_url: &str, data_dir: &Path) -> PersonalConfig {
         svn: PersonalSvnConfig {
             url: svn_url.into(),
             username: String::new(),
-            password_env: "GITSVNSYNC_TEST_SVN_PW".into(),
+            password_env: "REPOSYNC_TEST_SVN_PW".into(),
             password: Some(String::new()),
         },
         github: PersonalGitHubConfig {
             api_url: "https://api.github.com".into(),
             repo: "test/test-repo".into(),
-            token_env: "GITSVNSYNC_TEST_GH_TOKEN".into(),
+            token_env: "REPOSYNC_TEST_GH_TOKEN".into(),
             default_branch: "main".into(),
             auto_create: false,
             private: true,
@@ -423,7 +423,7 @@ async fn test_svn_to_git_basic_sync() {
         msg
     );
     assert!(
-        msg.contains("[gitsvnsync]"),
+        msg.contains("[reposync]"),
         "expected sync marker in: {}",
         msg
     );
@@ -457,12 +457,12 @@ async fn test_svn_to_git_echo_suppression() {
     // Rev 1: normal commit.
     svn_commit_file(&wc_path, "normal1.txt", "hello", "Normal commit 1");
 
-    // Rev 2: commit with [gitsvnsync] marker (simulating an echo).
+    // Rev 2: commit with [reposync] marker (simulating an echo).
     svn_commit_file(
         &wc_path,
         "echo.txt",
         "echoed content",
-        "Echoed commit [gitsvnsync] synced from Git",
+        "Echoed commit [reposync] synced from Git",
     );
 
     // Rev 3: another normal commit.
@@ -960,12 +960,12 @@ async fn test_git_to_svn_basic_replay() {
     let info = svn_client.info().await.unwrap();
     assert_eq!(info.latest_rev, 2, "SVN should be at revision 2");
 
-    // Verify the SVN commit message contains the [gitsvnsync] marker.
+    // Verify the SVN commit message contains the [reposync] marker.
     let log_entries = svn_client.log(2, 2).await.unwrap();
     assert_eq!(log_entries.len(), 1);
     assert!(
         CommitFormatter::is_sync_marker(&log_entries[0].message),
-        "SVN commit message should contain [gitsvnsync] marker"
+        "SVN commit message should contain [reposync] marker"
     );
     assert!(
         log_entries[0].message.contains(&git_sha),
@@ -986,7 +986,7 @@ fn test_commit_formatter_roundtrip() {
     let svn_to_git_msg =
         formatter.format_svn_to_git("Fix bug #42", 123, "alice", "2025-06-15T10:00:00Z");
     assert!(
-        svn_to_git_msg.contains("[gitsvnsync]"),
+        svn_to_git_msg.contains("[reposync]"),
         "SVN-to-Git message should contain sync marker"
     );
     assert!(
@@ -1010,7 +1010,7 @@ fn test_commit_formatter_roundtrip() {
     let git_to_svn_msg =
         formatter.format_git_to_svn("Add search endpoint", "abc123def456", 42, "feature/search");
     assert!(
-        git_to_svn_msg.contains("[gitsvnsync]"),
+        git_to_svn_msg.contains("[reposync]"),
         "Git-to-SVN message should contain sync marker"
     );
     assert!(
@@ -1172,7 +1172,7 @@ fn test_database_watermark_and_commit_map() {
         true,
     )
     .unwrap();
-    let audit = db.list_audit_log(10, 0).unwrap();
+    let audit = db.list_audit_log(10).unwrap();
     assert_eq!(audit.len(), 1);
     assert_eq!(audit[0].action, "test_action");
     assert_eq!(audit[0].svn_rev, Some(100));
@@ -1236,8 +1236,8 @@ async fn test_full_svn_to_git_cycle_with_metadata() {
 
     // Verify metadata in commit message.
     assert!(
-        msg.contains("[gitsvnsync]"),
-        "commit message should contain [gitsvnsync] marker, got: {}",
+        msg.contains("[reposync]"),
+        "commit message should contain [reposync] marker, got: {}",
         msg
     );
     assert!(
@@ -1265,7 +1265,7 @@ async fn test_full_svn_to_git_cycle_with_metadata() {
     assert!(commit_map[0].git_author.contains("Test User"));
 
     // Verify the audit log was written.
-    let audit = db_arc.list_audit_log(10, 0).unwrap();
+    let audit = db_arc.list_audit_log(10).unwrap();
     assert!(!audit.is_empty(), "audit log should have entries");
     assert_eq!(audit[0].action, "svn_to_git_sync");
 
@@ -1828,14 +1828,14 @@ fn test_runtime_personal_log_level_filtering() {
 // Issue #38: spawn-based black-box personal logging tests
 // ===========================================================================
 
-/// Return the path to the compiled `gitsvnsync-personal` binary.
+/// Return the path to the compiled `reposync-personal` binary.
 /// Looks in `target/debug` which `cargo test` populates.
 fn personal_binary_path() -> PathBuf {
     // The binary sits next to the test binary's directory.
     let mut path = std::env::current_exe().unwrap();
     path.pop(); // remove test binary name
     path.pop(); // remove `deps`
-    path.push("gitsvnsync-personal");
+    path.push("reposync-personal");
     path
 }
 
@@ -1851,11 +1851,11 @@ data_dir = "{data_dir}"
 [svn]
 url = "file:///tmp/nonexistent_svn_repo"
 username = "testuser"
-password_env = "GITSVNSYNC_TEST_SVN_PW"
+password_env = "REPOSYNC_TEST_SVN_PW"
 
 [github]
 repo = "test/test-repo"
-token_env = "GITSVNSYNC_TEST_GH_TOKEN"
+token_env = "REPOSYNC_TEST_GH_TOKEN"
 
 [developer]
 name = "Test User"
@@ -1874,7 +1874,7 @@ svn_username = "testuser"
 fn test_spawn_personal_log_file_written() {
     let bin = personal_binary_path();
     if !bin.exists() {
-        eprintln!("SKIPPED: gitsvnsync-personal binary not found at {:?}", bin);
+        eprintln!("SKIPPED: reposync-personal binary not found at {:?}", bin);
         return;
     }
 
@@ -1888,7 +1888,7 @@ fn test_spawn_personal_log_file_written() {
         .args(["--config", config_path.to_str().unwrap(), "log-probe"])
         .env_remove("RUST_LOG") // ensure config log_level is used
         .output()
-        .expect("failed to spawn gitsvnsync-personal");
+        .expect("failed to spawn reposync-personal");
 
     // The process should exit successfully (log-probe always succeeds).
     assert!(
@@ -2339,26 +2339,26 @@ fn test_lfs_pointer_detection_in_git_to_svn() {
     // that would be encountered during Git→SVN sync.
     let pointer =
         "version https://git-lfs.github.com/spec/v1\noid sha256:abc123def456789\nsize 1048576\n";
-    assert!(gitsvnsync_core::lfs::is_lfs_pointer(pointer.as_bytes()));
+    assert!(reposync_core::lfs::is_lfs_pointer(pointer.as_bytes()));
 
-    let parsed = gitsvnsync_core::lfs::parse_lfs_pointer(pointer.as_bytes()).unwrap();
+    let parsed = reposync_core::lfs::parse_lfs_pointer(pointer.as_bytes()).unwrap();
     assert_eq!(parsed.oid, "abc123def456789");
     assert_eq!(parsed.size, 1048576);
 
     // Normal file content should NOT be detected as LFS pointer.
     let normal = b"fn main() { println!(\"hello\"); }";
-    assert!(!gitsvnsync_core::lfs::is_lfs_pointer(normal));
+    assert!(!reposync_core::lfs::is_lfs_pointer(normal));
 
     // Binary content should NOT be detected as LFS pointer.
     let binary = vec![0xFF, 0xFE, 0x00, 0x01, 0x02, 0x03];
-    assert!(!gitsvnsync_core::lfs::is_lfs_pointer(&binary));
+    assert!(!reposync_core::lfs::is_lfs_pointer(&binary));
 }
 
 /// LFS config wiring: lfs_threshold in PersonalOptionsConfig correctly
 /// creates a FilePolicy with LFS enabled.
 #[test]
 fn test_lfs_config_wiring() {
-    use gitsvnsync_core::file_policy::FilePolicy;
+    use reposync_core::file_policy::FilePolicy;
 
     // Default config: no LFS.
     let opts = PersonalOptionsConfig::default();
@@ -2378,14 +2378,14 @@ fn test_lfs_config_wiring() {
     let decision = policy.evaluate("small.txt", 100);
     assert_eq!(
         decision,
-        gitsvnsync_core::file_policy::FilePolicyDecision::Allow
+        reposync_core::file_policy::FilePolicyDecision::Allow
     );
 
     // A file over the threshold → LfsTrack.
     let decision = policy.evaluate("large.bin", 10_000_000);
     assert!(matches!(
         decision,
-        gitsvnsync_core::file_policy::FilePolicyDecision::LfsTrack { .. }
+        reposync_core::file_policy::FilePolicyDecision::LfsTrack { .. }
     ));
     assert!(decision.should_sync());
 }
@@ -2404,13 +2404,13 @@ fn test_lfs_pointer_text_never_reaches_svn() {
 
     // Verify we can detect it as an LFS pointer.
     assert!(
-        gitsvnsync_core::lfs::is_lfs_pointer(pointer_text),
+        reposync_core::lfs::is_lfs_pointer(pointer_text),
         "valid LFS pointer must be detected"
     );
 
     // Verify parsing extracts the correct OID and size.
     let parsed =
-        gitsvnsync_core::lfs::parse_lfs_pointer(pointer_text).expect("valid pointer should parse");
+        reposync_core::lfs::parse_lfs_pointer(pointer_text).expect("valid pointer should parse");
     assert_eq!(
         parsed.oid,
         "4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393"
@@ -2422,7 +2422,7 @@ fn test_lfs_pointer_text_never_reaches_svn() {
     // (the fix ensures this failure skips the file instead of writing pointer
     // text as-is).
     let tmp = TempDir::new().unwrap();
-    let result = gitsvnsync_core::lfs::resolve_lfs_pointer(tmp.path(), pointer_text);
+    let result = reposync_core::lfs::resolve_lfs_pointer(tmp.path(), pointer_text);
     assert!(
         result.is_err(),
         "LFS pointer resolution must fail without a real LFS repo — \
@@ -2432,7 +2432,7 @@ fn test_lfs_pointer_text_never_reaches_svn() {
     // Regular file content must NOT be detected as an LFS pointer.
     let normal_content = b"fn main() { println!(\"hello world\"); }";
     assert!(
-        !gitsvnsync_core::lfs::is_lfs_pointer(normal_content),
+        !reposync_core::lfs::is_lfs_pointer(normal_content),
         "regular source code must not be detected as LFS pointer"
     );
 }
@@ -2443,19 +2443,19 @@ fn test_lfs_pointer_text_never_reaches_svn() {
 fn test_lfs_pointer_detection_precision() {
     // Create an LFS pointer from known content.
     let original = b"some binary data \x00\x01\x02\x03";
-    let pointer = gitsvnsync_core::lfs::create_lfs_pointer(original);
+    let pointer = reposync_core::lfs::create_lfs_pointer(original);
 
     // The pointer itself must be detected.
-    assert!(gitsvnsync_core::lfs::is_lfs_pointer(pointer.as_bytes()));
+    assert!(reposync_core::lfs::is_lfs_pointer(pointer.as_bytes()));
 
     // The pointer must parse back to the correct size.
-    let parsed = gitsvnsync_core::lfs::parse_lfs_pointer(pointer.as_bytes()).unwrap();
+    let parsed = reposync_core::lfs::parse_lfs_pointer(pointer.as_bytes()).unwrap();
     assert_eq!(parsed.size, original.len() as u64);
 
     // Content that merely *mentions* LFS but isn't a pointer must NOT match.
     let fake = b"This file talks about https://git-lfs.github.com/spec/v1 but is not a pointer";
     assert!(
-        !gitsvnsync_core::lfs::is_lfs_pointer(fake),
+        !reposync_core::lfs::is_lfs_pointer(fake),
         "text mentioning LFS URL but not starting with the magic prefix must not be detected"
     );
 }
@@ -2473,11 +2473,11 @@ fn test_lfs_pointer_detection_precision() {
 ///   - The method returns Ok (skip, not error) reflecting safe-skip behavior.
 #[tokio::test]
 async fn test_replay_path_lfs_pointer_skipped_not_committed() {
-    use gitsvnsync_core::db::queries::AuditLogEntry;
-    use gitsvnsync_core::git::github::{
+    use reposync_core::db::queries::AuditLogEntry;
+    use reposync_core::git::github::{
         GitHubCommit, GitHubCommitDetail, GitHubGitActor,
     };
-    use gitsvnsync_personal::git_to_svn::GitToSvnSync;
+    use reposync_personal::git_to_svn::GitToSvnSync;
 
     if !svn_available() {
         eprintln!("SKIPPED: svn/svnadmin not found in PATH");
@@ -2552,7 +2552,7 @@ async fn test_replay_path_lfs_pointer_skipped_not_committed() {
 
     let svn_client = SvnClient::new(&svn_url, "test", "test");
     let github_client =
-        gitsvnsync_core::git::github::GitHubClient::new("https://localhost:0/unused", "unused", gitsvnsync_core::config::GitProvider::default());
+        reposync_core::git::github::GitHubClient::new("https://localhost:0/unused", "unused");
 
     let sync = GitToSvnSync::new(
         svn_client,
@@ -2627,10 +2627,10 @@ async fn test_replay_path_lfs_pointer_skipped_not_committed() {
 /// Guards against false-positive skipping.
 #[tokio::test]
 async fn test_replay_path_normal_content_written_to_svn() {
-    use gitsvnsync_core::git::github::{
+    use reposync_core::git::github::{
         GitHubCommit, GitHubCommitDetail, GitHubGitActor,
     };
-    use gitsvnsync_personal::git_to_svn::GitToSvnSync;
+    use reposync_personal::git_to_svn::GitToSvnSync;
 
     if !svn_available() {
         eprintln!("SKIPPED: svn/svnadmin not found in PATH");
@@ -2700,7 +2700,7 @@ async fn test_replay_path_normal_content_written_to_svn() {
 
     let svn_client = SvnClient::new(&svn_url, "test", "test");
     let github_client =
-        gitsvnsync_core::git::github::GitHubClient::new("https://localhost:0/unused", "unused", gitsvnsync_core::config::GitProvider::default());
+        reposync_core::git::github::GitHubClient::new("https://localhost:0/unused", "unused");
 
     let sync = GitToSvnSync::new(
         svn_client,

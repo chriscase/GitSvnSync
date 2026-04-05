@@ -201,8 +201,8 @@ check "Large credentials stored" "YES" "$LARGE_CREDS"
 echo ""
 echo "=== 8. Watermark Integrity ==="
 
-SANDBOX_WM=$(sqlite3 /opt/reposync/gitsvnsync.db "SELECT last_svn_rev FROM repositories WHERE id = '$SANDBOX_ID'")
-LARGE_WM=$(sqlite3 /opt/reposync/gitsvnsync.db "SELECT last_svn_rev FROM repositories WHERE id = '$LARGE_ID'")
+SANDBOX_WM=$(sqlite3 /opt/reposync/reposync.db "SELECT last_svn_rev FROM repositories WHERE id = '$SANDBOX_ID'")
+LARGE_WM=$(sqlite3 /opt/reposync/reposync.db "SELECT last_svn_rev FROM repositories WHERE id = '$LARGE_ID'")
 check "Sandbox watermark > 0" "YES" "$([ "$SANDBOX_WM" -gt 0 ] 2>/dev/null && echo YES || echo NO)"
 check "Large watermark > 0" "YES" "$([ "$LARGE_WM" -gt 0 ] 2>/dev/null && echo YES || echo NO)"
 echo "  Sandbox: r$SANDBOX_WM, Large: r$LARGE_WM"
@@ -246,14 +246,14 @@ echo "  Alice: $ALICE_COMMITS, Bob: $BOB_COMMITS commits"
 echo ""
 echo "=== 11. Scheduler ==="
 
-SCHED_SANDBOX=$(grep "per-repo sync cycle completed.*Sandbox" /tmp/gitsvnsync.log | wc -l)
-SCHED_LARGE=$(grep "per-repo sync cycle completed.*Large" /tmp/gitsvnsync.log | wc -l)
+SCHED_SANDBOX=$(grep "per-repo sync cycle completed.*Sandbox" /tmp/reposync.log | wc -l)
+SCHED_LARGE=$(grep "per-repo sync cycle completed.*Large" /tmp/reposync.log | wc -l)
 check "Scheduler ran Sandbox cycles" "YES" "$([ "$SCHED_SANDBOX" -gt 0 ] && echo YES || echo NO)"
 check "Scheduler ran Large cycles" "YES" "$([ "$SCHED_LARGE" -gt 0 ] && echo YES || echo NO)"
 echo "  Sandbox cycles: $SCHED_SANDBOX, Large cycles: $SCHED_LARGE"
 
 # No global engine errors (should be disabled)
-GLOBAL_ERRORS=$(grep "sync cycle failed.*cycle=" /tmp/gitsvnsync.log | grep -v "per-repo" | wc -l)
+GLOBAL_ERRORS=$(grep "sync cycle failed.*cycle=" /tmp/reposync.log | grep -v "per-repo" | wc -l)
 check "No global engine errors" "0" "$GLOBAL_ERRORS"
 
 # ==========================================

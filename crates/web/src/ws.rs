@@ -3,21 +3,27 @@
 //! Clients connect to `/ws` and receive JSON messages whenever the sync state
 //! changes, a new conflict is detected, or a webhook is received.
 //!
-//! Authentication is performed via the first message: the client must send
-//! `{"type":"auth","token":"<session_token>"}` within 5 seconds of connecting.
+//! Authentication is enforced when an admin password is configured: pass the
+//! session token as a `token` query parameter (`/ws?token=<session_token>`).
 
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{State, WebSocketUpgrade};
+use axum::extract::{Query, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use chrono::Utc;
+use serde::Deserialize;
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
 use crate::AppState;
+
+#[derive(Deserialize)]
+struct WsQuery {
+    token: Option<String>,
+}
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new().route("/ws", get(ws_handler))
@@ -26,92 +32,45 @@ pub fn routes() -> Router<Arc<AppState>> {
 async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    // Accept the upgrade unconditionally; auth happens via first message.
-    let rx = state.ws_broadcast.subscribe();
-    ws.on_upgrade(move |socket| handle_socket(socket, rx, state))
-}
+    Query(query): Query<WsQuery>,
+) -> Result<impl IntoResponse, axum::http::StatusCode> {
+    // Authenticate the WebSocket upgrade if auth is configured
+    if state.config.web.admin_password.is_some() {
+        let token = query.token.ok_or(axum::http::StatusCode::UNAUTHORIZED)?;
 
-/// Validate a session token against both DB and in-memory session stores.
-async fn validate_ws_token(state: &Arc<AppState>, token: &str) -> bool {
-    // Check DB sessions first
-    if let Ok(Some(_)) = state.db.get_session(token) {
-        return true;
-    }
-    // Fallback to in-memory sessions
-    let now = Utc::now();
-    let sessions = state.sessions.read().await;
-    sessions
-        .get(token)
-        .is_some_and(|expires_at| *expires_at > now)
-}
+        let now = Utc::now();
+        let sessions = state.sessions.read().await;
+        let valid = sessions
+            .get(token.as_str())
+            .is_some_and(|expires_at| *expires_at > now);
 
-async fn handle_socket(
-    mut socket: WebSocket,
-    mut rx: broadcast::Receiver<String>,
-    state: Arc<AppState>,
-) {
-    debug!("WebSocket client connected, awaiting auth");
-
-    // Check if auth is required (admin password or users exist)
-    let needs_auth = state.config.web.admin_password.is_some()
-        || state.db.count_users().unwrap_or(0) > 0;
-
-    if needs_auth {
-        // Wait up to 5 seconds for the first message to contain auth token
-        let auth_timeout = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            socket.recv(),
-        )
-        .await;
-
-        let authenticated = match auth_timeout {
-            Ok(Some(Ok(Message::Text(text)))) => {
-                // Parse {"type":"auth","token":"..."}
-                if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
-                    if msg.get("type").and_then(|t| t.as_str()) == Some("auth") {
-                        if let Some(token) = msg.get("token").and_then(|t| t.as_str()) {
-                            validate_ws_token(&state, token).await
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            }
-            _ => false,
-        };
-
-        if !authenticated {
-            let err = serde_json::json!({
-                "type": "error",
-                "message": "authentication failed",
-            });
-            let _ = socket.send(Message::Text(err.to_string())).await;
-            let _ = socket.send(Message::Close(None)).await;
-            debug!("WebSocket auth failed, closing connection");
-            return;
+        if !valid {
+            return Err(axum::http::StatusCode::UNAUTHORIZED);
         }
     }
+
+    let rx = state.ws_broadcast.subscribe();
+    Ok(ws.on_upgrade(move |socket| handle_socket(socket, rx)))
+}
+
+async fn handle_socket(mut socket: WebSocket, mut rx: broadcast::Receiver<String>) {
+    debug!("WebSocket client connected");
 
     // Send a welcome message
     let welcome = serde_json::json!({
         "type": "connected",
-        "message": "GitSvnSync live updates",
+        "message": "RepoSync live updates",
     });
     if let Err(e) = socket.send(Message::Text(welcome.to_string())).await {
         warn!("failed to send welcome message: {}", e);
         return;
     }
 
-    debug!("WebSocket client authenticated and connected");
-
     // Forward broadcast messages to the WebSocket client.
+    // If the client sends a close frame or the broadcast channel is closed, we exit.
     loop {
         tokio::select! {
+            // Receive broadcast messages and forward to client
             result = rx.recv() => {
                 match result {
                     Ok(msg) => {
@@ -122,6 +81,7 @@ async fn handle_socket(
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!("WebSocket client lagged by {} messages", n);
+                        // Send a lag notification
                         let lag_msg = serde_json::json!({
                             "type": "warning",
                             "message": format!("lagged by {} messages", n),
@@ -134,6 +94,7 @@ async fn handle_socket(
                     }
                 }
             }
+            // Listen for incoming messages from the client (mainly close frames)
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Close(_))) | None => {
@@ -146,7 +107,9 @@ async fn handle_socket(
                             break;
                         }
                     }
-                    Some(Ok(_)) => {}
+                    Some(Ok(_)) => {
+                        // Ignore other messages from the client
+                    }
                     Some(Err(e)) => {
                         debug!("WebSocket receive error: {}", e);
                         break;

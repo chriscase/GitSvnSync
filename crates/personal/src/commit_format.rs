@@ -1,9 +1,9 @@
 //! Commit message formatting and echo suppression for personal branch mode.
 
-use gitsvnsync_core::personal_config::CommitFormatConfig;
+use reposync_core::personal_config::CommitFormatConfig;
 
 /// The sync marker embedded in commit messages for echo suppression.
-pub const SYNC_MARKER: &str = "[gitsvnsync]";
+pub const SYNC_MARKER: &str = "[reposync]";
 
 /// Formats commit messages for both sync directions using configurable templates.
 pub struct CommitFormatter {
@@ -120,7 +120,7 @@ mod tests {
         assert!(result.contains("Fix bug in parser"));
         assert!(result.contains("SVN-Revision: r42"));
         assert!(result.contains("SVN-Author: alice"));
-        assert!(result.contains("[gitsvnsync]"));
+        assert!(result.contains("[reposync]"));
     }
 
     #[test]
@@ -132,14 +132,14 @@ mod tests {
         assert!(result.contains("Git-SHA: abc123def"));
         assert!(result.contains("PR-Number: #42"));
         assert!(result.contains("PR-Branch: feature/search"));
-        assert!(result.contains("[gitsvnsync]"));
+        assert!(result.contains("[reposync]"));
     }
 
     #[test]
     fn test_is_sync_marker() {
-        assert!(CommitFormatter::is_sync_marker("Some commit [gitsvnsync]"));
+        assert!(CommitFormatter::is_sync_marker("Some commit [reposync]"));
         assert!(CommitFormatter::is_sync_marker(
-            "Fix bug\n\nSync-Marker: [gitsvnsync]"
+            "Fix bug\n\nSync-Marker: [reposync]"
         ));
         assert!(!CommitFormatter::is_sync_marker("Normal commit message"));
     }
@@ -172,7 +172,7 @@ mod tests {
     fn test_custom_template() {
         let config = CommitFormatConfig {
             svn_to_git: "{original_message} (from SVN r{svn_rev})".into(),
-            git_to_svn: "{original_message} [gitsvnsync] from {git_sha}".into(),
+            git_to_svn: "{original_message} [reposync] from {git_sha}".into(),
         };
         let fmt = CommitFormatter::new(&config);
         let result = fmt.format_svn_to_git("Hello", 10, "bob", "2025-01-01");

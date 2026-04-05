@@ -10,14 +10,14 @@ SANDBOX_SHA=$(cd /opt/reposync/repos/$SANDBOX_ID/git-repo && git rev-parse HEAD)
 EDM_SHA=$(cd /opt/reposync/repos/$EDM_ID/git-repo && git rev-parse HEAD)
 LARGE_SHA=$(cd /opt/reposync/repos/$LARGE_ID/git-repo && git rev-parse HEAD)
 
-sqlite3 /opt/reposync/gitsvnsync.db << SQL
+sqlite3 /opt/reposync/reposync.db << SQL
 UPDATE repositories SET last_svn_rev = $SANDBOX_REV, last_git_sha = '$SANDBOX_SHA' WHERE id = '$SANDBOX_ID';
 UPDATE repositories SET last_svn_rev = 3078, last_git_sha = '$EDM_SHA' WHERE id = '$EDM_ID';
 UPDATE repositories SET last_svn_rev = $LARGE_REV, last_git_sha = '$LARGE_SHA' WHERE id = '$LARGE_ID';
 SQL
 
 echo "Watermarks set:"
-sqlite3 /opt/reposync/gitsvnsync.db "SELECT name, last_svn_rev FROM repositories"
+sqlite3 /opt/reposync/reposync.db "SELECT name, last_svn_rev FROM repositories"
 echo ""
 echo "Running E2E tests..."
 bash /opt/reposync/comprehensive-e2e.sh

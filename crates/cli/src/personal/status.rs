@@ -2,8 +2,8 @@
 
 use anyhow::Result;
 
-use gitsvnsync_core::db::Database;
-use gitsvnsync_core::personal_config::PersonalConfig;
+use reposync_core::db::Database;
+use reposync_core::personal_config::PersonalConfig;
 
 use super::style;
 
@@ -13,12 +13,12 @@ pub fn run_status(config: &PersonalConfig) -> Result<()> {
 
     // Header
     println!();
-    println!("{}", style::header("GitSvnSync Personal Branch"));
+    println!("{}", style::header("RepoSync Personal Branch"));
     println!("{}", "═".repeat(26));
     println!();
 
     // Daemon status
-    let daemon_status = match gitsvnsync_personal::daemon::is_running(data_dir) {
+    let daemon_status = match reposync_personal::daemon::is_running(data_dir) {
         Ok(Some(pid)) => format!("{} (PID {})", style::status_running(), pid),
         _ => style::status_stopped(),
     };
@@ -49,7 +49,7 @@ pub fn run_status(config: &PersonalConfig) -> Result<()> {
 
         // Recent activity from audit log
         println!();
-        let recent = db.list_audit_log(10, 0).unwrap_or_default();
+        let recent = db.list_audit_log(10).unwrap_or_default();
         if !recent.is_empty() {
             println!("  {}", style::header("Recent Activity"));
             println!("  {}", "─".repeat(40));
@@ -69,7 +69,7 @@ pub fn run_status(config: &PersonalConfig) -> Result<()> {
     } else {
         println!(
             "  {}",
-            style::dim("Database not initialized. Run 'gitsvnsync personal import' first.")
+            style::dim("Database not initialized. Run 'reposync personal import' first.")
         );
     }
 

@@ -1,6 +1,6 @@
 # GHE Live Validation Guide
 
-Real end-to-end bidirectional validation of GitSvnSync against a live GitHub Enterprise instance and a live SVN repository. Unlike `controlled-validation.sh` (which uses local `file://` SVN repos), this script exercises the **actual network path** your daemon will use in production.
+Real end-to-end bidirectional validation of RepoSync against a live GitHub Enterprise instance and a live SVN repository. Unlike `controlled-validation.sh` (which uses local `file://` SVN repos), this script exercises the **actual network path** your daemon will use in production.
 
 ## Prerequisites
 
@@ -24,9 +24,9 @@ All tools must be on `$PATH`.
 | `GHE_API_URL` | GitHub Enterprise API base URL | `https://github.example.com/api/v3` |
 | `GHE_TOKEN` | GitHub PAT with `repo` scope | `ghp_abc123...` |
 | `GHE_OWNER` | Repository owner or organization | `myorg` |
-| `GHE_REPO` | Repository name (created if missing) | `gitsvnsync-canary` |
+| `GHE_REPO` | Repository name (created if missing) | `reposync-canary` |
 | `SVN_URL` | SVN repository URL (must be writable) | `https://svn.example.com/repos/trunk` |
-| `SVN_USERNAME` | SVN username | `svc-gitsvnsync` |
+| `SVN_USERNAME` | SVN username | `svc-reposync` |
 | `SVN_PASSWORD` | SVN password | (secret) |
 
 ### Optional
@@ -34,7 +34,7 @@ All tools must be on `$PATH`.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `GHE_WEB_URL` | GitHub Enterprise web base URL | Derived from `GHE_API_URL` |
-| `GITSVNSYNC_CONFIG` | Path to gitsvnsync personal config | Auto-generated |
+| `REPOSYNC_CONFIG` | Path to reposync personal config | Auto-generated |
 
 ## Quick Start
 
@@ -46,9 +46,9 @@ scripts/ghe-live-validation.sh --dry-run
 export GHE_API_URL="https://github.example.com/api/v3"
 export GHE_TOKEN="ghp_your_token_here"
 export GHE_OWNER="myorg"
-export GHE_REPO="gitsvnsync-canary"
+export GHE_REPO="reposync-canary"
 export SVN_URL="https://svn.example.com/repos/trunk"
-export SVN_USERNAME="svc-gitsvnsync"
+export SVN_USERNAME="svc-reposync"
 export SVN_PASSWORD="your_svn_password"
 
 # 3. Single-cycle live run (recommended first time)
@@ -78,24 +78,33 @@ Each cycle executes these scenarios in order:
 | S2 | SVN modify file | SVN→ | Modify an existing file, verify updated content |
 | S3 | SVN delete file | SVN→ | Delete a file via `svn rm`, verify it's gone |
 | S4 | SVN nested dirs | SVN→ | Create deeply nested directory structure, verify leaf file |
-| S4b | **SVN→Git sync** | SVN→Git | **Invoke `gitsvnsync-personal sync`, pull Git repo (with auth), verify SVN files appear in Git. Fails on pull auth error.** |
+| S4b | **SVN→Git sync** | SVN→Git | **Invoke `reposync-personal sync`, pull Git repo (with auth), verify SVN files appear in Git. Fails on pull auth error.** |
 | S5 | Git branch + commit | →Git | Create feature branch via refs API, commit file on branch |
 | S6 | Open + merge PR | →Git | Open PR from feature branch, squash-merge via API |
-| S7 | **Git→SVN sync** | Git→SVN | **Invoke `gitsvnsync-personal sync`, verify (a) PR file content in SVN via `svn cat`, (b) SVN log contains `Git-Commit:` and `PR:` metadata trailers** |
-| S8 | Echo marker | SVN→ | Commit with `[gitsvnsync]` marker, verify in `svn log --xml` |
+| S7 | **Git→SVN sync** | Git→SVN | **Invoke `reposync-personal sync`, verify (a) PR file content in SVN via `svn cat`, (b) SVN log `Git-Commit:` matches exact merge SHA from S6, (c) SVN log `PR:` matches exact PR number from S6** |
+| S8 | Echo marker | SVN→ | Commit with `[reposync]` marker, verify in `svn log --xml` |
 | S9 | API rate limit | →Git | Check `/rate_limit` endpoint, verify >100 requests remaining |
-| S10 | Log-probe | Local | Spawn `gitsvnsync-personal log-probe`, verify `personal.log` written |
+| S10 | Log-probe | Local | Spawn `reposync-personal log-probe`, verify `personal.log` written |
 
-> **S4b and S7 are the critical cross-system sync scenarios.** They invoke the actual GitSvnSync
-> sync engine (`gitsvnsync-personal sync`) and verify that changes made on one side arrive on the
+> **S4b and S7 are the critical cross-system sync scenarios.** They invoke the actual RepoSync
+> sync engine (`reposync-personal sync`) and verify that changes made on one side arrive on the
 > other side.
 >
-> **S5→S6→S7 form a PR-based Git→SVN proof.** GitSvnSync only replays *merged PR* commits from
+> **S5→S6→S7 form a PR-based Git→SVN proof.** RepoSync only replays *merged PR* commits from
 > Git to SVN (direct pushes to main are not synced). These three scenarios exercise the real
 > production workflow: create a feature branch, commit via the Contents API, open and squash-merge
-> a PR, then run sync and verify the file content lands in SVN. S7 fails if (a) no qualifying PR
-> replay occurred, (b) file content does not match, or (c) the replayed SVN commit is missing
-> `Git-Commit:` or `PR:` metadata trailers.
+> a PR, then run sync and verify the file content lands in SVN.
+>
+> **S7 exact provenance matching:** S7 requires an **exact** match between the replayed SVN
+> commit metadata and the values recorded in S6. Specifically, the `Git-Commit:` trailer must
+> contain the exact merge SHA from `s6-merge-sha.txt`, and the `PR:` trailer must reference the
+> exact PR number from `s6-pr-number.txt`. A generic "some trailer exists" is insufficient —
+> only an exact match to *this cycle's* PR proves the replay actually occurred. S7 fails if
+> (a) file content doesn't match, (b) expected SHA or PR# is missing from S6 artifacts, or
+> (c) the trailer values don't exactly match.
+>
+> **Provenance self-test:** Run `scripts/test-s7-provenance.sh` offline to verify the metadata
+> matching logic. This test is also executed in CI (both `ci.yml` and `e2e.yml`).
 >
 > Sync engine logs are captured in `cycle-NNN/sync-engine-data/`.
 
@@ -109,7 +118,7 @@ Options:
   --cycles N         Number of validation cycles (default: 1)
   --interval N       Seconds between cycles (default: 5)
   --strict           Fail immediately on any scenario failure
-  --config PATH      Path to gitsvnsync personal config
+  --config PATH      Path to reposync personal config
   --artifacts-dir D  Override artifact output directory
   --help             Show this help
 ```
@@ -147,7 +156,7 @@ artifacts/ghe-live-validation/<UTC_TIMESTAMP>/
     ├── s10-probe-stdout.log
     ├── s10-probe-stderr.log
     ├── daemon.log          # Captured personal.log
-    └── sync-engine-data/   # GitSvnSync data dir (DB, logs)
+    └── sync-engine-data/   # RepoSync data dir (DB, logs)
 ```
 
 ### events.ndjson Format
@@ -197,12 +206,12 @@ If issues are found post-enablement:
 
 1. **Stop the daemon immediately:**
    ```bash
-   gitsvnsync-personal --config <path> stop
+   reposync-personal --config <path> stop
    ```
 
 2. **Verify it stopped:**
    ```bash
-   gitsvnsync-personal --config <path> status
+   reposync-personal --config <path> status
    # Should show "○ Not running"
    ```
 
@@ -225,8 +234,23 @@ If issues are found post-enablement:
 
 6. **Restart with corrected config:**
    ```bash
-   gitsvnsync-personal --config <path> start --foreground
+   reposync-personal --config <path> start --foreground
    ```
+
+## CI Integration
+
+Both `ci.yml` and `e2e.yml` workflows run:
+
+1. **S7 provenance self-test** (`scripts/test-s7-provenance.sh`) — verifies the exact-match
+   metadata logic offline. Fails the PR if any of the 8 test cases regress.
+
+2. **Large-file & LFS validation** (`scripts/large-file-validation.sh --quick`) — exercises
+   file-policy enforcement and LFS utilities. CI installs `git-lfs` so the LFS preflight
+   scenario is **executed, not skipped**. The workflow fails if LFS preflight is skipped
+   (indicating `git-lfs` was not installed).
+
+3. **GHE live validation dry-run** (`scripts/ghe-live-validation.sh --dry-run`) — preflight
+   tool verification (no network credentials needed).
 
 ## Relationship to Other Validation Scripts
 
@@ -235,5 +259,7 @@ If issues are found post-enablement:
 | `controlled-validation.sh` | Local only | No | CI gating, pre-merge checks |
 | `enterprise-soak.sh` | Local only | No | Repeated-cycle stability testing |
 | `ghe-live-validation.sh` | Live GHE+SVN | **Yes** | Pre-production readiness gate |
+| `test-s7-provenance.sh` | Offline | No | S7 metadata matching regression test |
+| `large-file-validation.sh` | Local only | No | File-policy + LFS validation |
 
 Run them in order: controlled → soak → GHE live.

@@ -4,7 +4,7 @@
 alice = { name = "Alice Johnson", email = "alice@testcorp.com", github = "alicej" }
 bob = { name = "Bob Williams", email = "bob@testcorp.com", github = "bobw" }
 charlie = { name = "Charlie Brown", email = "charlie@testcorp.com", github = "charlieb" }
-sync-service = { name = "GitSvnSync Bot", email = "sync@testcorp.com", github = "gitsvnsync-bot" }
+sync-service = { name = "RepoSync Bot", email = "sync@testcorp.com", github = "reposync-bot" }
 
 [defaults]
 email_domain = "testcorp.com"

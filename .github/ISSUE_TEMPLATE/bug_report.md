@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug in GitSvnSync
+about: Report a bug in RepoSync
 title: "[Bug] "
 labels: bug
 assignees: ''
@@ -21,7 +21,7 @@ What you expected to happen.
 What actually happened.
 
 ## Environment
-- GitSvnSync version:
+- RepoSync version:
 - OS:
 - SVN version:
 - Git version:
@@ -29,7 +29,7 @@ What actually happened.
 
 ## Logs
 ```
-Paste relevant log output here (from journalctl -u gitsvnsync or docker logs)
+Paste relevant log output here (from journalctl -u reposync or docker logs)
 ```
 
 ## Configuration
