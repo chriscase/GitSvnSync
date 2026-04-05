@@ -51,6 +51,9 @@ export default function Layout() {
                 <NavLink to="/audit" className={navLinkClass}>
                   Audit Log
                 </NavLink>
+                <NavLink to="/docs" className={navLinkClass}>
+                  Docs
+                </NavLink>
               </div>
             </div>
             <div className="flex items-center space-x-4">

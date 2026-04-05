@@ -6,6 +6,7 @@ import ConflictDetail from './pages/ConflictDetail';
 import Config from './pages/Config';
 import AuditLog from './pages/AuditLog';
 import Login from './pages/Login';
+import Documentation from './pages/Documentation';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem('session_token');
@@ -32,6 +33,7 @@ export default function App() {
         <Route path="conflicts/:id" element={<ConflictDetail />} />
         <Route path="config" element={<Config />} />
         <Route path="audit" element={<AuditLog />} />
+        <Route path="docs" element={<Documentation />} />
       </Route>
     </Routes>
   );
