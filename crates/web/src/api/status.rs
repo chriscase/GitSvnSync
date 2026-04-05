@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 
@@ -43,9 +43,15 @@ async fn health_check() -> Json<HealthResponse> {
     })
 }
 
+#[derive(Deserialize)]
+struct StatusQuery {
+    repo_id: Option<String>,
+}
+
 async fn get_status(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
+    Query(query): Query<StatusQuery>,
 ) -> Result<Json<StatusResponse>, AppError> {
     crate::api::auth::validate_session(
         &state,
@@ -58,11 +64,35 @@ async fn get_status(
         .get_status()
         .map_err(|e| AppError::Internal(format!("failed to get sync status: {}", e)))?;
 
+    // When a repo_id is specified, override the global watermarks with
+    // per-repo values stored in kv_state by the import/sync pipeline.
+    let (svn_rev, git_hash) = if let Some(ref rid) = query.repo_id {
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Internal("db lock poisoned".into()))?;
+        let repo_svn = db
+            .get_state(&format!("last_svn_rev_{}", rid))
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<i64>().ok());
+        let repo_git = db
+            .get_state(&format!("last_git_sha_{}", rid))
+            .ok()
+            .flatten();
+        (
+            repo_svn.or(status.last_svn_revision),
+            repo_git.or(status.last_git_hash),
+        )
+    } else {
+        (status.last_svn_revision, status.last_git_hash)
+    };
+
     Ok(Json(StatusResponse {
         state: status.state.to_string(),
         last_sync_at: status.last_sync_at.map(|t| t.to_rfc3339()),
-        last_svn_revision: status.last_svn_revision,
-        last_git_hash: status.last_git_hash,
+        last_svn_revision: svn_rev,
+        last_git_hash: git_hash,
         total_syncs: status.total_syncs,
         total_conflicts: status.total_conflicts,
         active_conflicts: status.active_conflicts,

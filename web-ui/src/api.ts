@@ -72,7 +72,8 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  getStatus: () => fetchJson<SyncStatus>('/status'),
+  getStatus: (repoId?: string) =>
+    fetchJson<SyncStatus>(repoId ? `/status?repo_id=${repoId}` : '/status'),
 
   getHealth: () => fetchJson<{ ok: boolean }>('/status/health'),
 
