@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use git2::{
-    BranchType, Cred, FetchOptions, IndexAddOption, Oid, PushOptions, RemoteCallbacks, Repository,
+    BranchType, Cred, FetchOptions, IndexAddOption, Oid, RemoteCallbacks, Repository,
     Signature,
 };
 use serde::{Deserialize, Serialize};

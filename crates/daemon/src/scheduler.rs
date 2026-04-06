@@ -25,6 +25,7 @@ use reposync_core::svn::SvnClient;
 use reposync_core::sync_engine::SyncEngine;
 
 /// Tracks aggregate statistics across sync cycles.
+#[allow(dead_code)]
 pub struct SchedulerStats {
     pub total_cycles: AtomicU64,
     pub total_conflicts: AtomicU64,
@@ -48,6 +49,7 @@ impl SchedulerStats {
 /// Runs sync cycles on a timer and also listens for webhook-triggered
 /// immediate sync requests. The sync engine's own lock prevents concurrent
 /// cycles, so the scheduler simply skips if the engine reports already running.
+#[allow(dead_code)]
 pub struct Scheduler {
     /// Global sync engine (TOML-configured, backward compat).
     sync_engine: Arc<SyncEngine>,
@@ -149,6 +151,7 @@ impl Scheduler {
 
     /// Attempt to run a sync cycle for the global engine.
     /// If the engine is already running or an import is in progress, skip.
+    #[allow(dead_code)]
     async fn maybe_run_cycle(&self, trigger: &str) {
         // Skip sync cycles while an import is active to avoid concurrent
         // git repo access ("file changed before we could read it" errors).

@@ -13,6 +13,7 @@
 //!   9. Concurrent requests while web DB mutex is held.
 //!  10. No file-descriptor or memory leaks after 1 000 requests.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -34,10 +35,12 @@ use reposync_web::AppState;
 // Test helpers
 // ---------------------------------------------------------------------------
 
+/// A fixed test token pre-seeded into every test server's session map.
+const TEST_TOKEN: &str = "test-session-token-for-freeze-tests";
+
 /// Build a minimal `AppConfig` suitable for testing.
 ///
-/// `WebConfig` defaults to `admin_password: None`, so `validate_session`
-/// bypasses auth when the DB contains no users.
+/// Sets an admin password so auth doesn't require setup wizard completion.
 fn minimal_config(data_dir: &Path) -> AppConfig {
     let toml_str = format!(
         r#"
@@ -55,7 +58,11 @@ token_env = ""
 "#,
         data_dir.display().to_string().replace('\\', "/")
     );
-    toml::from_str(&toml_str).expect("failed to parse minimal test config")
+    let mut config: AppConfig =
+        toml::from_str(&toml_str).expect("failed to parse minimal test config");
+    // admin_password is #[serde(skip)] so we must set it directly.
+    config.web.admin_password = Some("test-admin-pass".to_string());
+    config
 }
 
 /// Spin up an Axum server on a random port and return everything needed to
@@ -114,6 +121,8 @@ async fn build_test_server() -> (
         import_progress: Arc::new(tokio::sync::RwLock::new(ImportProgress::default())),
         config_path: tmp.path().join("config.toml"),
         prev_net_snapshot: std::sync::Mutex::new(None),
+        repo_import_progress: tokio::sync::RwLock::new(HashMap::new()),
+        login_attempts: std::sync::Mutex::new(HashMap::new()),
     });
 
     let app = Router::new()
@@ -127,13 +136,35 @@ async fn build_test_server() -> (
     let addr = listener.local_addr().expect("local_addr");
 
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app).await.ok();
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.ok();
     });
+
+    // Pre-seed a test session so authenticated endpoints work.
+    {
+        let mut sessions = state.sessions.write().await;
+        sessions.insert(
+            TEST_TOKEN.to_string(),
+            chrono::Utc::now() + chrono::Duration::hours(24),
+        );
+    }
 
     // Give the server a moment to start accepting connections.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     (addr, state, handle, tmp)
+}
+
+/// Build a `reqwest::Client` with the test auth token as a default header.
+fn authed_client() -> reqwest::Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        reqwest::header::HeaderValue::from_str(&format!("Bearer {}", TEST_TOKEN)).unwrap(),
+    );
+    reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .unwrap()
 }
 
 /// Like `build_test_server` but merges more route modules (repos, audit)
@@ -187,6 +218,8 @@ async fn build_test_server_full() -> (
         import_progress: Arc::new(tokio::sync::RwLock::new(ImportProgress::default())),
         config_path: tmp.path().join("config.toml"),
         prev_net_snapshot: std::sync::Mutex::new(None),
+        repo_import_progress: tokio::sync::RwLock::new(HashMap::new()),
+        login_attempts: std::sync::Mutex::new(HashMap::new()),
     });
 
     let app = Router::new()
@@ -203,8 +236,17 @@ async fn build_test_server_full() -> (
     let addr = listener.local_addr().expect("local_addr");
 
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app).await.ok();
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.ok();
     });
+
+    // Pre-seed a test session so authenticated endpoints work.
+    {
+        let mut sessions = state.sessions.write().await;
+        sessions.insert(
+            TEST_TOKEN.to_string(),
+            chrono::Utc::now() + chrono::Duration::hours(24),
+        );
+    }
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -299,6 +341,8 @@ async fn build_test_server_with_ldap(
         import_progress: Arc::new(tokio::sync::RwLock::new(ImportProgress::default())),
         config_path: tmp.path().join("config.toml"),
         prev_net_snapshot: std::sync::Mutex::new(None),
+        repo_import_progress: tokio::sync::RwLock::new(HashMap::new()),
+        login_attempts: std::sync::Mutex::new(HashMap::new()),
     });
 
     let app = Router::new()
@@ -312,8 +356,17 @@ async fn build_test_server_with_ldap(
     let addr = listener.local_addr().expect("local_addr");
 
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app).await.ok();
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.ok();
     });
+
+    // Pre-seed a test session so authenticated endpoints work.
+    {
+        let mut sessions = state.sessions.write().await;
+        sessions.insert(
+            TEST_TOKEN.to_string(),
+            chrono::Utc::now() + chrono::Duration::hours(24),
+        );
+    }
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -340,10 +393,7 @@ async fn test_web_requests_not_blocked_by_sync_engine_db() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Fire 20 concurrent requests to health + status endpoints.
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
-        .build()
-        .unwrap();
+    let client = authed_client();
 
     let mut handles = Vec::new();
     for i in 0..20 {
@@ -583,8 +633,14 @@ async fn test_sustained_load_under_sync_cycles() {
                         max_lat: Arc<AtomicU64>,
                         total: Arc<AtomicU64>,
                         failed: Arc<AtomicU64>| {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {}", TEST_TOKEN)).unwrap(),
+        );
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
+            .default_headers(headers)
             .build()
             .unwrap();
         let start = start;
@@ -922,10 +978,7 @@ async fn test_spawn_blocking_pool_pressure_with_server() {
     );
 
     // 2. Health check (pure async) must respond within 200 ms.
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-        .unwrap();
+    let client = authed_client();
 
     let start = Instant::now();
     let resp = tokio::time::timeout(
@@ -999,10 +1052,7 @@ async fn test_concurrent_auth_and_db_access() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Fire 20 concurrent requests to /api/status (requires validate_session → DB).
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .unwrap();
+    let client = authed_client();
 
     let mut handles = Vec::new();
     for i in 0..20 {
@@ -1072,10 +1122,7 @@ async fn test_no_resource_leak_after_many_requests() {
     let (addr, _state, _server, _tmp) = build_test_server_full().await;
     let base_url = format!("http://{}", addr);
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .unwrap();
+    let client = authed_client();
 
     // Warm up: make a few requests so any lazy initialization is done.
     for _ in 0..10 {
@@ -1162,10 +1209,7 @@ async fn test_commit_map_no_repo_id_does_not_deadlock() {
     let (addr, _state, _server, _tmp) = build_test_server_full().await;
     let base_url = format!("http://{}", addr);
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
-        .build()
-        .unwrap();
+    let client = authed_client();
 
     // Run 10 rounds of 6 concurrent requests matching the exact frontend
     // pattern. Before the fix, the FIRST round deadlocked the server.

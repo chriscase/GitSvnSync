@@ -14,7 +14,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 use tempfile::TempDir;
-use tokio::sync::Mutex;
+use std::sync::Mutex;
 
 use reposync_core::db::Database;
 use reposync_core::git::GitClient;
@@ -271,6 +271,7 @@ fn make_test_config(svn_url: &str, data_dir: &Path) -> PersonalConfig {
         },
         commit_format: CommitFormatConfig::default(),
         options: PersonalOptionsConfig::default(),
+        identity: None,
     }
 }
 
@@ -2548,6 +2549,7 @@ async fn test_replay_path_lfs_pointer_skipped_not_committed() {
         },
         commit_format: CommitFormatConfig::default(),
         options: PersonalOptionsConfig::default(),
+        identity: None,
     };
 
     let svn_client = SvnClient::new(&svn_url, "test", "test");
@@ -2696,6 +2698,7 @@ async fn test_replay_path_normal_content_written_to_svn() {
         },
         commit_format: CommitFormatConfig::default(),
         options: PersonalOptionsConfig::default(),
+        identity: None,
     };
 
     let svn_client = SvnClient::new(&svn_url, "test", "test");

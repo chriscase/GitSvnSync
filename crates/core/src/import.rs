@@ -935,7 +935,7 @@ pub async fn run_full_import(
                     break;
                 }
                 Ok(Err(e)) => {
-                    let msg = format!("[warn] Push attempt {}/{} failed: {}", attempt, max_retries, e);
+                    let _msg = format!("[warn] Push attempt {}/{} failed: {}", attempt, max_retries, e);
                 }
                 Err(e) => {
                     let msg = format!("[warn] Push attempt {}/{} failed (panic): {}", attempt, max_retries, e);
@@ -1035,6 +1035,7 @@ async fn push_log_line(
 /// Async git push that doesn't block the tokio runtime.
 /// Streams stderr output into the import progress log so users see real-time
 /// push progress (object counting, compression, upload, LFS transfers).
+#[allow(dead_code)]
 async fn async_git_push(
     repo_path: &std::path::Path,
     remote: &str,

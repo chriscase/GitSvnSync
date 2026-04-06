@@ -535,7 +535,7 @@ pub enum AppError {
 
 impl axum::response::IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
-        let (status, message) = match &self {
+        let (status, _message) = match &self {
             AppError::BadRequest(_) => (axum::http::StatusCode::BAD_REQUEST, String::new()),
             AppError::NotFound(_) => (axum::http::StatusCode::NOT_FOUND, String::new()),
             AppError::Unauthorized(_) => (axum::http::StatusCode::UNAUTHORIZED, String::new()),
