@@ -7,7 +7,7 @@ use git2::{
     Signature,
 };
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::errors::GitError;
 
@@ -54,21 +54,26 @@ impl GitClient {
     }
 
     /// Clone a remote repository to `path`.
+    ///
+    /// If a token is provided and the URL is HTTP(S), the token is embedded
+    /// directly in the URL (`x-access-token:<token>@host`) for maximum
+    /// compatibility with servers like Gitea that don't work well with
+    /// libgit2's credential callback.
     #[instrument(skip(token), fields(url = %url, path = %path.display()))]
     pub fn clone_repo(url: &str, path: &Path, token: Option<&str>) -> Result<Self, GitError> {
         info!("cloning git repository");
-        let mut callbacks = RemoteCallbacks::new();
-        if let Some(tok) = token {
-            let tok = tok.to_string();
-            callbacks.credentials(move |_url, _username, _allowed| {
-                Cred::userpass_plaintext("x-access-token", &tok)
-            });
-        }
-        let mut fetch_opts = FetchOptions::new();
-        fetch_opts.remote_callbacks(callbacks);
-        let mut builder = git2::build::RepoBuilder::new();
-        builder.fetch_options(fetch_opts);
-        let repo = builder.clone(url, path)?;
+        let clone_url = match token {
+            Some(tok) if url.starts_with("https://") => {
+                let rest = url.strip_prefix("https://").unwrap();
+                format!("https://x-access-token:{}@{}", tok, rest)
+            }
+            Some(tok) if url.starts_with("http://") => {
+                let rest = url.strip_prefix("http://").unwrap();
+                format!("http://x-access-token:{}@{}", tok, rest)
+            }
+            _ => url.to_string(),
+        };
+        let repo = Repository::clone(&clone_url, path)?;
         info!("clone completed");
         Ok(Self {
             repo,
@@ -83,9 +88,47 @@ impl GitClient {
         &self.repo
     }
 
-    /// Fetch from a named remote.
+    /// Ensure the origin remote URL contains embedded credentials for HTTP(S) remotes.
+    ///
+    /// libgit2's credential callback doesn't work reliably with all Git servers
+    /// (e.g. Gitea). Embedding `x-access-token:<token>` in the URL is the most
+    /// portable approach and mirrors what CI/CD systems do.
+    pub fn ensure_remote_credentials(
+        &self,
+        remote_name: &str,
+        token: Option<&str>,
+    ) -> Result<(), GitError> {
+        let Some(tok) = token else { return Ok(()) };
+        let remote = self.repo.find_remote(remote_name)?;
+        let Some(url) = remote.url() else {
+            return Ok(());
+        };
+        // Only modify http(s) URLs that don't already have credentials.
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Ok(());
+        }
+        if url.contains('@') {
+            // Already has credentials embedded — leave it alone.
+            return Ok(());
+        }
+        // Insert x-access-token:<tok>@ after the scheme.
+        let new_url = if let Some(rest) = url.strip_prefix("https://") {
+            format!("https://x-access-token:{}@{}", tok, rest)
+        } else if let Some(rest) = url.strip_prefix("http://") {
+            format!("http://x-access-token:{}@{}", tok, rest)
+        } else {
+            return Ok(());
+        };
+        info!("updating remote URL to embed credentials");
+        self.repo
+            .remote_set_url(remote_name, &new_url)?;
+        Ok(())
+    }
+
+    /// Fetch from a named remote with a 5-minute timeout.
     #[instrument(skip(self, token))]
     pub fn fetch(&self, remote_name: &str, token: Option<&str>) -> Result<(), GitError> {
+        const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
         info!(remote = remote_name, "fetching");
         let mut remote = self.repo.find_remote(remote_name)?;
         let mut callbacks = RemoteCallbacks::new();
@@ -95,9 +138,22 @@ impl GitClient {
                 Cred::userpass_plaintext("x-access-token", &tok)
             });
         }
+        // Abort the transfer if it exceeds the timeout.
+        let fetch_start = std::time::Instant::now();
+        let fetch_start_for_cb = fetch_start;
+        callbacks.transfer_progress(move |_stats| {
+            fetch_start_for_cb.elapsed() < FETCH_TIMEOUT
+        });
         let mut fetch_opts = FetchOptions::new();
         fetch_opts.remote_callbacks(callbacks);
-        remote.fetch(&[] as &[&str], Some(&mut fetch_opts), None)?;
+        remote.fetch(&[] as &[&str], Some(&mut fetch_opts), None)
+            .map_err(|e| {
+                if fetch_start.elapsed() >= FETCH_TIMEOUT {
+                    GitError::ApplyFailed(format!("git fetch timed out after {}s", FETCH_TIMEOUT.as_secs()))
+                } else {
+                    e.into()
+                }
+            })?;
         debug!("fetch completed");
         Ok(())
     }
@@ -159,43 +215,205 @@ impl GitClient {
         Ok(oid)
     }
 
-    /// Push a local branch to a remote.
-    #[instrument(skip(self, token))]
+    /// Stage all changes and create a commit using the `git` CLI.
+    ///
+    /// This is required when LFS-tracked files are present because `git2`
+    /// (libgit2) does not support Git LFS filters.  The CLI `git add` invokes
+    /// the LFS clean filter which replaces large files with pointer files,
+    /// whereas `git2::Index::add_all()` adds the raw file content as a blob.
+    ///
+    /// Returns the commit SHA on success.
+    #[instrument(skip(self, message))]
+    pub fn commit_via_cli(
+        &self,
+        message: &str,
+        author_name: &str,
+        author_email: &str,
+        committer_name: &str,
+        committer_email: &str,
+    ) -> Result<Oid, GitError> {
+        let repo_path = self.repo.workdir().unwrap_or_else(|| self.repo.path());
+
+        info!(
+            repo_path = %repo_path.display(),
+            "committing via git CLI (LFS-aware)"
+        );
+
+        // Stage all changes using git add, which invokes LFS clean filters.
+        let add_output = std::process::Command::new("git")
+            .args(["add", "--all"])
+            .current_dir(repo_path)
+            .output()
+            .map_err(|e| {
+                error!(error = %e, "failed to spawn git add");
+                GitError::IoError(e)
+            })?;
+
+        if !add_output.status.success() {
+            let stderr = String::from_utf8_lossy(&add_output.stderr);
+            error!(stderr = %stderr, "git add --all failed");
+            return Err(GitError::Git2Error(git2::Error::from_str(&format!(
+                "git add --all failed: {}",
+                stderr.trim()
+            ))));
+        }
+
+        // Check if there's anything to commit (git diff --cached --quiet).
+        let diff_output = std::process::Command::new("git")
+            .args(["diff", "--cached", "--quiet"])
+            .current_dir(repo_path)
+            .output()
+            .map_err(GitError::IoError)?;
+
+        if diff_output.status.success() {
+            // Exit code 0 means no staged changes — nothing to commit.
+            return Err(GitError::Git2Error(git2::Error::from_str(
+                "nothing to commit (working tree clean)",
+            )));
+        }
+
+        // Build the commit via git CLI with explicit author/committer.
+        let author_str = format!("{} <{}>", author_name, author_email);
+        let commit_output = std::process::Command::new("git")
+            .args(["commit", "-m", message, "--author", &author_str])
+            .current_dir(repo_path)
+            .env("GIT_COMMITTER_NAME", committer_name)
+            .env("GIT_COMMITTER_EMAIL", committer_email)
+            .output()
+            .map_err(|e| {
+                error!(error = %e, "failed to spawn git commit");
+                GitError::IoError(e)
+            })?;
+
+        if !commit_output.status.success() {
+            let stderr = String::from_utf8_lossy(&commit_output.stderr);
+            error!(stderr = %stderr, "git commit failed");
+            return Err(GitError::Git2Error(git2::Error::from_str(&format!(
+                "git commit failed: {}",
+                stderr.trim()
+            ))));
+        }
+
+        // Read the resulting commit SHA from rev-parse HEAD.
+        let rev_output = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(repo_path)
+            .output()
+            .map_err(GitError::IoError)?;
+
+        let sha_str = String::from_utf8_lossy(&rev_output.stdout).trim().to_string();
+        let oid = Oid::from_str(&sha_str).map_err(|e| {
+            error!(sha = %sha_str, error = %e, "failed to parse commit SHA");
+            e
+        })?;
+
+        // Reload the git2 index so subsequent operations see the new state.
+        // This is needed because we bypassed git2 for the commit.
+        if let Ok(mut index) = self.repo.index() {
+            let _ = index.read(false);
+        }
+
+        info!(sha = %oid, "created commit via CLI (LFS-aware)");
+        Ok(oid)
+    }
+
+    /// Push a local branch to a remote (with optional force).
+    #[instrument(skip(self))]
     pub fn push(
         &self,
         remote_name: &str,
         branch: &str,
-        token: Option<&str>,
+        _token: Option<&str>,
     ) -> Result<(), GitError> {
-        info!(remote = remote_name, branch, "pushing");
-        let mut remote = self.repo.find_remote(remote_name)?;
-        let mut callbacks = RemoteCallbacks::new();
-        if let Some(tok) = token {
-            let tok = tok.to_string();
-            callbacks.credentials(move |_url, _username, _allowed| {
-                Cred::userpass_plaintext("x-access-token", &tok)
-            });
+        self.push_impl(remote_name, branch, false)
+    }
+
+    /// Force-push a local branch to a remote (overwrites remote history).
+    #[instrument(skip(self))]
+    pub fn push_force(
+        &self,
+        remote_name: &str,
+        branch: &str,
+        _token: Option<&str>,
+    ) -> Result<(), GitError> {
+        self.push_impl(remote_name, branch, true)
+    }
+
+    /// Get the repo working directory path (for use with async push).
+    pub fn repo_workdir(&self) -> std::path::PathBuf {
+        self.repo
+            .workdir()
+            .unwrap_or_else(|| self.repo.path())
+            .to_path_buf()
+    }
+
+    fn push_impl(
+        &self,
+        remote_name: &str,
+        branch: &str,
+        force: bool,
+    ) -> Result<(), GitError> {
+        let start = std::time::Instant::now();
+        info!(remote = remote_name, branch, force, "pushing via git CLI (LFS-compatible)");
+
+        let repo_path = self.repo.workdir().unwrap_or_else(|| self.repo.path());
+
+        debug!(
+            repo_path = %repo_path.display(),
+            force,
+            "spawning git push subprocess"
+        );
+
+        let mut args = vec!["push", "--progress"];
+        if force {
+            args.push("--force");
         }
-        let push_error = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
-        let push_error_clone = push_error.clone();
-        callbacks.push_update_reference(move |refname, status| {
-            if let Some(msg) = status {
-                warn!(refname, msg, "push rejected");
-                *push_error_clone.lock().unwrap() = Some(msg.to_string());
-            }
-            Ok(())
-        });
-        let mut push_opts = PushOptions::new();
-        push_opts.remote_callbacks(callbacks);
-        let refspec = format!("refs/heads/{}:refs/heads/{}", branch, branch);
-        remote.push(&[&refspec], Some(&mut push_opts))?;
-        if let Some(err_msg) = push_error.lock().unwrap().take() {
+        args.push(remote_name);
+        args.push(branch);
+
+        let output = std::process::Command::new("git")
+            .args(&args)
+            .current_dir(repo_path)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(|e| {
+                error!(error = %e, "failed to spawn git push process");
+                GitError::IoError(e)
+            })?;
+
+        let elapsed = start.elapsed();
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            error!(
+                remote = remote_name,
+                branch,
+                exit_code = ?output.status.code(),
+                elapsed_secs = elapsed.as_secs_f64(),
+                stderr = %stderr,
+                stdout = %stdout,
+                "git push failed"
+            );
             return Err(GitError::PushRejected {
                 branch: branch.to_string(),
-                detail: err_msg,
+                detail: format!(
+                    "git push failed (exit {:?}, {:.1}s): {}",
+                    output.status.code(),
+                    elapsed.as_secs_f64(),
+                    stderr.trim()
+                ),
             });
         }
-        info!("push completed");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.is_empty() {
+            debug!(stderr = %stderr, "git push stderr (informational)");
+        }
+        info!(
+            elapsed_secs = elapsed.as_secs_f64(),
+            "push completed successfully"
+        );
         Ok(())
     }
 
@@ -210,7 +428,9 @@ impl GitClient {
     pub fn get_commits_since(
         &self,
         since_sha: Option<&str>,
+        max_commits: Option<usize>,
     ) -> Result<Vec<GitCommitInfo>, GitError> {
+        let cap = max_commits.unwrap_or(1000);
         let mut revwalk = self.repo.revwalk()?;
         revwalk.push_head()?;
         revwalk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)?;
@@ -231,8 +451,8 @@ impl GitClient {
                 committer_name: commit.committer().name().unwrap_or("").to_string(),
                 committer_email: commit.committer().email().unwrap_or("").to_string(),
             });
-            if commits.len() >= 1000 {
-                warn!("reached 1000 commit limit");
+            if commits.len() >= cap {
+                info!(cap, "reached commit limit for get_commits_since");
                 break;
             }
         }

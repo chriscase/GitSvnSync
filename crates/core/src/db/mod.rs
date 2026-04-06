@@ -39,6 +39,25 @@ impl Database {
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         conn.execute_batch("PRAGMA busy_timeout = 5000;")?;
 
+        // Checkpoint any pending WAL data on startup to recover from
+        // previous unclean shutdowns (SIGKILL, power loss, etc.).
+        if let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+            tracing::warn!("WAL checkpoint on startup failed: {}", e);
+        }
+
+        // Verify database integrity on startup.
+        match conn.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0)) {
+            Ok(ref result) if result == "ok" => {
+                debug!("database integrity check passed");
+            }
+            Ok(result) => {
+                tracing::warn!(result = %result, "database integrity check failed");
+            }
+            Err(e) => {
+                tracing::warn!("database integrity check error: {}", e);
+            }
+        }
+
         debug!("database opened successfully with WAL mode");
         Ok(Self {
             conn: Mutex::new(conn),
@@ -67,6 +86,16 @@ impl Database {
     ///
     /// Prefer using the typed query methods on [`Database`] over raw SQL
     /// whenever possible.
+    ///
+    /// # Deadlock hazard
+    ///
+    /// The returned `MutexGuard` holds a `std::sync::Mutex` lock, which is
+    /// **NOT re-entrant**. While you hold this guard, you must NOT call any
+    /// other `Database` method (e.g. `self.get_repository()`,
+    /// `self.list_commit_map()`) because those methods internally call
+    /// `self.conn()` — the thread will deadlock permanently, and because
+    /// all web requests share this mutex via `validate_session`, the entire
+    /// server will freeze.
     ///
     /// If the Mutex is poisoned (a previous holder panicked), the lock is
     /// recovered rather than propagating a panic.

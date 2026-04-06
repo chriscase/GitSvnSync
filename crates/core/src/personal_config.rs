@@ -39,6 +39,12 @@ pub struct PersonalConfig {
     /// Sync behaviour options.
     #[serde(default)]
     pub options: PersonalOptionsConfig,
+
+    /// Optional identity mapping for preserving original SVN authors.
+    /// When set, `import --full` will map SVN usernames to Git identities
+    /// instead of using the single developer identity for all commits.
+    #[serde(default)]
+    pub identity: Option<crate::config::IdentityConfig>,
 }
 
 // ---------------------------------------------------------------------------

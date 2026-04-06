@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
+use crate::db::Database;
 use crate::errors::ConfigError;
 
 // ---------------------------------------------------------------------------
@@ -114,6 +115,7 @@ pub struct SvnConfig {
     pub username: String,
 
     /// Environment variable holding the SVN password.
+    #[serde(default)]
     pub password_env: String,
 
     /// Repository layout.
@@ -159,6 +161,15 @@ fn default_tags() -> String {
 // GitHub
 // ---------------------------------------------------------------------------
 
+/// Git hosting provider type.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GitProvider {
+    #[default]
+    GitHub,
+    Gitea,
+}
+
 /// GitHub repository and API configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitHubConfig {
@@ -177,6 +188,7 @@ pub struct GitHubConfig {
     pub repo: String,
 
     /// Environment variable holding the GitHub personal access token.
+    #[serde(default)]
     pub token_env: String,
 
     /// Environment variable holding the webhook secret.
@@ -186,6 +198,10 @@ pub struct GitHubConfig {
     /// Default branch name (e.g. `main`).
     #[serde(default = "default_branch")]
     pub default_branch: String,
+
+    /// Git hosting provider (github or gitea). Default: github.
+    #[serde(default)]
+    pub provider: GitProvider,
 
     /// Resolved token (populated by `resolve_env_vars`).
     #[serde(skip)]
@@ -307,6 +323,10 @@ pub struct WebConfig {
     /// Resolved OAuth client secret.
     #[serde(skip)]
     pub oauth_client_secret: Option<String>,
+
+    /// Allowed CORS origins. If empty, derives from the listen address.
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
 }
 
 fn default_listen() -> String {
@@ -324,6 +344,7 @@ impl Default for WebConfig {
             oauth_allowed_users: Vec::new(),
             admin_password: None,
             oauth_client_secret: None,
+            cors_origins: Vec::new(),
         }
     }
 }
@@ -417,6 +438,22 @@ pub struct SyncConfig {
     /// PR-specific settings (used when `mode` is `Pr`).
     #[serde(default)]
     pub pr: PrConfig,
+
+    /// Maximum file size in bytes (0 = no limit). Files larger are skipped.
+    #[serde(default)]
+    pub max_file_size: u64,
+
+    /// LFS threshold in bytes (0 = disabled). Files larger are LFS-tracked.
+    #[serde(default)]
+    pub lfs_threshold: u64,
+
+    /// File patterns that should always be LFS-tracked (e.g. `*.psd`).
+    #[serde(default)]
+    pub lfs_patterns: Vec<String>,
+
+    /// Glob patterns for files to ignore during sync.
+    #[serde(default)]
+    pub ignore_patterns: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -431,6 +468,10 @@ impl Default for SyncConfig {
             sync_branches: Vec::new(),
             sync_tags: true,
             pr: PrConfig::default(),
+            max_file_size: 0,
+            lfs_threshold: 0,
+            lfs_patterns: Vec::new(),
+            ignore_patterns: Vec::new(),
         }
     }
 }
@@ -511,6 +552,89 @@ impl AppConfig {
 
         debug!("environment variable resolution complete");
         Ok(())
+    }
+
+    /// Fall back to secrets stored in the database when env vars are absent.
+    ///
+    /// The wizard saves passwords / tokens into the `kv_state` table.  This
+    /// method reads them back and fills any resolved field that is still
+    /// `None` after [`resolve_env_vars`](Self::resolve_env_vars).  Env-var
+    /// values therefore always take priority (they are set first).
+    pub fn resolve_secrets_from_db(&mut self, db: &Database) {
+        // Helper: try encrypted_secrets first, fall back to legacy kv_state plaintext
+        let decrypt_secret = |db: &Database, key: &str, legacy_key: &str| -> Option<String> {
+            // Try encrypted secrets table first
+            if let Ok(Some((ct, nonce))) = db.get_encrypted_secret(key) {
+                if let Ok(enc_key) = crate::crypto::get_or_create_encryption_key(db) {
+                    if let Ok(plaintext) = crate::crypto::decrypt_credential(&ct, &nonce, &enc_key) {
+                        return Some(plaintext);
+                    }
+                }
+            }
+            // Fall back to legacy plaintext in kv_state
+            if let Ok(Some(val)) = db.get_state(legacy_key) {
+                if !val.is_empty() {
+                    // Auto-migrate: encrypt and store in encrypted_secrets
+                    if let Ok(enc_key) = crate::crypto::get_or_create_encryption_key(db) {
+                        if let Ok((ct, nonce)) = crate::crypto::encrypt_credential(&val, &enc_key) {
+                            let _ = db.store_encrypted_secret(key, &ct, &nonce);
+                            let _ = db.set_state(legacy_key, "");
+                            info!("Migrated {} from plaintext to encrypted storage", key);
+                        }
+                    }
+                    return Some(val);
+                }
+            }
+            None
+        };
+
+        // SVN password
+        if self.svn.password.is_some() {
+            debug!("SVN password already set from env var, skipping DB lookup");
+        } else if let Some(val) = decrypt_secret(db, "svn_password", "secret_svn_password") {
+            self.svn.password = Some(val);
+            info!("Loaded SVN password from database (encrypted)");
+        } else {
+            debug!("No SVN password found in database");
+        }
+
+        // Git token
+        if self.github.token.is_some() {
+            debug!("Git token already set from env var, skipping DB lookup");
+        } else if let Some(val) = decrypt_secret(db, "git_token", "secret_git_token") {
+            self.github.token = Some(val);
+            info!("Loaded Git token from database (encrypted)");
+        } else {
+            debug!("No Git token found in database");
+        }
+
+        // Admin password (stored as bcrypt hash, not encrypted)
+        if self.web.admin_password.is_some() {
+            debug!("Admin password already set from env var, skipping DB lookup");
+        } else {
+            // Try bcrypt hash first, then legacy plaintext
+            match db.get_state("secret_admin_password_hash") {
+                Ok(Some(val)) if !val.is_empty() => {
+                    self.web.admin_password = Some(val);
+                    info!("Loaded admin password hash from database");
+                }
+                _ => match db.get_state("secret_admin_password") {
+                    Ok(Some(val)) if !val.is_empty() => {
+                        // Auto-migrate plaintext to bcrypt hash
+                        if let Ok(hash) = crate::crypto::hash_password(&val) {
+                            let _ = db.set_state("secret_admin_password_hash", &hash);
+                            let _ = db.set_state("secret_admin_password", "");
+                            self.web.admin_password = Some(hash);
+                            info!("Migrated admin password from plaintext to bcrypt hash");
+                        } else {
+                            self.web.admin_password = Some(val);
+                        }
+                    }
+                    Ok(_) => debug!("No admin password found in database"),
+                    Err(e) => warn!("Failed to read admin password from database: {}", e),
+                },
+            }
+        }
     }
 
     /// Validate that all required fields are present and sane.

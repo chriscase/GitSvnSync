@@ -16,9 +16,9 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, SvnLayout};
 use crate::conflict::detector::{ChangeKind, ConflictDetector, FileChange};
 use crate::conflict::merger::Merger;
 use crate::conflict::Conflict;
@@ -82,12 +82,14 @@ const SYNC_MARKER: &str = "[reposync]";
 pub struct SyncEngine {
     config: AppConfig,
     db: Database,
-    svn_client: SvnClient,
-    git_client: Arc<tokio::sync::Mutex<GitClient>>,
+    svn_client: std::sync::Mutex<SvnClient>,
+    git_client: Arc<std::sync::Mutex<GitClient>>,
     identity_mapper: Arc<IdentityMapper>,
     /// Atomic flag preventing concurrent sync cycles.
     running: Arc<AtomicBool>,
     started_at: chrono::DateTime<Utc>,
+    /// Optional repo ID for per-repo credential and watermark keys.
+    repo_id: Option<String>,
 }
 
 impl SyncEngine {
@@ -103,12 +105,32 @@ impl SyncEngine {
         Self {
             config,
             db,
-            svn_client,
-            git_client: Arc::new(tokio::sync::Mutex::new(git_client)),
+            svn_client: std::sync::Mutex::new(svn_client),
+            git_client: Arc::new(std::sync::Mutex::new(git_client)),
             identity_mapper,
             running: Arc::new(AtomicBool::new(false)),
             started_at: Utc::now(),
+            repo_id: None,
         }
+    }
+
+    /// Set the repository ID for per-repo credential and watermark keys.
+    pub fn set_repo_id(&mut self, id: String) {
+        self.repo_id = Some(id);
+    }
+
+    /// Return the kv_state key for the last SVN revision watermark.
+    /// Uses per-repo key if repo_id is set, otherwise global key.
+    fn svn_rev_key(&self) -> String {
+        match &self.repo_id {
+            Some(rid) if !rid.is_empty() => format!("last_svn_rev_{}", rid),
+            _ => "last_svn_rev".to_string(),
+        }
+    }
+
+    /// Return the effective repo_id if set and non-empty, for repo-table watermark operations.
+    fn effective_repo_id(&self) -> Option<&str> {
+        self.repo_id.as_deref().filter(|id| !id.is_empty())
     }
 
     /// Return a reference to the database.
@@ -159,6 +181,9 @@ impl SyncEngine {
         // RAII guard that clears the running flag on drop (even on panic).
         let _guard = SyncLockGuard(self.running.clone());
 
+        // Hot-reload credentials from DB (changed via Setup Wizard).
+        self.reload_credentials();
+
         let mut stats = SyncStats {
             started_at: Utc::now().to_rfc3339(),
             ..Default::default()
@@ -185,6 +210,14 @@ impl SyncEngine {
         let _ = self.db.set_state("last_sync_at", &Utc::now().to_rfc3339());
         stats.completed_at = Some(Utc::now().to_rfc3339());
 
+        // Update per-repo sync status and error count
+        if let Some(rid) = self.effective_repo_id() {
+            let _ = self.db.update_repo_sync_status(rid, final_state);
+            if result.is_err() {
+                let _ = self.db.increment_repo_error_count(rid);
+            }
+        }
+
         // Audit log
         let audit = if result.is_ok() {
             AuditEntry::success("sync_cycle", &details)
@@ -199,26 +232,21 @@ impl SyncEngine {
 
     /// Get a status summary.
     pub fn get_status(&self) -> Result<crate::models::SyncStatus, SyncError> {
-        let state_str = self
-            .db
-            .get_state("sync_state")
-            .map_err(SyncError::DatabaseError)?
-            .unwrap_or_else(|| "idle".to_string());
-
-        let last_sync_str = self
-            .db
-            .get_state("last_sync_at")
+        // Use the consolidated summary query to reduce mutex acquisitions
+        // (1 query instead of 8+ separate queries).
+        let summary = self.db.get_status_summary(self.repo_id.as_deref())
             .map_err(SyncError::DatabaseError)?;
 
-        let last_sync_at = last_sync_str.and_then(|s| {
+        let last_sync_at = summary.last_sync_at.and_then(|s| {
             chrono::DateTime::parse_from_rfc3339(&s)
                 .ok()
                 .map(|dt| dt.with_timezone(&Utc))
         });
 
+        // SVN rev and git hash need per-repo key lookups not in the summary
         let last_svn_rev = match self
             .db
-            .get_state("last_svn_rev")
+            .get_state(&self.svn_rev_key())
             .map_err(SyncError::DatabaseError)?
         {
             Some(s) => s.parse::<i64>().ok(),
@@ -238,31 +266,20 @@ impl SyncEngine {
                 .get_last_git_hash()
                 .map_err(SyncError::DatabaseError)?,
         };
-        let total_syncs = self
-            .db
-            .count_sync_records()
-            .map_err(SyncError::DatabaseError)?;
-        let total_conflicts = self
-            .db
-            .count_all_conflicts()
-            .map_err(SyncError::DatabaseError)?;
-        let active_conflicts = self
-            .db
-            .count_active_conflicts()
-            .map_err(SyncError::DatabaseError)?;
-        let total_errors = self.db.count_errors().map_err(SyncError::DatabaseError)?;
+        let last_error_at = self.db.last_error_at().map_err(SyncError::DatabaseError)?;
 
         let uptime = (Utc::now() - self.started_at).num_seconds().max(0) as u64;
 
         Ok(crate::models::SyncStatus {
-            state: crate::models::SyncState::from_str_val(&state_str),
+            state: crate::models::SyncState::from_str_val(&summary.sync_state),
             last_sync_at,
             last_svn_revision: last_svn_rev,
             last_git_hash,
-            total_syncs,
-            total_conflicts,
-            active_conflicts,
-            total_errors,
+            total_syncs: summary.total_syncs,
+            total_conflicts: summary.total_conflicts,
+            active_conflicts: summary.active_conflicts,
+            total_errors: summary.recent_errors,
+            last_error_at,
             uptime_secs: uptime,
         })
     }
@@ -334,11 +351,6 @@ impl SyncEngine {
         for change in svn_changes {
             if self.is_echo_commit(&change.message) {
                 debug!(rev = change.revision, "skipping echo SVN revision");
-                // Still advance the watermark so we don't re-fetch this
-                // echo commit on every subsequent cycle.
-                let _ = self
-                    .db
-                    .set_state("last_svn_rev", &change.revision.to_string());
                 continue;
             }
 
@@ -348,15 +360,15 @@ impl SyncEngine {
                 .map_err(SyncError::IdentityError)?;
 
             // 1. Get the SVN diff for this revision.
-            let diff = self
-                .svn_client
+            let svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner()).clone();
+            let diff = svn
                 .diff_full(change.revision)
                 .await
                 .map_err(SyncError::SvnError)?;
 
             // Get the git repo path before locking, for apply_diff_to_path.
             let repo_path = {
-                let git = self.git_client.lock().await;
+                let git = self.git_client.lock().unwrap_or_else(|p| p.into_inner());
                 git.repo_path().to_path_buf()
             };
 
@@ -364,43 +376,107 @@ impl SyncEngine {
             // Try git apply first; fall back to export-based copy if the diff
             // is empty or in a format git cannot parse (e.g. SVN property-only
             // changes or initial adds).
-            let diff_applied = if !diff.trim().is_empty() {
-                apply_diff_to_path(&repo_path, &diff).await.is_ok()
+            // When using standard layout, strip the trunk prefix from diff paths
+            // so they match the git repository structure.
+            let processed_diff = if self.config.svn.layout == SvnLayout::Standard {
+                let tp = self.config.svn.trunk_path.trim_matches('/');
+                if !tp.is_empty() {
+                    diff.replace(
+                        &format!("a/{}/", tp),
+                        "a/",
+                    ).replace(
+                        &format!("b/{}/", tp),
+                        "b/",
+                    )
+                } else {
+                    diff
+                }
+            } else {
+                diff
+            };
+            let diff_applied = if !processed_diff.trim().is_empty() {
+                apply_diff_to_path(&repo_path, &processed_diff).await.is_ok()
             } else {
                 false
             };
 
             if !diff_applied {
-                // Fallback: use svn export to copy changed files.
-                let export_dir = tempfile::tempdir()
-                    .map_err(|e| SyncError::GitError(crate::errors::GitError::IoError(e)))?;
-                self.svn_client
-                    .export("", change.revision, export_dir.path())
-                    .await
-                    .map_err(SyncError::SvnError)?;
+                // Fallback: fetch changed files individually when few files changed,
+                // or export the full tree when many files changed (P11 optimization).
+                let non_delete_count = change.changed_files.iter()
+                    .filter(|f| f.action != "D")
+                    .count();
 
-                // Copy each changed file from the export to the Git repo.
-                for file in &change.changed_files {
-                    let src = export_dir.path().join(&file.path);
-                    let dst = repo_path.join(&file.path);
-                    match file.action.as_str() {
-                        "D" => {
-                            if dst.exists() {
-                                std::fs::remove_file(&dst).map_err(|e| {
-                                    SyncError::GitError(crate::errors::GitError::IoError(e))
-                                })?;
+                if non_delete_count > 0 && non_delete_count <= 20 {
+                    // Use svn cat per file — much faster than full export for small changesets.
+                    let svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                    for file in &change.changed_files {
+                        let dst = repo_path.join(&file.path);
+                        match file.action.as_str() {
+                            "D" => {
+                                if dst.exists() {
+                                    std::fs::remove_file(&dst).map_err(|e| {
+                                        SyncError::GitError(crate::errors::GitError::IoError(e))
+                                    })?;
+                                }
+                            }
+                            _ => {
+                                if let Some(parent) = dst.parent() {
+                                    std::fs::create_dir_all(parent).map_err(|e| {
+                                        SyncError::GitError(crate::errors::GitError::IoError(e))
+                                    })?;
+                                }
+                                match svn.cat(&file.path, change.revision).await {
+                                    Ok(content) => {
+                                        std::fs::write(&dst, content.as_bytes()).map_err(|e| {
+                                            SyncError::GitError(crate::errors::GitError::IoError(e))
+                                        })?;
+                                    }
+                                    Err(e) => {
+                                        warn!(file = %file.path, error = %e, "svn cat failed, skipping file");
+                                    }
+                                }
                             }
                         }
-                        _ => {
-                            if let Some(parent) = dst.parent() {
-                                std::fs::create_dir_all(parent).map_err(|e| {
-                                    SyncError::GitError(crate::errors::GitError::IoError(e))
-                                })?;
+                    }
+                } else {
+                    // Full export fallback for large changesets.
+                    let export_dir = tempfile::tempdir()
+                        .map_err(|e| SyncError::GitError(crate::errors::GitError::IoError(e)))?;
+                    let export_path = if self.config.svn.layout == SvnLayout::Standard {
+                        self.config.svn.trunk_path.trim_matches('/').to_string()
+                    } else {
+                        String::new()
+                    };
+                    {
+                        let svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                        svn.export(&export_path, change.revision, export_dir.path())
+                            .await
+                            .map_err(SyncError::SvnError)?;
+                    }
+
+                    for file in &change.changed_files {
+                        let src = export_dir.path().join(&file.path);
+                        let dst = repo_path.join(&file.path);
+                        match file.action.as_str() {
+                            "D" => {
+                                if dst.exists() {
+                                    std::fs::remove_file(&dst).map_err(|e| {
+                                        SyncError::GitError(crate::errors::GitError::IoError(e))
+                                    })?;
+                                }
                             }
-                            if src.exists() {
-                                std::fs::copy(&src, &dst).map_err(|e| {
-                                    SyncError::GitError(crate::errors::GitError::IoError(e))
-                                })?;
+                            _ => {
+                                if let Some(parent) = dst.parent() {
+                                    std::fs::create_dir_all(parent).map_err(|e| {
+                                        SyncError::GitError(crate::errors::GitError::IoError(e))
+                                    })?;
+                                }
+                                if src.exists() && src.is_file() {
+                                    std::fs::copy(&src, &dst).map_err(|e| {
+                                        SyncError::GitError(crate::errors::GitError::IoError(e))
+                                    })?;
+                                }
                             }
                         }
                     }
@@ -413,30 +489,34 @@ impl SyncEngine {
                 change.message, SYNC_MARKER, change.revision
             );
 
-            let git = self.git_client.lock().await;
-            let oid = git
-                .commit(
-                    &commit_message,
-                    &git_identity.name,
-                    &git_identity.email,
-                    "reposync",
-                    "sync@reposync.local",
-                )
-                .map_err(SyncError::GitError)?;
+            // Wrap commit+push in block_in_place so the synchronous git
+            // CLI call doesn't block the tokio async runtime (which would
+            // make the web UI unresponsive during pushes).
+            let git_sha = tokio::task::block_in_place(|| {
+                let git = self.git_client.lock().unwrap_or_else(|p| p.into_inner());
+                let oid = git
+                    .commit(
+                        &commit_message,
+                        &git_identity.name,
+                        &git_identity.email,
+                        "reposync",
+                        "sync@reposync.local",
+                    )
+                    .map_err(SyncError::GitError)?;
 
-            let git_sha = oid.to_string();
+                // 4. Push to remote.
+                let token = self.config.github.token.as_deref();
+                let branch = &self.config.github.default_branch;
+                git.push("origin", branch, token)
+                    .map_err(SyncError::GitError)?;
 
-            // 4. Push to remote.
-            let token = self.config.github.token.as_deref();
-            let branch = &self.config.github.default_branch;
-            git.push("origin", branch, token)
-                .map_err(SyncError::GitError)?;
-
-            drop(git);
+                Ok::<_, SyncError>(oid.to_string())
+            })?;
 
             // 5. Record the sync only after successful write.
             let record = crate::models::SyncRecord {
                 id: uuid::Uuid::new_v4().to_string(),
+                repo_id: self.effective_repo_id().map(|s| s.to_string()),
                 svn_revision: Some(change.revision),
                 git_hash: Some(git_sha.clone()),
                 direction: crate::models::SyncDirection::SvnToGit,
@@ -450,12 +530,33 @@ impl SyncEngine {
                 .insert_sync_record(&record)
                 .map_err(SyncError::DatabaseError)?;
 
-            // Update the SVN watermark.
+            // Update the SVN watermark (dual-write: kv_state + repo table).
             let _ = self
                 .db
-                .set_state("last_svn_rev", &change.revision.to_string());
+                .set_state(&self.svn_rev_key(), &change.revision.to_string());
+            if let Some(rid) = self.effective_repo_id() {
+                let _ = self.db.update_repo_watermark(rid, change.revision, &git_sha);
+                let _ = self.db.increment_repo_sync_count(rid);
+            }
 
             count += 1;
+
+            // Audit log for successful sync
+            let _ = self.db.insert_audit_log_with_repo(
+                "sync_cycle",
+                Some("svn_to_git"),
+                Some(change.revision),
+                Some(&git_sha),
+                Some(&change.author),
+                Some(&format!(
+                    "synced SVN r{} -> Git {}",
+                    change.revision,
+                    &git_sha[..8.min(git_sha.len())]
+                )),
+                true,
+                self.repo_id.as_deref(),
+            );
+
             info!(
                 rev = change.revision,
                 git_sha = %git_sha,
@@ -484,12 +585,16 @@ impl SyncEngine {
     async fn sync_git_to_svn(&self, git_changes: &[GitChangeSet]) -> Result<usize, SyncError> {
         let mut count = 0;
 
+        // Reuse a single SVN working copy across all commits (P4 optimization).
+        // Create the tempdir once and use `svn update` between commits instead
+        // of a fresh `checkout_head` per commit.
+        let svn_wc_dir = tempfile::tempdir()
+            .map_err(|e| SyncError::SvnError(crate::errors::SvnError::IoError(e)))?;
+        let mut svn_wc_initialized = false;
+
         for change in git_changes {
             if self.is_echo_commit(&change.message) {
                 debug!(sha = %change.sha, "skipping echo Git commit");
-                // Still advance the watermark so we don't re-fetch this
-                // echo commit on every subsequent cycle.
-                let _ = self.db.set_state("last_git_hash", &change.sha);
                 continue;
             }
 
@@ -498,43 +603,92 @@ impl SyncEngine {
                 .git_to_svn(&change.author_name, &change.author_email)
                 .map_err(SyncError::IdentityError)?;
 
-            // 1. Get changed files from the Git commit.
-            let git = self.git_client.lock().await;
-            let changed_files = git
-                .get_changed_files(&change.sha)
-                .map_err(SyncError::GitError)?;
+            // 1. Get changed files and their contents from the Git commit.
+            //    Lock is scoped in a block so the guard is dropped before any
+            //    .await (std::sync::MutexGuard is !Send).
+            let file_contents = {
+                let git = self.git_client.lock().unwrap_or_else(|p| p.into_inner());
+                // Use the pre-populated changed_files from fetch_git_changes
+                // instead of re-calling get_changed_files (P5 optimization).
+                let contents: Vec<(String, String, Option<Vec<u8>>)> = change
+                    .changed_files
+                    .iter()
+                    .map(|f| {
+                        let (action, path) = (&f.action, &f.path);
+                        let content = if action != "D" {
+                            git.get_file_content_at_commit(&change.sha, path)
+                                .ok()
+                                .flatten()
+                        } else {
+                            None
+                        };
+                        (action.clone(), path.clone(), content)
+                    })
+                    .collect();
+                contents
+            };
 
-            // 2. Prepare an SVN working copy. Use a temporary checkout.
-            let svn_wc_dir = tempfile::tempdir()
-                .map_err(|e| SyncError::SvnError(crate::errors::SvnError::IoError(e)))?;
-            self.svn_client
-                .checkout_head(svn_wc_dir.path())
-                .await
-                .map_err(SyncError::SvnError)?;
+            // 2. Prepare SVN working copy: checkout on first use, update thereafter.
+            let svn_url_for_log;
+            {
+                let svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                svn_url_for_log = svn.url().to_string();
+                if !svn_wc_initialized {
+                    debug!(
+                        sha = %change.sha,
+                        svn_url = %svn_url_for_log,
+                        wc_path = %svn_wc_dir.path().display(),
+                        "checking out SVN HEAD into temp working copy"
+                    );
+                    svn.checkout_head(svn_wc_dir.path())
+                        .await
+                        .map_err(SyncError::SvnError)?;
+                    svn_wc_initialized = true;
+                } else {
+                    debug!(sha = %change.sha, "updating SVN working copy to HEAD");
+                    svn.update(svn_wc_dir.path())
+                        .await
+                        .map_err(SyncError::SvnError)?;
+                }
+            }
 
             // 3. Copy changed files from Git into the SVN working copy.
+            //    If a file is marked as modified ("M") in Git but does not
+            //    exist in the SVN working copy, treat it as an add so that
+            //    `svn add` is called.  This handles the case where the SVN
+            //    repo has fewer files than Git (e.g. freshly created repo).
             let mut added_files = Vec::new();
             let mut deleted_files = Vec::new();
 
-            for (action, file_path) in &changed_files {
+            for (action, file_path, content) in &file_contents {
                 let dst = svn_wc_dir.path().join(file_path);
+                debug!(
+                    sha = %change.sha,
+                    action = %action,
+                    file_path = %file_path,
+                    dst = %dst.display(),
+                    dst_exists = dst.exists(),
+                    "processing file change"
+                );
                 match action.as_str() {
                     "D" => {
                         if dst.exists() {
                             deleted_files.push(file_path.as_str());
+                        } else {
+                            debug!(
+                                file_path = %file_path,
+                                "skipping delete: file does not exist in SVN working copy"
+                            );
                         }
                     }
                     "A" => {
-                        // Get the file content from the Git commit.
-                        if let Ok(Some(content)) =
-                            git.get_file_content_at_commit(&change.sha, file_path)
-                        {
+                        if let Some(content) = content {
                             if let Some(parent) = dst.parent() {
                                 std::fs::create_dir_all(parent).map_err(|e| {
                                     SyncError::GitError(crate::errors::GitError::IoError(e))
                                 })?;
                             }
-                            std::fs::write(&dst, &content).map_err(|e| {
+                            std::fs::write(&dst, content).map_err(|e| {
                                 SyncError::GitError(crate::errors::GitError::IoError(e))
                             })?;
                             added_files.push(file_path.as_str());
@@ -542,36 +696,95 @@ impl SyncEngine {
                     }
                     _ => {
                         // Modified: overwrite content.
-                        if let Ok(Some(content)) =
-                            git.get_file_content_at_commit(&change.sha, file_path)
-                        {
+                        if let Some(content) = content {
+                            let file_is_new = !dst.exists();
                             if let Some(parent) = dst.parent() {
                                 std::fs::create_dir_all(parent).map_err(|e| {
                                     SyncError::GitError(crate::errors::GitError::IoError(e))
                                 })?;
                             }
-                            std::fs::write(&dst, &content).map_err(|e| {
+                            std::fs::write(&dst, content).map_err(|e| {
                                 SyncError::GitError(crate::errors::GitError::IoError(e))
                             })?;
+                            // If the file didn't exist in the SVN working copy,
+                            // it must be `svn add`ed even though Git says "M".
+                            if file_is_new {
+                                debug!(
+                                    file_path = %file_path,
+                                    "file marked as modified in Git but missing in SVN WC; treating as add"
+                                );
+                                added_files.push(file_path.as_str());
+                            }
                         }
                     }
                 }
             }
-            drop(git);
 
             // 4. Stage changes in SVN.
+            let svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner()).clone();
             if !added_files.is_empty() {
-                self.svn_client
-                    .add(svn_wc_dir.path(), &added_files)
+                debug!(
+                    sha = %change.sha,
+                    files = ?added_files,
+                    "running svn add"
+                );
+                svn.add(svn_wc_dir.path(), &added_files)
                     .await
                     .map_err(SyncError::SvnError)?;
             }
             if !deleted_files.is_empty() {
-                self.svn_client
-                    .rm(svn_wc_dir.path(), &deleted_files)
+                debug!(
+                    sha = %change.sha,
+                    files = ?deleted_files,
+                    "running svn rm"
+                );
+                svn.rm(svn_wc_dir.path(), &deleted_files)
                     .await
                     .map_err(SyncError::SvnError)?;
             }
+
+            // 4b. Check `svn status` to verify there are actual pending changes.
+            //     If SVN sees no modifications, skip this commit gracefully
+            //     instead of failing to parse an empty commit output.
+            let svn_status = svn
+                .status(svn_wc_dir.path())
+                .await
+                .map_err(SyncError::SvnError)?;
+            let has_changes = svn_status.lines().any(|line| {
+                let trimmed = line.trim();
+                !trimmed.is_empty()
+                    && !trimmed.starts_with('?')  // unversioned
+                    && !trimmed.starts_with('X')  // externals
+            });
+            if !has_changes {
+                warn!(
+                    sha = %change.sha,
+                    svn_url = %svn_url_for_log,
+                    svn_status = %svn_status,
+                    file_count = file_contents.len(),
+                    added = added_files.len(),
+                    deleted = deleted_files.len(),
+                    "no pending SVN changes after copying files — skipping commit \
+                     (files may already be in sync or paths may be misaligned)"
+                );
+                // Still advance the Git watermark so we don't retry this
+                // commit on the next cycle.
+                let _ = self.db.set_state("last_git_hash", &change.sha);
+                if let Some(rid) = self.effective_repo_id() {
+                    let _ = self.db.set_state(&format!("last_git_sha_{}", rid), &change.sha);
+                    // Preserve existing SVN watermark — only update git_sha
+                    let current_svn_rev = self.db.get_repo_watermark(rid)
+                        .map(|(rev, _)| rev).unwrap_or(0);
+                    let _ = self.db.update_repo_watermark(rid, current_svn_rev, &change.sha);
+                }
+                continue;
+            }
+
+            debug!(
+                sha = %change.sha,
+                svn_status = %svn_status,
+                "SVN working copy has pending changes, committing"
+            );
 
             // 5. Commit to SVN.
             let commit_message = format!(
@@ -580,8 +793,7 @@ impl SyncEngine {
                 SYNC_MARKER,
                 &change.sha[..8.min(change.sha.len())]
             );
-            let svn_rev = self
-                .svn_client
+            let svn_rev = svn
                 .commit(svn_wc_dir.path(), &commit_message, &svn_username)
                 .await
                 .map_err(SyncError::SvnError)?;
@@ -589,6 +801,7 @@ impl SyncEngine {
             // 6. Record the sync only after successful write.
             let record = crate::models::SyncRecord {
                 id: uuid::Uuid::new_v4().to_string(),
+                repo_id: self.effective_repo_id().map(|s| s.to_string()),
                 svn_revision: Some(svn_rev),
                 git_hash: Some(change.sha.clone()),
                 direction: crate::models::SyncDirection::GitToSvn,
@@ -602,10 +815,32 @@ impl SyncEngine {
                 .insert_sync_record(&record)
                 .map_err(SyncError::DatabaseError)?;
 
-            // Update the Git watermark.
+            // Update the Git watermark (dual-write: kv_state + repo table).
             let _ = self.db.set_state("last_git_hash", &change.sha);
+            if let Some(rid) = self.effective_repo_id() {
+                let _ = self.db.set_state(&format!("last_git_sha_{}", rid), &change.sha);
+                let _ = self.db.update_repo_watermark(rid, svn_rev, &change.sha);
+                let _ = self.db.increment_repo_sync_count(rid);
+            }
 
             count += 1;
+
+            // Audit log for successful sync
+            let _ = self.db.insert_audit_log_with_repo(
+                "sync_cycle",
+                Some("git_to_svn"),
+                Some(svn_rev),
+                Some(&change.sha),
+                Some(&change.author_name),
+                Some(&format!(
+                    "synced Git {} -> SVN r{}",
+                    &change.sha[..8.min(change.sha.len())],
+                    svn_rev
+                )),
+                true,
+                self.repo_id.as_deref(),
+            );
+
             info!(
                 sha = %change.sha,
                 svn_rev,
@@ -623,44 +858,58 @@ impl SyncEngine {
     // -----------------------------------------------------------------------
 
     async fn fetch_svn_changes(&self) -> Result<Vec<SvnChangeSet>, SyncError> {
-        // Check the state table first (written by sync_svn_to_git), then the
-        // watermarks table (written by import), then fall back to commit_map /
-        // sync_records for databases created by older versions.
-        let last_rev = match self
-            .db
-            .get_state("last_svn_rev")
-            .map_err(SyncError::DatabaseError)?
-        {
-            Some(s) => s.parse::<i64>().unwrap_or(0),
-            None => {
-                // Import writes to the watermarks table with key "svn_rev",
-                // so check there before falling back to sync_records.
-                if let Some(wm) = self
-                    .db
-                    .get_watermark("svn_rev")
-                    .map_err(SyncError::DatabaseError)?
-                {
-                    let rev = wm.parse::<i64>().unwrap_or(0);
-                    if rev > 0 {
-                        // Promote to kv_state so subsequent cycles don't
-                        // repeat this fallback.
-                        let _ = self.db.set_state("last_svn_rev", &rev.to_string());
-                        rev
-                    } else {
-                        0
-                    }
-                } else {
-                    self.db
-                        .get_last_svn_revision()
-                        .map_err(SyncError::DatabaseError)?
-                        .unwrap_or(0)
-                }
+        // Try the repo table watermark first (authoritative), then fall back
+        // to kv_state, then to commit_map / sync_records for legacy databases.
+        let mut last_rev = 0i64;
+
+        if let Some(rid) = self.effective_repo_id() {
+            let (repo_rev, _repo_sha) = self
+                .db
+                .get_repo_watermark(rid)
+                .map_err(SyncError::DatabaseError)?;
+            if repo_rev > 0 {
+                last_rev = repo_rev;
             }
-        };
+        }
+
+        if last_rev == 0 {
+            last_rev = match self
+                .db
+                .get_state(&self.svn_rev_key())
+                .map_err(SyncError::DatabaseError)?
+            {
+                Some(s) => s.parse::<i64>().unwrap_or(0),
+                None => self
+                    .db
+                    .get_last_svn_revision()
+                    .map_err(SyncError::DatabaseError)?
+                    .unwrap_or(0),
+            };
+        }
+
+        // On a fresh DB connecting to a repo with existing commits, auto-detect
+        // the highest SVN revision already synced by scanning git log for
+        // sync markers like "[reposync] synced from SVN rNNN".
+        if last_rev == 0 {
+            let detected = self.detect_last_svn_rev_from_git();
+            if detected > 0 {
+                info!(
+                    detected_rev = detected,
+                    "Auto-detected last synced revision from existing git history"
+                );
+                let _ = self.db.set_state(&self.svn_rev_key(), &detected.to_string());
+                // Also persist to the repo table if available
+                if let Some(rid) = self.effective_repo_id() {
+                    let _ = self.db.update_repo_watermark(rid, detected, "");
+                }
+                last_rev = detected;
+            }
+        }
 
         info!(since_rev = last_rev, "fetching SVN changes");
 
-        let svn_info = self.svn_client.info().await.map_err(SyncError::SvnError)?;
+        let svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let svn_info = svn.info().await.map_err(SyncError::SvnError)?;
         let head_rev = svn_info.latest_rev;
 
         if head_rev <= last_rev {
@@ -668,15 +917,22 @@ impl SyncEngine {
             return Ok(Vec::new());
         }
 
-        let entries = self
-            .svn_client
+        let entries = svn
             .log(last_rev + 1, head_rev)
             .await
             .map_err(SyncError::SvnError)?;
 
-        // Track the highest revision we've seen (echo or not) so we can
-        // advance the watermark even when all entries are echoes.
-        let max_rev = entries.iter().map(|e| e.revision).max();
+        // Determine the trunk prefix to filter/strip when using standard layout.
+        let trunk_prefix = if self.config.svn.layout == SvnLayout::Standard {
+            let tp = self.config.svn.trunk_path.trim_matches('/');
+            if tp.is_empty() {
+                None
+            } else {
+                Some(format!("{}/", tp))
+            }
+        } else {
+            None
+        };
 
         let change_sets: Vec<SvnChangeSet> = entries
             .into_iter()
@@ -689,79 +945,87 @@ impl SyncEngine {
                 changed_files: e
                     .changed_paths
                     .iter()
-                    .map(|p| ChangedFile {
-                        // SVN paths have leading '/' — strip it for filesystem joins.
-                        path: p.path.strip_prefix('/').unwrap_or(&p.path).to_string(),
-                        action: p.action.clone(),
-                        content: None,
-                        is_binary: false,
+                    .filter_map(|p| {
+                        let raw = p.path.strip_prefix('/').unwrap_or(&p.path);
+                        // When using standard layout, only sync files under trunk/
+                        // and strip the trunk prefix so git paths are repo-relative.
+                        let mapped_path = if let Some(ref prefix) = trunk_prefix {
+                            if let Some(rest) = raw.strip_prefix(prefix.as_str()) {
+                                if rest.is_empty() {
+                                    return None; // skip bare trunk/ directory entry
+                                }
+                                rest.to_string()
+                            } else {
+                                return None; // skip non-trunk paths (branches/, tags/)
+                            }
+                        } else {
+                            raw.to_string()
+                        };
+                        Some(ChangedFile {
+                            path: mapped_path,
+                            action: p.action.clone(),
+                            content: None,
+                            is_binary: false,
+                        })
                     })
                     .collect(),
                 diff_content: None,
             })
             .collect();
 
-        // If we filtered out echo commits but have no real changes, advance
-        // the watermark so we don't re-fetch the same echoes next cycle.
-        if change_sets.is_empty() {
-            if let Some(rev) = max_rev {
-                let _ = self.db.set_state("last_svn_rev", &rev.to_string());
-            }
-        }
-
         debug!(count = change_sets.len(), "fetched SVN change sets");
         Ok(change_sets)
     }
 
     async fn fetch_git_changes(&self) -> Result<Vec<GitChangeSet>, SyncError> {
-        let git = self.git_client.lock().await;
+        let git = self.git_client.lock().unwrap_or_else(|p| p.into_inner());
 
+        // Wrap the blocking git pull in block_in_place to avoid starving
+        // the Tokio runtime while holding the lock for network I/O.
         let token = self.config.github.token.as_deref();
-        git.fetch("origin", token).map_err(SyncError::GitError)?;
+        let branch = &self.config.github.default_branch;
+        tokio::task::block_in_place(|| {
+            git.pull("origin", branch, token)
+                .map_err(SyncError::GitError)
+        })?;
 
-        // Check the state table first (written by sync_git_to_svn), then the
-        // watermarks table (written by import), then fall back to commit_map /
-        // sync_records for databases created by older versions.
-        let last_hash = match self
-            .db
-            .get_state("last_git_hash")
-            .map_err(SyncError::DatabaseError)?
-        {
-            Some(s) if !s.is_empty() => Some(s),
-            _ => {
-                // Import writes to the watermarks table with key "git_sha".
-                if let Some(wm) = self
-                    .db
-                    .get_watermark("git_sha")
-                    .map_err(SyncError::DatabaseError)?
-                {
-                    if !wm.is_empty() {
-                        // Promote to kv_state so subsequent cycles don't
-                        // repeat this fallback.
-                        let _ = self.db.set_state("last_git_hash", &wm);
-                        Some(wm)
-                    } else {
-                        None
-                    }
-                } else {
-                    self.db
-                        .get_last_git_hash()
-                        .map_err(SyncError::DatabaseError)?
-                }
+        // Check per-repo key first, then global key, then commit_map fallback.
+        let per_repo_key = self.effective_repo_id()
+            .map(|rid| format!("last_git_sha_{}", rid));
+        let repo_table_sha = self.effective_repo_id()
+            .and_then(|rid| self.db.get_repo_watermark(rid).ok())
+            .map(|(_, sha)| sha)
+            .filter(|s| !s.is_empty());
+
+        let last_hash = if let Some(sha) = repo_table_sha {
+            // Best source: repositories table (set by sync engine + import)
+            Some(sha)
+        } else if let Some(ref key) = per_repo_key {
+            // Per-repo kv_state key
+            match self.db.get_state(key).map_err(SyncError::DatabaseError)? {
+                Some(s) if !s.is_empty() => Some(s),
+                _ => match self.db.get_state("last_git_hash").map_err(SyncError::DatabaseError)? {
+                    Some(s) if !s.is_empty() => Some(s),
+                    _ => self.db.get_last_git_hash().map_err(SyncError::DatabaseError)?,
+                },
+            }
+        } else {
+            // Global fallback
+            match self.db.get_state("last_git_hash").map_err(SyncError::DatabaseError)? {
+                Some(s) if !s.is_empty() => Some(s),
+                _ => self.db.get_last_git_hash().map_err(SyncError::DatabaseError)?,
             }
         };
 
         info!(since_sha = ?last_hash, "fetching Git changes");
 
         let commits = git
-            .get_commits_since(last_hash.as_deref())
+            .get_commits_since(last_hash.as_deref(), None)
             .map_err(SyncError::GitError)?;
 
         let mut change_sets: Vec<GitChangeSet> = Vec::new();
-        let mut last_seen_sha: Option<String> = None;
         for c in commits {
             if self.is_echo_commit(&c.message) {
-                last_seen_sha = Some(c.sha);
                 continue;
             }
             // Populate changed_files from the commit's diff.
@@ -782,14 +1046,6 @@ impl SyncEngine {
                 message: c.message,
                 changed_files,
             });
-        }
-
-        // If we skipped echo commits but found no real changes, advance
-        // the git watermark so we don't re-fetch the same echoes next cycle.
-        if change_sets.is_empty() {
-            if let Some(sha) = last_seen_sha {
-                let _ = self.db.set_state("last_git_hash", &sha);
-            }
         }
 
         // Reverse so oldest commits are replayed first.  get_commits_since
@@ -849,6 +1105,103 @@ impl SyncEngine {
     }
 
     // -----------------------------------------------------------------------
+    // Credential hot-reload
+    // -----------------------------------------------------------------------
+
+    /// Re-read SVN password and Git token from the DB so that credentials
+    /// saved via the repo detail page take effect without a daemon restart.
+    /// Tries per-repo keys first (secret_svn_password_{repo_id}), then falls
+    /// back to global keys for backward compatibility.
+    fn reload_credentials(&self) {
+        // SVN password — per-repo key first, then global
+        let svn_pw = self
+            .repo_id
+            .as_ref()
+            .and_then(|rid| {
+                self.db
+                    .get_state(&format!("secret_svn_password_{}", rid))
+                    .ok()
+                    .flatten()
+                    .filter(|v| !v.is_empty())
+            })
+            .or_else(|| {
+                self.db
+                    .get_state("secret_svn_password")
+                    .ok()
+                    .flatten()
+                    .filter(|v| !v.is_empty())
+            });
+
+        if let Some(pw) = svn_pw {
+            let mut svn = self.svn_client.lock().unwrap_or_else(|p| p.into_inner());
+            svn.set_password(pw);
+            debug!("reloaded SVN password from database");
+        }
+
+        // Git token — per-repo key first, then global
+        let git_tok = self
+            .repo_id
+            .as_ref()
+            .and_then(|rid| {
+                self.db
+                    .get_state(&format!("secret_git_token_{}", rid))
+                    .ok()
+                    .flatten()
+                    .filter(|v| !v.is_empty())
+            })
+            .or_else(|| {
+                self.db
+                    .get_state("secret_git_token")
+                    .ok()
+                    .flatten()
+                    .filter(|v| !v.is_empty())
+            });
+
+        if let Some(token) = git_tok {
+            let git = self.git_client.lock().unwrap_or_else(|p| p.into_inner());
+            let _ = git.ensure_remote_credentials("origin", Some(&token));
+            debug!("reloaded Git token from database");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Watermark auto-detection
+    // -----------------------------------------------------------------------
+
+    /// Scan the git log for sync markers to find the highest SVN revision
+    /// already present. This prevents duplicate commits on clean installs
+    /// connecting to a repo that already has synced history.
+    fn detect_last_svn_rev_from_git(&self) -> i64 {
+        let repo_path = {
+            let git = self.git_client.lock().unwrap_or_else(|p| p.into_inner());
+            git.repo_path().to_path_buf()
+        };
+
+        let output = match std::process::Command::new("git")
+            .args(["log", "--oneline", "-200", "--format=%s"])
+            .current_dir(&repo_path)
+            .output()
+        {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+            _ => return 0,
+        };
+
+        static RE: std::sync::OnceLock<regex_lite::Regex> = std::sync::OnceLock::new();
+        let re = RE.get_or_init(|| {
+            regex_lite::Regex::new(r"(?i)(?:synced from |from )SVN r(\d+)").unwrap()
+        });
+        let mut max_rev: i64 = 0;
+        for line in output.lines() {
+            if let Some(caps) = re.captures(line) {
+                if let Ok(rev) = caps[1].parse::<i64>() {
+                    max_rev = max_rev.max(rev);
+                }
+            }
+        }
+        max_rev
+    }
+
+    // -----------------------------------------------------------------------
     // Echo detection
     // -----------------------------------------------------------------------
 
@@ -888,7 +1241,7 @@ impl SyncEngine {
 ///
 /// This is a standalone async function that does not hold a reference to
 /// `GitClient`, avoiding `Send` issues with `git2::Repository`.
-async fn apply_diff_to_path(
+pub async fn apply_diff_to_path(
     repo_path: &std::path::Path,
     diff_content: &str,
 ) -> Result<(), crate::errors::GitError> {

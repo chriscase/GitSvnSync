@@ -129,6 +129,154 @@ static MIGRATIONS: &[(u32, &str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_audit_log_success ON audit_log (success);
         "#,
     ),
+    (
+        4,
+        "import progress persistence",
+        r#"
+        CREATE TABLE IF NOT EXISTS import_progress (
+            id               INTEGER PRIMARY KEY CHECK (id = 1),
+            phase            TEXT NOT NULL DEFAULT 'idle',
+            current_rev      INTEGER NOT NULL DEFAULT 0,
+            total_revs       INTEGER NOT NULL DEFAULT 0,
+            commits_created  INTEGER NOT NULL DEFAULT 0,
+            batches_pushed   INTEGER NOT NULL DEFAULT 0,
+            lfs_unique_count INTEGER NOT NULL DEFAULT 0,
+            files_skipped    INTEGER NOT NULL DEFAULT 0,
+            errors_json      TEXT NOT NULL DEFAULT '[]',
+            started_at       TEXT,
+            completed_at     TEXT,
+            updated_at       TEXT NOT NULL DEFAULT ''
+        );
+        "#,
+    ),
+    (
+        5,
+        "multi-user auth: users, credentials, sessions",
+        r#"
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            display_name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS user_credentials (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            service TEXT NOT NULL,
+            server_url TEXT NOT NULL,
+            username TEXT NOT NULL,
+            encrypted_value TEXT NOT NULL,
+            nonce TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, service, server_url)
+        );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        "#,
+    ),
+    (
+        6,
+        "multi-repository support",
+        r#"
+        CREATE TABLE IF NOT EXISTS repositories (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            svn_url TEXT NOT NULL,
+            svn_branch TEXT NOT NULL DEFAULT '',
+            svn_username TEXT NOT NULL DEFAULT '',
+            git_provider TEXT NOT NULL DEFAULT 'github',
+            git_api_url TEXT NOT NULL DEFAULT '',
+            git_repo TEXT NOT NULL DEFAULT '',
+            git_branch TEXT NOT NULL DEFAULT 'main',
+            sync_mode TEXT NOT NULL DEFAULT 'direct',
+            poll_interval_secs INTEGER NOT NULL DEFAULT 60,
+            lfs_threshold_mb INTEGER NOT NULL DEFAULT 0,
+            auto_merge INTEGER NOT NULL DEFAULT 1,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_by TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        ALTER TABLE commit_map ADD COLUMN repo_id TEXT;
+        ALTER TABLE sync_records ADD COLUMN repo_id TEXT;
+        ALTER TABLE audit_log ADD COLUMN repo_id TEXT;
+        ALTER TABLE conflicts ADD COLUMN repo_id TEXT;
+
+        CREATE TABLE IF NOT EXISTS import_progress_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id TEXT,
+            phase TEXT NOT NULL DEFAULT 'idle',
+            current_rev INTEGER NOT NULL DEFAULT 0,
+            total_revs INTEGER NOT NULL DEFAULT 0,
+            commits_created INTEGER NOT NULL DEFAULT 0,
+            batches_pushed INTEGER NOT NULL DEFAULT 0,
+            lfs_unique_count INTEGER NOT NULL DEFAULT 0,
+            files_skipped INTEGER NOT NULL DEFAULT 0,
+            errors_json TEXT NOT NULL DEFAULT '[]',
+            started_at TEXT,
+            completed_at TEXT,
+            updated_at TEXT NOT NULL DEFAULT ''
+        );
+        INSERT INTO import_progress_new (id, repo_id, phase, current_rev, total_revs, commits_created, batches_pushed, lfs_unique_count, files_skipped, errors_json, started_at, completed_at, updated_at)
+            SELECT id, NULL, phase, current_rev, total_revs, commits_created, batches_pushed, lfs_unique_count, files_skipped, errors_json, started_at, completed_at, updated_at FROM import_progress;
+        DROP TABLE import_progress;
+        ALTER TABLE import_progress_new RENAME TO import_progress;
+        "#,
+    ),
+    (
+        7,
+        "repository watermark columns",
+        r#"
+        ALTER TABLE repositories ADD COLUMN last_svn_rev INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE repositories ADD COLUMN last_git_sha TEXT NOT NULL DEFAULT '';
+        ALTER TABLE repositories ADD COLUMN last_sync_at TEXT;
+        ALTER TABLE repositories ADD COLUMN sync_status TEXT NOT NULL DEFAULT 'idle';
+        ALTER TABLE repositories ADD COLUMN total_syncs INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE repositories ADD COLUMN total_errors INTEGER NOT NULL DEFAULT 0;
+        "#,
+    ),
+    (
+        8,
+        "add parent_id for branch sync",
+        r#"
+        ALTER TABLE repositories ADD COLUMN parent_id TEXT;
+        "#,
+    ),
+    (
+        9,
+        "encrypted secrets table",
+        r#"
+        CREATE TABLE IF NOT EXISTS encrypted_secrets (
+            key TEXT PRIMARY KEY,
+            ciphertext TEXT NOT NULL,
+            nonce TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        "#,
+    ),
+    (
+        10,
+        "compound indexes for multi-repo queries and resolved conflict content",
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_repositories_enabled_sync ON repositories(enabled, last_sync_at);
+        CREATE INDEX IF NOT EXISTS idx_commit_map_repo_svn ON commit_map(repo_id, svn_rev);
+        CREATE INDEX IF NOT EXISTS idx_commit_map_repo_git ON commit_map(repo_id, git_sha);
+        ALTER TABLE conflicts ADD COLUMN resolved_content TEXT;
+        "#,
+    ),
 ];
 
 /// Run all pending migrations against `conn`.
@@ -177,7 +325,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap();
-        assert_eq!(get_schema_version(&conn).unwrap(), 3);
+        assert_eq!(get_schema_version(&conn).unwrap(), 10);
     }
 
     #[test]
@@ -203,5 +351,7 @@ mod tests {
         assert!(tables.contains(&"sync_records".to_string()));
         assert!(tables.contains(&"kv_state".to_string()));
         assert!(tables.contains(&"pr_sync_log".to_string()));
+        assert!(tables.contains(&"import_progress".to_string()));
+        assert!(tables.contains(&"repositories".to_string()));
     }
 }

@@ -55,6 +55,16 @@ impl SvnClient {
         &self.url
     }
 
+    /// Update the password at runtime (credential hot-reload from DB).
+    pub fn set_password(&mut self, password: impl Into<String>) {
+        self.password = password.into();
+    }
+
+    /// Update the username at runtime (credential hot-reload from DB).
+    pub fn set_username(&mut self, username: impl Into<String>) {
+        self.username = username.into();
+    }
+
     #[instrument(skip(self), fields(url = %self.url))]
     pub async fn info(&self) -> Result<SvnInfo, SvnError> {
         let output = self.run_svn(&["info", "--xml", &self.url]).await?;
@@ -121,9 +131,12 @@ impl SvnClient {
         let output = self
             .run_svn_in_dir(path, &["commit", "-m", message, &path_str])
             .await?;
-        let rev = parse_committed_revision(&output).ok_or_else(|| SvnError::CommandFailed {
-            exit_code: 0,
-            stderr: format!("could not parse committed revision from: {}", output),
+        let rev = parse_committed_revision(&output).ok_or_else(|| {
+            warn!(raw_output = %output, "failed to parse committed revision from svn commit output");
+            SvnError::CommandFailed {
+                exit_code: 0,
+                stderr: format!("could not parse committed revision from: {}", output),
+            }
         })?;
         info!(rev, "svn commit succeeded");
         Ok(rev)
@@ -263,8 +276,7 @@ impl SvnClient {
             .arg("--no-auth-cache")
             .arg("--username")
             .arg(&self.username)
-            .arg("--password")
-            .arg(&self.password)
+            .env("SVN_PASSWORD", &self.password)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -303,8 +315,7 @@ impl SvnClient {
             .arg("--no-auth-cache")
             .arg("--username")
             .arg(&self.username)
-            .arg("--password")
-            .arg(&self.password)
+            .env("SVN_PASSWORD", &self.password)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -333,20 +344,53 @@ impl SvnClient {
             warn!(exit_code, %stderr, "svn command failed");
             return Err(SvnError::CommandFailed { exit_code, stderr });
         }
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        // Combine stdout and stderr — some SVN operations (especially commit)
+        // output the "Committed revision N" line to stderr, not stdout.
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if stdout.is_empty() && !stderr.is_empty() {
+            debug!(stderr = %stderr, "svn command produced no stdout, using stderr");
+            Ok(format!("{}\n{}", stdout, stderr))
+        } else {
+            Ok(stdout)
+        }
     }
 }
 
 fn parse_committed_revision(output: &str) -> Option<i64> {
+    // Primary: match "Committed revision NNN" (case-insensitive)
     for line in output.lines() {
-        let line = line.trim();
-        if line.starts_with("Committed revision") {
-            return line
-                .trim_start_matches("Committed revision")
-                .trim()
-                .trim_end_matches('.')
-                .parse::<i64>()
-                .ok();
+        let trimmed = line.trim();
+        let lower = trimmed.to_lowercase();
+        if lower.contains("committed revision") || lower.contains("committedrevision") {
+            if let Some(pos) = lower.find("revision") {
+                let after = &trimmed[pos + 8..]; // "revision" = 8 chars
+                let num_str: String = after
+                    .chars()
+                    .skip_while(|c| !c.is_ascii_digit())
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                if let Ok(rev) = num_str.parse::<i64>() {
+                    return Some(rev);
+                }
+            }
+        }
+    }
+    // Fallback: any line containing "revision N" pattern
+    for line in output.lines() {
+        let trimmed = line.trim();
+        let lower = trimmed.to_lowercase();
+        if let Some(pos) = lower.find("revision ") {
+            let after = &trimmed[pos + 9..];
+            let num_str: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if !num_str.is_empty() {
+                if let Ok(rev) = num_str.parse::<i64>() {
+                    return Some(rev);
+                }
+            }
         }
     }
     None

@@ -18,4 +18,7 @@ tracing-subscriber = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
+uuid = { workspace = true }
 serde_json = { workspace = true }
+regex-lite = { workspace = true }
+rusqlite = { workspace = true }

@@ -1172,7 +1172,7 @@ fn test_database_watermark_and_commit_map() {
         true,
     )
     .unwrap();
-    let audit = db.list_audit_log(10).unwrap();
+    let audit = db.list_audit_log(10, 0).unwrap();
     assert_eq!(audit.len(), 1);
     assert_eq!(audit[0].action, "test_action");
     assert_eq!(audit[0].svn_rev, Some(100));
@@ -1265,7 +1265,7 @@ async fn test_full_svn_to_git_cycle_with_metadata() {
     assert!(commit_map[0].git_author.contains("Test User"));
 
     // Verify the audit log was written.
-    let audit = db_arc.list_audit_log(10).unwrap();
+    let audit = db_arc.list_audit_log(10, 0).unwrap();
     assert!(!audit.is_empty(), "audit log should have entries");
     assert_eq!(audit[0].action, "svn_to_git_sync");
 
@@ -2552,7 +2552,7 @@ async fn test_replay_path_lfs_pointer_skipped_not_committed() {
 
     let svn_client = SvnClient::new(&svn_url, "test", "test");
     let github_client =
-        reposync_core::git::github::GitHubClient::new("https://localhost:0/unused", "unused");
+        reposync_core::git::github::GitHubClient::new("https://localhost:0/unused", "unused", reposync_core::config::GitProvider::default());
 
     let sync = GitToSvnSync::new(
         svn_client,
@@ -2700,7 +2700,7 @@ async fn test_replay_path_normal_content_written_to_svn() {
 
     let svn_client = SvnClient::new(&svn_url, "test", "test");
     let github_client =
-        reposync_core::git::github::GitHubClient::new("https://localhost:0/unused", "unused");
+        reposync_core::git::github::GitHubClient::new("https://localhost:0/unused", "unused", reposync_core::config::GitProvider::default());
 
     let sync = GitToSvnSync::new(
         svn_client,

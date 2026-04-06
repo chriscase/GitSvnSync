@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 
 use reposync_core::db::Database;
+use reposync_core::config::GitProvider;
 use reposync_core::git::github::GitHubClient;
 use reposync_core::git::GitClient;
 use reposync_core::personal_config::PersonalConfig;
@@ -35,7 +36,7 @@ pub async fn run_import(config: &PersonalConfig, mode: &str) -> Result<()> {
 
     // GitHub client
     let github_token = config.github.token.as_deref().unwrap_or("");
-    let github_client = GitHubClient::new(&config.github.api_url, github_token);
+    let github_client = GitHubClient::new(&config.github.api_url, github_token, GitProvider::default());
 
     // Git repository
     let git_repo_path = data_dir.join("git-repo");
@@ -50,7 +51,7 @@ pub async fn run_import(config: &PersonalConfig, mode: &str) -> Result<()> {
         }
     };
 
-    let git_client = std::sync::Arc::new(tokio::sync::Mutex::new(git_client));
+    let git_client = std::sync::Arc::new(std::sync::Mutex::new(git_client));
     let formatter = reposync_personal::commit_format::CommitFormatter::new(&config.commit_format);
 
     let import_mode = match mode {

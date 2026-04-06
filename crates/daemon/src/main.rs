@@ -47,7 +47,7 @@ struct Args {
 // Main
 // ---------------------------------------------------------------------------
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -101,22 +101,209 @@ async fn main() -> Result<()> {
     let web_db = Database::new(&db_path).context("failed to open web database connection")?;
     info!("Database initialized at {}", db_path.display());
 
+    // Resolve secrets from DB (fallback when env vars are absent)
+    config.resolve_secrets_from_db(&db);
+
+    // Auto-bootstrap admin user if users table is empty
+    match db.count_users() {
+        Ok(0) => {
+            let admin_password = std::env::var("REPOSYNC_ADMIN_PASSWORD")
+                .unwrap_or_else(|_| {
+                    warn!("No REPOSYNC_ADMIN_PASSWORD set and no users exist — creating admin user with default password 'changeme'. CHANGE THIS IMMEDIATELY!");
+                    "changeme".to_string()
+                });
+            match reposync_core::crypto::hash_password(&admin_password) {
+                Ok(hash) => {
+                    let now = chrono::Utc::now().to_rfc3339();
+                    let admin = reposync_core::models::User {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        username: "admin".to_string(),
+                        display_name: "Administrator".to_string(),
+                        email: "admin@localhost".to_string(),
+                        password_hash: hash,
+                        role: "admin".to_string(),
+                        enabled: true,
+                        created_at: now.clone(),
+                        updated_at: now,
+                    };
+                    match db.insert_user(&admin) {
+                        Ok(()) => info!("Created bootstrap admin user (username: admin)"),
+                        Err(e) => error!("Failed to create bootstrap admin user: {}", e),
+                    }
+                }
+                Err(e) => error!("Failed to hash admin password: {}", e),
+            }
+        }
+        Ok(n) => info!("{} user(s) found in database, skipping admin bootstrap", n),
+        Err(e) => warn!("Failed to check users table (may not exist yet): {}", e),
+    }
+
+    // Auto-migrate existing single-repo config into the repositories table
+    // so that existing deployments continue to work without manual changes.
+    {
+        let repos = db.list_repositories().unwrap_or_default();
+        if repos.is_empty() && !config.svn.url.is_empty() {
+            let now = chrono::Utc::now().to_rfc3339();
+            let provider = match config.github.provider {
+                reposync_core::config::GitProvider::GitHub => "github",
+                reposync_core::config::GitProvider::Gitea => "gitea",
+            };
+            let sync_mode = match config.sync.mode {
+                reposync_core::config::SyncMode::Direct => "direct",
+                reposync_core::config::SyncMode::Pr => "pr",
+            };
+            let default_repo = reposync_core::models::Repository {
+                id: uuid::Uuid::new_v4().to_string(),
+                name: config.github.repo.clone(),
+                svn_url: config.svn.url.clone(),
+                svn_branch: config.svn.trunk_path.clone(),
+                svn_username: config.svn.username.clone(),
+                git_provider: provider.to_string(),
+                git_api_url: config.github.api_url.clone(),
+                git_repo: config.github.repo.clone(),
+                git_branch: config.github.default_branch.clone(),
+                sync_mode: sync_mode.to_string(),
+                poll_interval_secs: config.daemon.poll_interval_secs as i64,
+                lfs_threshold_mb: 0,
+                auto_merge: config.sync.auto_merge,
+                enabled: true,
+                created_by: None,
+                parent_id: None,
+                created_at: now.clone(),
+                updated_at: now,
+                last_svn_rev: 0,
+                last_git_sha: String::new(),
+                last_sync_at: None,
+                sync_status: "idle".to_string(),
+                total_syncs: 0,
+                total_errors: 0,
+            };
+            match db.insert_repository(&default_repo) {
+                Ok(()) => {
+                    info!(
+                        "Auto-migrated existing config to repository: {}",
+                        default_repo.name
+                    );
+                    // Migrate global credentials to per-repo keys
+                    if let Ok(Some(pw)) = db.get_state("secret_svn_password") {
+                        if !pw.is_empty() {
+                            let _ = db.set_state(&format!("secret_svn_password_{}", default_repo.id), &pw);
+                            info!("Migrated global SVN password to per-repo key for {}", default_repo.name);
+                        }
+                    }
+                    if let Ok(Some(tok)) = db.get_state("secret_git_token") {
+                        if !tok.is_empty() {
+                            let _ = db.set_state(&format!("secret_git_token_{}", default_repo.id), &tok);
+                            info!("Migrated global Git token to per-repo key for {}", default_repo.name);
+                        }
+                    }
+                }
+                Err(e) => warn!("Failed to auto-migrate config to repository: {}", e),
+            }
+        }
+    }
+
+    // Ensure repos have per-repo credential keys.
+    // For child repos (branch pairs): inherit from PARENT, not global.
+    // For parent repos without credentials: only migrate from global
+    //   if this is the ONLY parent repo (avoids cross-contamination).
+    {
+        let repos = db.list_repositories().unwrap_or_default();
+        let parent_count = repos.iter().filter(|r| r.parent_id.is_none()).count();
+
+        for repo in &repos {
+            let svn_key = format!("secret_svn_password_{}", repo.id);
+            if db.get_state(&svn_key).ok().flatten().filter(|v| !v.is_empty()).is_none() {
+                // Try parent's credentials first (for branch pairs)
+                let source_pw = repo.parent_id.as_ref().and_then(|pid| {
+                    db.get_state(&format!("secret_svn_password_{}", pid))
+                        .ok().flatten().filter(|v| !v.is_empty())
+                });
+                // Only fall back to global if this is the sole parent repo
+                let source_pw = source_pw.or_else(|| {
+                    if repo.parent_id.is_none() && parent_count == 1 {
+                        db.get_state("secret_svn_password").ok().flatten().filter(|v| !v.is_empty())
+                    } else {
+                        None
+                    }
+                });
+                if let Some(pw) = source_pw {
+                    let _ = db.set_state(&svn_key, &pw);
+                    info!(repo_name = %repo.name, "migrated SVN password to per-repo key");
+                }
+            }
+
+            let git_key = format!("secret_git_token_{}", repo.id);
+            if db.get_state(&git_key).ok().flatten().filter(|v| !v.is_empty()).is_none() {
+                let source_tok = repo.parent_id.as_ref().and_then(|pid| {
+                    db.get_state(&format!("secret_git_token_{}", pid))
+                        .ok().flatten().filter(|v| !v.is_empty())
+                });
+                let source_tok = source_tok.or_else(|| {
+                    if repo.parent_id.is_none() && parent_count == 1 {
+                        db.get_state("secret_git_token").ok().flatten().filter(|v| !v.is_empty())
+                    } else {
+                        None
+                    }
+                });
+                if let Some(tok) = source_tok {
+                    let _ = db.set_state(&git_key, &tok);
+                    info!(repo_name = %repo.name, "migrated Git token to per-repo key");
+                }
+            }
+        }
+    }
+
     // Initialize SVN client
     let svn_password = config.svn.password.clone().unwrap_or_default();
     let svn_client = SvnClient::new(&config.svn.url, &config.svn.username, &svn_password);
     info!("SVN client initialized for {}", config.svn.url);
 
-    // Initialize Git client
+    // Initialize Git client (graceful: create empty repo if clone fails)
     let git_repo_path = config.daemon.data_dir.join("git-repo");
     let git_client = if git_repo_path.join(".git").exists() {
         GitClient::new(&git_repo_path).context("failed to open existing Git repository")?
     } else {
         let clone_url = config.github.clone_url();
         let token = config.github.token.as_deref();
-        GitClient::clone_repo(&clone_url, &git_repo_path, token)
-            .context("failed to clone Git repository")?
+        match GitClient::clone_repo(&clone_url, &git_repo_path, token) {
+            Ok(client) => {
+                info!("Git client cloned at {}", git_repo_path.display());
+                client
+            }
+            Err(e) => {
+                // Clone failed — init an empty repo so the daemon can start.
+                // The import wizard will populate it later.
+                warn!("Clone failed ({}), initializing empty git repo", e);
+                std::fs::create_dir_all(&git_repo_path)
+                    .context("failed to create git repo directory")?;
+                let init_output = tokio::process::Command::new("git")
+                    .args(["init", "--initial-branch", &config.github.default_branch])
+                    .current_dir(&git_repo_path)
+                    .output()
+                    .await;
+                if init_output.is_err() || !init_output.as_ref().unwrap().status.success() {
+                    // Fallback for older git without --initial-branch
+                    let _ = tokio::process::Command::new("git")
+                        .args(["init"])
+                        .current_dir(&git_repo_path)
+                        .output()
+                        .await;
+                }
+                let _ = tokio::process::Command::new("git")
+                    .args(["remote", "add", "origin", &clone_url])
+                    .current_dir(&git_repo_path)
+                    .output()
+                    .await;
+                GitClient::new(&git_repo_path)
+                    .context("failed to open newly initialized Git repository")?
+            }
+        }
     };
-    info!("Git client initialized at {}", git_repo_path.display());
+    // Ensure the remote URL has embedded credentials for reliable HTTP auth.
+    git_client
+        .ensure_remote_credentials("origin", config.github.token.as_deref())
+        .ok(); // Don't crash if this fails
 
     // Initialize identity mapper
     let identity_mapper = Arc::new(
@@ -125,38 +312,218 @@ async fn main() -> Result<()> {
     info!("Identity mapper initialized");
 
     // Initialize sync engine
-    let sync_engine = Arc::new(SyncEngine::new(
+    let mut engine = SyncEngine::new(
         config.clone(),
         db,
         svn_client,
         git_client,
         identity_mapper,
-    ));
+    );
+    // Set repo_id from the first enabled repository for per-repo keys
+    if let Ok(repos) = engine.db().list_repositories() {
+        if let Some(repo) = repos.into_iter().find(|r| r.enabled) {
+            engine.set_repo_id(repo.id);
+        }
+    }
+
+    // Auto-detect watermarks for repos where last_svn_rev == 0.
+    // This recovers watermark state from existing git history after a
+    // database reset or first migration to the repo-table watermark scheme.
+    {
+        let repos = engine.db().list_repositories().unwrap_or_default();
+        for repo in &repos {
+            if repo.last_svn_rev != 0 {
+                continue;
+            }
+            info!(repo_name = %repo.name, "repo has last_svn_rev=0, attempting auto-detect");
+
+            // First, check the global watermarks table (import writes here)
+            if let Ok(Some(rev_str)) = engine.db().get_watermark("svn_rev") {
+                if let Ok(rev) = rev_str.parse::<i64>() {
+                    if rev > 0 {
+                        let sha = engine.db().get_watermark("git_sha")
+                            .ok().flatten().unwrap_or_default();
+                        match engine.db().update_repo_watermark(&repo.id, rev, &sha) {
+                            Ok(()) => {
+                                info!(repo_name = %repo.name, rev, "Recovered watermark from watermarks table");
+                                continue;
+                            }
+                            Err(e) => warn!("Failed to write watermark for {}: {}", repo.name, e),
+                        }
+                    }
+                }
+            }
+
+            // Also check per-repo kv_state keys
+            let repo_key = format!("last_svn_rev_{}", repo.id);
+            if let Ok(Some(rev_str)) = engine.db().get_state(&repo_key) {
+                if let Ok(rev) = rev_str.parse::<i64>() {
+                    if rev > 0 {
+                        let sha_key = format!("last_git_sha_{}", repo.id);
+                        let sha = engine.db().get_state(&sha_key).ok().flatten().unwrap_or_default();
+                        match engine.db().update_repo_watermark(&repo.id, rev, &sha) {
+                            Ok(()) => {
+                                info!(repo_name = %repo.name, rev, "Recovered watermark from per-repo kv_state");
+                                continue;
+                            }
+                            Err(e) => warn!("Failed to write watermark for {}: {}", repo.name, e),
+                        }
+                    }
+                }
+            }
+            // Try the per-repo git directory first, then legacy layout
+            let repo_git_dir = config
+                .daemon
+                .data_dir
+                .join("repos")
+                .join(&repo.id)
+                .join("git-repo");
+            let legacy_git_dir = config.daemon.data_dir.join("git-repo");
+            let git_dir = if repo_git_dir.join(".git").exists() {
+                Some(&repo_git_dir)
+            } else if legacy_git_dir.join(".git").exists() {
+                Some(&legacy_git_dir)
+            } else {
+                None
+            };
+
+            if let Some(git_dir) = git_dir {
+                // Read git log and scan for sync markers
+                let output = tokio::process::Command::new("git")
+                    .args(["log", "--oneline", "-200", "--format=%H %s"])
+                    .current_dir(git_dir)
+                    .output()
+                    .await;
+                if let Ok(output) = output {
+                    if output.status.success() {
+                        let log_text = String::from_utf8_lossy(&output.stdout);
+                        let re = regex_lite::Regex::new(
+                            r"(?i)(?:\[(?:gitsvnsync|reposync)\].*SVN r(\d+)|imported from SVN r(\d+))",
+                        )
+                        .unwrap();
+                        let mut max_rev: i64 = 0;
+                        let mut head_sha = String::new();
+                        for line in log_text.lines() {
+                            // First line is HEAD
+                            if head_sha.is_empty() {
+                                if let Some(sha) = line.split_whitespace().next() {
+                                    head_sha = sha.to_string();
+                                }
+                            }
+                            if let Some(caps) = re.captures(line) {
+                                let rev_str = caps
+                                    .get(1)
+                                    .or_else(|| caps.get(2))
+                                    .map(|m| m.as_str())
+                                    .unwrap_or("0");
+                                if let Ok(rev) = rev_str.parse::<i64>() {
+                                    max_rev = max_rev.max(rev);
+                                }
+                            }
+                        }
+                        if max_rev > 0 {
+                            let sha_for_watermark = if head_sha.is_empty() {
+                                String::new()
+                            } else {
+                                head_sha
+                            };
+                            match engine.db().update_repo_watermark(
+                                &repo.id,
+                                max_rev,
+                                &sha_for_watermark,
+                            ) {
+                                Ok(()) => info!(
+                                    repo_name = %repo.name,
+                                    rev = max_rev,
+                                    "Auto-detected watermark r{} for repo {}",
+                                    max_rev,
+                                    repo.name
+                                ),
+                                Err(e) => warn!(
+                                    "Failed to write auto-detected watermark for {}: {}",
+                                    repo.name, e
+                                ),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let sync_engine = Arc::new(engine);
     info!("Sync engine initialized");
 
     // Create sync trigger channel (webhook -> scheduler)
     let (sync_tx, sync_rx) = tokio::sync::mpsc::channel::<()>(16);
 
+    // Create shared import progress — shared between web server and scheduler
+    // so the scheduler can pause sync cycles during an active import.
+    let import_progress = std::sync::Arc::new(tokio::sync::RwLock::new(
+        reposync_core::import::ImportProgress::default(),
+    ));
+
     // Initialize web server
-    let web_server = WebServer::new(config.clone(), web_db, sync_engine.clone(), sync_tx.clone());
+    let web_server = WebServer::new(
+        config.clone(),
+        web_db,
+        sync_engine.clone(),
+        sync_tx.clone(),
+        args.config.clone(),
+        import_progress.clone(),
+    );
     let ws_broadcast = web_server.broadcast_sender();
     let listen_addr = config.web.listen.clone();
+    let app_state_for_cleanup = web_server.app_state();
 
-    // Start web server in background
+    // Start web server — runs on the main tokio runtime directly
+    // (not spawned) to ensure it gets immediate access to worker threads.
     let web_handle = tokio::spawn(async move {
         if let Err(e) = web_server.start(&listen_addr).await {
             error!("Web server error: {}", e);
         }
     });
 
+    // Spawn background session cleanup task (every 5 minutes)
+    {
+        let app_state = app_state_for_cleanup;
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                let now = chrono::Utc::now();
+                let mut sessions = app_state.sessions.write().await;
+                let before = sessions.len();
+                sessions.retain(|_, expires_at| *expires_at > now);
+                let pruned = before - sessions.len();
+                if pruned > 0 {
+                    tracing::debug!(pruned, "pruned expired in-memory sessions");
+                }
+            }
+        });
+    }
+
     // Create a shutdown notify for cooperative cancellation
     let shutdown = Arc::new(tokio::sync::Notify::new());
     let scheduler_shutdown = shutdown.clone();
 
+    // Open a third DB connection for the scheduler's per-repo sync cycles.
+    let scheduler_db =
+        Database::new(&db_path).context("failed to open scheduler database connection")?;
+
     // Create and start the scheduler
     let poll_interval = std::time::Duration::from_secs(config.daemon.poll_interval_secs);
-    let mut sched =
-        scheduler::Scheduler::new(sync_engine.clone(), poll_interval, sync_rx, ws_broadcast);
+    let mut sched = scheduler::Scheduler::new(
+        sync_engine.clone(),
+        poll_interval,
+        sync_rx,
+        ws_broadcast,
+        import_progress,
+        scheduler_db,
+        config.clone(),
+    );
+
+    // Capture sync handles for graceful shutdown before moving sched
+    let sync_handles = sched.sync_handles.clone();
 
     // Start the scheduler in a background task
     let scheduler_handle = tokio::spawn(async move {
@@ -178,8 +545,50 @@ async fn main() -> Result<()> {
         Err(_) => warn!("scheduler did not stop within 10s, forcing shutdown"),
     }
 
-    // Abort the web server
-    web_handle.abort();
+    // Wait for in-flight sync tasks (up to 30s)
+    {
+        let handles: Vec<_> = {
+            let mut locked = sync_handles.lock().await;
+            locked.drain(..).filter(|h| !h.is_finished()).collect()
+        };
+        if !handles.is_empty() {
+            info!(count = handles.len(), "waiting for in-flight sync tasks...");
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+            for handle in handles {
+                match tokio::time::timeout_at(deadline, handle).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => warn!("sync task error: {}", e),
+                    Err(_) => {
+                        warn!("remaining sync tasks did not complete within 30s");
+                        break;
+                    }
+                }
+            }
+            info!("in-flight sync task shutdown complete");
+        }
+    }
+
+    // The web server uses with_graceful_shutdown and will drain connections
+    // when the Tokio runtime shuts down. Give it a moment to finish.
+    match tokio::time::timeout(std::time::Duration::from_secs(5), web_handle).await {
+        Ok(Ok(())) => info!("web server stopped gracefully"),
+        Ok(Err(e)) => warn!("web server task error: {}", e),
+        Err(_) => info!("web server shutdown timed out, proceeding"),
+    }
+
+    // Checkpoint the SQLite WAL to prevent corruption on unclean exit.
+    // Open a fresh connection since the original db/web_db were moved into AppState.
+    info!("checkpointing SQLite WAL...");
+    let db_path = config.daemon.data_dir.join("reposync.db");
+    match rusqlite::Connection::open(&db_path) {
+        Ok(conn) => {
+            match conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+                Ok(_) => info!("WAL checkpoint completed successfully"),
+                Err(e) => warn!("WAL checkpoint failed: {}", e),
+            }
+        }
+        Err(e) => warn!("could not open DB for WAL checkpoint: {}", e),
+    }
 
     info!("RepoSync daemon stopped.");
     Ok(())

@@ -25,11 +25,11 @@ const WATERMARK_KEY: &str = "svn_rev";
 /// The SVN-to-Git sync engine for personal branch mode.
 ///
 /// Holds references to all required collaborators: SVN client (async), Git
-/// client (sync, behind `Arc<tokio::sync::Mutex>`), the database for
+/// client (sync, behind `Arc<std::sync::Mutex>`), the database for
 /// persistence, and the personal config for identity and template settings.
 pub struct SvnToGitSync {
     svn_client: SvnClient,
-    git_client: Arc<tokio::sync::Mutex<GitClient>>,
+    git_client: Arc<std::sync::Mutex<GitClient>>,
     db: Arc<Database>,
     config: PersonalConfig,
     formatter: CommitFormatter,
@@ -40,7 +40,7 @@ impl SvnToGitSync {
     /// Create a new `SvnToGitSync` instance.
     pub fn new(
         svn_client: SvnClient,
-        git_client: Arc<tokio::sync::Mutex<GitClient>>,
+        git_client: Arc<std::sync::Mutex<GitClient>>,
         db: Arc<Database>,
         config: PersonalConfig,
     ) -> Self {
@@ -144,7 +144,7 @@ impl SvnToGitSync {
                 .with_context(|| format!("failed to export SVN revision r{}", rev))?;
 
             // 6. Copy exported files into the Git working tree (with policy).
-            let git_client = self.git_client.lock().await;
+            let git_client = self.git_client.lock().unwrap();
             let repo_path = git_client.repo_path().to_path_buf();
             drop(git_client); // Release lock before blocking I/O.
 
@@ -168,9 +168,7 @@ impl SvnToGitSync {
             // 8. Stage all changes and commit using the developer's identity.
             //
             // The GitClient uses git2 (synchronous). We wrap the call in
-            // spawn_blocking so we don't block the async runtime. Because
-            // the tokio MutexGuard is not Send, we re-acquire the lock
-            // inside the blocking task via block_on.
+            // spawn_blocking so we don't block the async runtime.
             let git_sha = {
                 let author_name = self.config.developer.name.clone();
                 let author_email = self.config.developer.email.clone();
@@ -180,8 +178,7 @@ impl SvnToGitSync {
                 let gc = self.git_client.clone();
 
                 tokio::task::spawn_blocking(move || {
-                    let rt = tokio::runtime::Handle::current();
-                    let git_client = rt.block_on(gc.lock());
+                    let git_client = gc.lock().unwrap();
                     git_client.commit(
                         &msg,
                         &author_name,
@@ -204,8 +201,7 @@ impl SvnToGitSync {
             let gc = self.git_client.clone();
 
             tokio::task::spawn_blocking(move || {
-                let rt = tokio::runtime::Handle::current();
-                let git_client = rt.block_on(gc.lock());
+                let git_client = gc.lock().unwrap();
                 git_client.push("origin", &branch, token.as_deref())
             })
             .await

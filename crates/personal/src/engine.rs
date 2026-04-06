@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
-use tokio::sync::Mutex;
+use std::sync::Mutex;
 use tracing::{error, info, warn};
 
 use reposync_core::db::Database;

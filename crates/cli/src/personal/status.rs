@@ -49,7 +49,7 @@ pub fn run_status(config: &PersonalConfig) -> Result<()> {
 
         // Recent activity from audit log
         println!();
-        let recent = db.list_audit_log(10).unwrap_or_default();
+        let recent = db.list_audit_log(10, 0).unwrap_or_default();
         if !recent.is_empty() {
             println!("  {}", style::header("Recent Activity"));
             println!("  {}", "─".repeat(40));
